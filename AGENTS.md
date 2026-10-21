@@ -7,5 +7,6 @@
 - Fix confirmed hands-on UX defects directly. Make routine design decisions from the plan and established UI; seek human input only for material ambiguity or rework risk. Keep user reports to newly usable capability, meaningful verification, blockers, and the next high-impact work.
 - Use focused inspections and proportional tests while a subsystem is evolving; run broader checks at integration checkpoints. Do not repeatedly re-audit stable areas. If delegation is authorized, use narrow tasks with one integration owner, ordinarily no more than three concurrent agents.
 - Keep future programmatic agent authoring compatible with the core architecture, but do not implement that separate ecosystem now.
+- Maintain local Git history: preserve existing work, review `.gitignore` and staged files, and commit coherent integrated capabilities after the relevant build and focused tests. Include concise progress updates in those commits. Do not create remotes, push, publish, rewrite history, or discard untracked project files without an explicit request.
 
 Typical checks: `npm.cmd run test`, `npm.cmd run build`, and focused `npm.cmd run test:e2e -- tests/<name>.spec.ts`. Browser automation currently verifies Chrome; other target engines and completion review remain open unless the progress handoff says otherwise.

@@ -13,7 +13,7 @@ export function effectiveRenderOptimization(
   elements: ReadonlyMap<string, StoryElement>,
   asset?: Asset,
 ): 'motion' | 'static' {
-  if (asset?.kind === 'video' || element.textAnimation) return 'motion';
+  if (asset?.kind === 'video' || element.textAnimation || element.textReflow) return 'motion';
   let choice: RenderOptimization = element.optimize ?? 'auto';
   if (choice === 'auto') {
     const seen = new Set<string>([element.id]);

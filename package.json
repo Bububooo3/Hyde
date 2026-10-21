@@ -13,9 +13,13 @@
   },
   "dependencies": {
     "@chenglou/pretext": "latest",
+    "@fontsource/caveat": "5.3.0",
     "@fontsource/dm-sans": "5.3.0",
     "@fontsource/inter": "5.3.0",
     "@fontsource/jetbrains-mono": "5.3.0",
+    "@fontsource/lora": "5.3.0",
+    "@fontsource/oswald": "5.3.0",
+    "@fontsource/playfair-display": "5.3.0",
     "@fontsource/space-grotesk": "5.3.0",
     "fflate": "^0.8.2",
     "gifenc": "^1.0.3",

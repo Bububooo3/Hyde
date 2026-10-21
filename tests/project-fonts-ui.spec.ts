@@ -65,4 +65,10 @@ test('bundled Google Font can be applied offline as a project asset',async({page
     const face=[...document.fonts].find(item=>item.family.startsWith('HydeFont_'));
     return !!face&&face.status==='loaded';
   })).toBe(true);
+  await page.getByRole('searchbox',{name:'Search bundled fonts'}).fill('handwriting');
+  await expect(page.getByRole('button',{name:'Add Caveat font'})).toBeVisible();
+  await expect(page.getByRole('button',{name:'Add Inter font'})).toHaveCount(0);
+  await page.getByRole('button',{name:'Add Caveat font'}).click();
+  await expect(page.getByRole('button',{name:'Added Caveat font'})).toBeDisabled();
+  await expect(page.locator('.project-fonts-panel .project-font-entry').filter({hasText:'Caveat (Google Fonts).woff2'}).getByRole('button',{name:'Using'})).toBeVisible();
 });

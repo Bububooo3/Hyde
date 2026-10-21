@@ -2,11 +2,12 @@ import { Application, BlurFilter, Color, Container, Graphics, Mesh, MeshGeometry
 import { layoutWithLines, prepareWithSegments } from '@chenglou/pretext';
 import type { PreparedTextWithSegments } from '@chenglou/pretext';
 import type { Asset, PlacementFrame, Project, StoryElement } from './model';
-import { cameraToStage, evaluateCamera, evaluateCameraForScene, sourceTime, videoVisualExpired } from './engine';
+import { cameraToStage, evaluateCamera, evaluateCameraForScene, evaluateProject, sourceTime, videoVisualExpired } from './engine';
 import {mapSceneFramePoint,sceneFrameTransform,sceneVisualFrames} from './sceneFrame';
 import {shapePathCommands} from './shapePath';
 import {layoutTextUnits, type TextUnit} from './textUnits';
 import {textMotionAt} from './textMotion';
+import {reflowUnitAt,textReflowEnd} from './textReflow';
 import {buildProjectivePinMesh,DEFAULT_PIN_CORNERS,mediaPinRects} from './projectivePin';
 import {DEFAULT_MEDIA_TRANSFORM,mediaPlaneRect} from './mediaTransform';
 import {ProjectFontLoader} from './projectFonts';
@@ -47,6 +48,10 @@ interface ElementNode {
   motionGlyphs: Container;
   motionPieces: MotionPiece[];
   motionKey: string;
+  reflowProject?: Project;
+  reflowKey?: string;
+  reflowFrom?: Map<string,TextUnit>;
+  reflowTo?: TextUnit[];
   glyphMask: Sprite;
   glyphTexture?: Texture;
   glyphKey: string;
@@ -387,13 +392,45 @@ export class StageRenderer {
     }
   }
 
-  private updateTextMotion(node: ElementNode, element: StoryElement, time: number): void {
+  private reflowLayouts(node:ElementNode,element:StoryElement,project:Project):{from:Map<string,TextUnit>;to:TextUnit[];end:number}{
+    const reflow=element.textReflow!;
+    const key=JSON.stringify([element.id,element.text,element.fontFamily,element.fontSize,reflow]);
+    if(node.reflowProject===project&&node.reflowKey===key&&node.reflowFrom&&node.reflowTo)
+      return {from:node.reflowFrom,to:node.reflowTo,end:textReflowEnd(reflow,node.reflowFrom.size)};
+    const size=Math.max(1,element.fontSize??40),family=element.fontFamily||'Georgia';
+    const font=`${size}px ${family}`;
+    const sample=(at:number):TextUnit[]=>{
+      const poses=evaluateProject(project,Math.max(0,Math.min(project.duration-1/project.fps,at)));
+      const pose=poses.find(item=>item.id===element.id);
+      if(!pose)return [];
+      const prepared=node.prepared!;
+      const width=Math.max(1,pose.width),lineHeight=size*1.2;
+      const obstacle=pose.flowAroundId?poses.find(item=>item.id===pose.flowAroundId&&item.sceneId===pose.sceneId):undefined;
+      const outline=obstacle?flowShapeOutline(pose,obstacle):null;
+      const mode=pose.textShapeMode??'around';
+      const lines=outline&&mode==='inside'?layoutInsideShapeLines(prepared,width,pose.height,lineHeight,outline,Math.max(6,size*.2))
+        :outline&&mode==='around'?layoutFlowLines(prepared,width,lineHeight,outline,Math.max(6,size*.2)):null;
+      return lines?flowTextUnits(prepared,lines,font,lineHeight,'word'):layoutTextUnits(prepared,font,width,lineHeight,'word');
+    };
+    const fromUnits=sample(element.start+reflow.start);
+    const end=textReflowEnd(reflow,fromUnits.length);
+    const to=sample(element.start+end);
+    node.reflowProject=project;node.reflowKey=key;node.reflowFrom=new Map(fromUnits.map(unit=>[unit.id,unit]));node.reflowTo=to;
+    node.motionKey='';
+    return {from:node.reflowFrom,to,end};
+  }
+
+  private updateTextMotion(node: ElementNode, element: StoryElement, time: number, project:Project): void {
     const animation = element.kind === 'text' ? element.textAnimation : undefined;
-    node.motion.visible = !!animation;
-    node.text.visible = element.kind === 'text' && !animation && !node.flowKey;
-    node.flowText.visible = element.kind === 'text' && !animation && !!node.flowKey;
-    if (!animation) return;
-    const key = JSON.stringify([node.textKey, animation.unit]);
+    const reflow=element.kind==='text'&&element.textLayout!=='static'?element.textReflow:undefined;
+    const layouts=reflow?this.reflowLayouts(node,element,project):undefined;
+    const localTime=time-element.start;
+    const activeReflow=!!reflow&&!!layouts&&layouts.to.length>0&&localTime>=reflow.start&&localTime<=layouts.end;
+    node.motion.visible = !!animation || activeReflow;
+    node.text.visible = element.kind === 'text' && !node.motion.visible && !node.flowKey;
+    node.flowText.visible = element.kind === 'text' && !node.motion.visible && !!node.flowKey;
+    if (!node.motion.visible) return;
+    const key = activeReflow?JSON.stringify([node.reflowKey,node.preparedKey,element.fill,element.stroke,element.strokeWidth,element.shadow,animation?.unit]):JSON.stringify([node.textKey,animation?.unit]);
     if (key !== node.motionKey) {
       node.motionKey = key;
       for (const piece of node.motionPieces) {
@@ -403,9 +440,10 @@ export class StageRenderer {
       node.motionPieces = [];
       const size = Math.max(1, element.fontSize ?? 40);
       const family = element.fontFamily || 'Georgia';
-      const units = node.flowKey
-        ? flowTextUnits(node.prepared!,node.flowLines,`${size}px ${family}`,size*1.2,animation.unit)
-        : layoutTextUnits(node.prepared!, `${size}px ${family}`, node.layoutWidth, size * 1.2, animation.unit);
+      const unit=activeReflow?'word':animation!.unit;
+      const units = activeReflow?layouts!.to:node.flowKey
+        ? flowTextUnits(node.prepared!,node.flowLines,`${size}px ${family}`,size*1.2,unit)
+        : layoutTextUnits(node.prepared!, `${size}px ${family}`, node.layoutWidth, size * 1.2, unit);
       for (const unit of units) {
         const holder = new Container({eventMode:'none'}), glyphHolder = new Container({eventMode:'none'});
         const text = new Text({text:unit.text, style:node.text.style});
@@ -417,11 +455,14 @@ export class StageRenderer {
         node.motionPieces.push({unit,holder,glyphHolder,wipe,glyphWipe});
       }
     }
+    const lineYs=animation?.unit==='line'&&activeReflow?[...new Set(node.motionPieces.map(piece=>piece.unit.y))]:[];
     for (const [index,piece] of node.motionPieces.entries()) {
-      const value=textMotionAt(animation,time-element.start,index,node.motionPieces.length,piece.unit.id);
+      const base=activeReflow?reflowUnitAt(reflow!,localTime,index,node.motionPieces.length,layouts!.from.get(piece.unit.id),piece.unit):piece.unit;
+      const motionIndex=animation?.unit==='line'&&activeReflow?lineYs.indexOf(piece.unit.y):index;
+      const value=animation?textMotionAt(animation,localTime,motionIndex,animation.unit==='line'&&activeReflow?lineYs.length:node.motionPieces.length,piece.unit.id):{x:0,y:0,scale:1,rotation:0,alpha:1,reveal:1};
       for (const holder of [piece.holder,piece.glyphHolder]) {
-        holder.position.set(piece.unit.x+piece.unit.width/2+value.x,piece.unit.y+piece.unit.height/2+value.y);
-        holder.pivot.set(piece.unit.width/2,piece.unit.height/2);
+        holder.position.set(base.x+base.width/2+value.x,base.y+base.height/2+value.y);
+        holder.pivot.set(base.width/2,base.height/2);
         holder.scale.set(value.scale);
         holder.rotation=value.rotation*Math.PI/180;
         holder.alpha=clamp(value.alpha,0,1);
@@ -438,7 +479,7 @@ export class StageRenderer {
     if (textMask) {
       // A Sprite alpha mask preserves antialiased glyph edges. A Graphics mask or a
       // stencil mask of a Text container would clip to geometry rather than glyph alpha.
-      const animated=!!element.textAnimation;
+      const animated=node.motion.visible;
       const key = animated ? '' : JSON.stringify([node.text.text, element.fontFamily, element.fontSize, node.layoutWidth,node.flowKey]);
       if (animated || node.glyphKey !== key) {
         node.glyphKey = key;
@@ -531,6 +572,7 @@ export class StageRenderer {
       node.preparedKey = '';
       node.textKey = '';
       node.motionKey = '';
+      node.reflowProject = undefined;
       node.glyphKey = '';
       node.staticVisualKey = '';
     }
@@ -616,11 +658,11 @@ export class StageRenderer {
       root.alpha = clamp(element.opacity, 0, 1);
       this.updateGeometry(node, element);
       this.updateText(node, element, obstacle);
-      this.updateTextMotion(node, element, time);
+      this.updateTextMotion(node, element, time, project);
       const videoDuration=resource?.video&&Number.isFinite(resource.video.duration)?resource.video.duration:elementAsset?.duration;
       const videoExpired=Boolean(resource?.video && videoVisualExpired(element,time,videoDuration??Number.NaN));
       if(videoExpired&&element.kind==='video')root.visible=false;
-      node.sprite.visible = Boolean(resource?.texture) && !videoExpired && !element.mediaPin && !(element.kind==='text' && element.textAnimation && !node.motionPieces.length);
+      node.sprite.visible = Boolean(resource?.texture) && !videoExpired && !element.mediaPin && !(element.kind==='text' && node.motion.visible && !node.motionPieces.length);
       node.pinMesh.visible=Boolean(resource?.texture&&!videoExpired&&element.mediaPin);
       node.warning.visible = Boolean(element.assetId && elementAsset?.kind !== 'font' && (!resource || resource.failed));
       if (node.warning.visible) {

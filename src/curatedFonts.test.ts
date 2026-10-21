@@ -3,7 +3,7 @@ import {CURATED_FONTS, curatedFontAsset} from './curatedFonts';
 
 describe('offline Google Fonts catalog', () => {
   it('provides unique, embedded WOFF2 files and complete license notices', () => {
-    expect(CURATED_FONTS.map(font => font.label)).toEqual(['Inter', 'DM Sans', 'Space Grotesk']);
+    expect(CURATED_FONTS.map(font => font.label)).toEqual(['Inter', 'DM Sans', 'Space Grotesk','Playfair Display','Oswald','Caveat','Lora']);
     const names = new Set<string>();
     for (const font of CURATED_FONTS) {
       const asset = curatedFontAsset(font.id);

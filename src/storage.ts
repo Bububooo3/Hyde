@@ -92,6 +92,17 @@ function validate(model: unknown, assembly: boolean): asserts model is DocumentM
       number(motion.frequency, 'Text animation frequency', 0); number(motion.seed, 'Text animation seed', 0);
       check(motion.distance <= 10000 && motion.amplitude <= 10000 && motion.frequency <= 100 && Number.isInteger(motion.seed) && motion.seed <= 0xffffffff, 'Text animation settings are outside their supported range.');
     }
+    if (element.textReflow !== undefined) {
+      check(element.kind === 'text' && record(element.textReflow), 'Only text can have animated reflow.');
+      const reflow = element.textReflow;
+      check(['glide', 'cascade'].includes(String(reflow.preset)), 'Unknown text reflow preset.');
+      check(['linear', 'sine', 'quad', 'cubic', 'quart', 'quint', 'expo', 'circ', 'back', 'bounce', 'elastic'].includes(String(reflow.easing)), 'Unknown text reflow easing.');
+      check(['in', 'out', 'inOut'].includes(String(reflow.easingDirection)), 'Unknown text reflow direction.');
+      number(reflow.start, 'Text reflow start', 0);
+      positive(reflow.duration, 'Text reflow duration');
+      number(reflow.stagger, 'Text reflow stagger', 0);
+      check(reflow.duration <= 3600 && reflow.stagger <= 60, 'Text reflow timing is outside its supported range.');
+    }
     if (element.shapePath !== undefined) {
       check(['rectangle', 'ellipse', 'polygon', 'image', 'video'].includes(String(element.kind)), 'Only visual shapes and media can have an editable path.');
       check(record(element.shapePath) && Array.isArray(element.shapePath.points), 'Invalid editable path.');

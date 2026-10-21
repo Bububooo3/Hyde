@@ -73,6 +73,13 @@ export interface TextAnimation {
   /** Distances and wave amplitude are local pixels; rotation uses degrees. */
   distance: number; seed: number; amplitude: number; frequency: number;
 }
+/** Move stable words between two live layouts sampled from the project clock. */
+export interface TextReflow {
+  preset: 'glide' | 'cascade';
+  /** Seconds relative to the text element's start. */
+  start: number; duration: number; stagger: number;
+  easing: EasingFamily; easingDirection: EasingDirection;
+}
 export type AudioEffect =
   | { id: string; type: 'echo'; enabled: boolean; delay: number; feedback: number; mix: number }
   | { id: string; type: 'chorus'; enabled: boolean; rate: number; depth: number; delay: number; mix: number }
@@ -108,6 +115,7 @@ export interface StoryElement {
   textShapeMode?: 'around' | 'inside' | 'clip';
   staticTextFlow?: StaticTextFlowSnapshot;
   textAnimation?: TextAnimation;
+  textReflow?: TextReflow;
   assetId?: string; mediaFit?: 'fill' | 'fit' | 'stretch'; mediaOpacity?: number;
   /** What to display after a non-looping video's source media is exhausted. */
   videoEndBehavior?: 'hold' | 'hide';

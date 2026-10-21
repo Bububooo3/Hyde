@@ -4,3 +4,15 @@ test-results/
 playwright-report/
 *.tsbuildinfo
 .DS_Store
+coverage/
+.vite/
+.cache/
+tmp/
+temp/
+*.log
+.env
+.env.*
+!.env.example
+*.local
+*.pem
+*.key
