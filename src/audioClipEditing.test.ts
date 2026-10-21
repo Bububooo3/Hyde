@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createAudioEffect } from './audioEffects';
 import { createElement, createProject } from './model';
-import { duplicateMediaClip, fadeGainAt, setMediaFades, setMediaSourceWindow, setMediaSpeed, sourceWindow, splitMediaClip, waveformPeaks } from './audioClipEditing';
+import { duplicateMediaClip, fadeGainAt, setMediaFades, setMediaSourceWindow, setMediaSpeed, setRecordingOffset, sourceWindow, splitMediaClip, waveformPeaks } from './audioClipEditing';
 
 function fixture() {
   const project = createProject();
@@ -13,6 +13,19 @@ function fixture() {
 }
 
 describe('audio clip editing', () => {
+  it('adjusts and resets a recorded take without changing its source or effects',()=>{
+    const {project,element}=fixture();
+    element.recorded=true;element.recordingOffset=0;
+    const shifted=setRecordingOffset(project,'clip',-.15);
+    expect(shifted.elements[0]).toMatchObject({start:1.85,recordingOffset:-.15,sourceOffset:1,duration:4});
+    expect(shifted.elements[0].audioEffects).toEqual(element.audioEffects);
+    expect(setRecordingOffset(shifted,'clip',0).elements[0].start).toBeCloseTo(2);
+    expect(project.elements[0].start).toBe(2);
+    expect(()=>setRecordingOffset(project,'clip',-3)).toThrow(/before the project/);
+    expect(()=>setRecordingOffset(project,'clip',6)).toThrow(/between/);
+    element.recorded=false;
+    expect(()=>setRecordingOffset(project,'clip',.1)).toThrow(/microphone recording/);
+  });
   it('keeps a source window aligned with audio, picture, fades and keyframes when speed changes',()=>{
     const {project,element}=fixture();
     element.tracks=[{property:'volume',keyframes:[{id:'last',time:4,value:1,easing:'linear',direction:'inOut',mode:'smooth'}]}];

@@ -31,6 +31,7 @@ import {ProjectFontsPanel} from './ProjectFontsPanel';
 import {GoogleFontsPanel} from './GoogleFontsPanel';
 import {TextFlowPanel} from './TextFlowPanel';
 import {TextReflowPanel} from './TextReflowPanel';
+import {recordingPlaybackProject} from './recording';
 import {TextureKeyPanel} from './TextureKeyPanel';
 import type {CuratedFontAsset} from './curatedFonts';
 import {addProjectFont,ProjectFontLoader} from './projectFonts';
@@ -104,7 +105,7 @@ export default function App(){
   const [history,setHistory]=useState<Project[]>([]),[future,setFuture]=useState<Project[]>([]),[expanded,setExpanded]=useState<string[]>([]),[keySelection,setKeySelection]=useState<{element:string;property:AnimProperty;key:string}|null>(null);
   const [timelineItems,setTimelineItems]=useState<TimelineItem[]>([]);
   const [timelineMarquee,setTimelineMarquee]=useState<{left:number;top:number;width:number;height:number}|null>(null);
-  const [context,setContext]=useState<{x:number;y:number}|null>(null),[busy,setBusy]=useState(''),[recording,setRecording]=useState(false);
+  const [context,setContext]=useState<{x:number;y:number}|null>(null),[busy,setBusy]=useState(''),[recording,setRecording]=useState(false),[muteWhileRecording,setMuteWhileRecording]=useState(false),[monitorWhileRecording,setMonitorWhileRecording]=useState(false);
   const [timelineContext,setTimelineContext]=useState<{x:number;y:number;kind:'ruler'|'scene'|'clip'|'key'|'cameraKey'|'property';element?:string;property?:AnimProperty|CameraProperty;key?:string;scene?:string;at?:number}|null>(null);
   const [sceneDialog,setSceneDialog]=useState<{id:string;kind:'rename'|'duration';value:string}|null>(null);
   const [sceneRename,setSceneRename]=useState<{id:string;value:string}|null>(null);
@@ -121,6 +122,8 @@ export default function App(){
   const stageBox=useRef<HTMLDivElement>(null),stageWorkspace=useRef<HTMLDivElement>(null),workspaceBox=useRef<HTMLDivElement>(null),timelineBody=useRef<HTMLDivElement>(null),fileInput=useRef<HTMLInputElement>(null),mediaInput=useRef<HTMLInputElement>(null),fontInput=useRef<HTMLInputElement>(null),assemblyInput=useRef<HTMLInputElement>(null),libraryInput=useRef<HTMLInputElement>(null);
   const libraryHandle=useRef<LibraryDirectoryHandle|null>(null);
   const transport=useRef(new AudioTransport()),playRef=useRef(false),recorder=useRef<MediaRecorder|null>(null),recStream=useRef<MediaStream|null>(null);
+  const recordingPlayback=useRef<Project|null>(null),finishRecording=useRef<(()=>void)|null>(null);
+  const recordingMonitor=useRef<AudioContext|null>(null);
   const previewReturn=useRef<{time:number;playing:boolean}|null>(null),previewToken=useRef(0);
   const cancelledSceneRename=useRef<string|null>(null);
   const drag=useRef<{base:Project;id:string;mode:'move'|'resize'|'rotate'|'pivot';px:number;py:number;start:StoryElement;world:StoryElement;rotationCenter?:WorldPoint;rotationIds?:string[]}|null>(null);
@@ -184,7 +187,7 @@ export default function App(){
   function redo(){if(!future.length)return;stop();const next=future[0];setHistory(h=>[...h,projectRef.current]);setFuture(f=>f.slice(1));projectRef.current=next;setProject(next);dirty.current=true;setFileStatus('Changes not saved to file');}
   function replaceProject(p:Project){if(dirty.current)void saveAutosave(projectRef.current).catch(()=>alert("Could not preserve the previous project in browser recovery. Save a project file before closing."));stop();const opened=assignSceneOwnership(p);projectRef.current=opened;projectHandle.current=null;setProject(opened);setSelected([]);setSelectedCaptionId(null);setTimelineItems([]);setHistory([]);setFuture([]);setTime(0);setSplash(false);dirty.current=false;setFileStatus('Opened project');setHiddenSections([]);setKeySelection(null);setSceneDialog(null);}
   useEffect(()=>{if(selected.length)setSelectedCaptionId(null);},[selected]);
-  function stop(){previewToken.current++;previewReturn.current=null;setPreviewingAudioId(null);setTailPlaying(false);playRef.current=false;setPlaying(false);setPreparing(false);transport.current.stop();}
+  function stop(){previewToken.current++;previewReturn.current=null;setPreviewingAudioId(null);setTailPlaying(false);playRef.current=false;setPlaying(false);setPreparing(false);transport.current.stop();recordingPlayback.current=null;}
   async function playFrom(start:number){const p=projectRef.current,token=previewToken.current;setTime(start);setTailPlaying(false);setPreparing(true);playRef.current=true;try{await transport.current.play(p,start);if(playRef.current&&token===previewToken.current)setPlaying(true);}catch(e){if(token===previewToken.current){alert(String(e));stop();}}finally{if(token===previewToken.current)setPreparing(false);}}
   async function togglePlay(){if(playRef.current){stop();return;}await playFrom(time>=projectRef.current.duration?0:time);}
   async function previewAudio(){
@@ -211,9 +214,9 @@ export default function App(){
   function stopPreview(){if(previewReturn.current)transport.current.stop();}
   function seek(t:number){stop();setTime(clamp(snap?Math.round(t*project.fps)/project.fps:t,0,project.duration));}
 
-  useEffect(()=>{void loadAutosave().then(setRecent).catch(()=>setSaveStatus('Browser recovery unavailable'));return()=>{transport.current.destroy();recorder.current?.stop();recStream.current?.getTracks().forEach(t=>t.stop());};},[]);
+  useEffect(()=>{void loadAutosave().then(setRecent).catch(()=>setSaveStatus('Browser recovery unavailable'));return()=>{transport.current.destroy();recorder.current?.stop();recStream.current?.getTracks().forEach(t=>t.stop());void recordingMonitor.current?.close();};},[]);
   useEffect(()=>{if(splash)return;const generation=++lastSave.current;setSaveStatus('Saving in browser…');const timer=setTimeout(()=>{void saveAutosave(project).then(()=>{if(generation===lastSave.current)setSaveStatus('Autosaved in this browser');}).catch(()=>setSaveStatus('Autosave failed — save a project file'));},700);return()=>clearTimeout(timer);},[project,splash]);
-  useEffect(()=>{if(!playing)return;let raf=0;function tick(){if(!playRef.current)return;const p=projectRef.current;const raw=transport.current.time,t=clamp(raw,0,p.duration);setTime(t);transport.current.update(p,raw);setTailPlaying(!transport.current.previewingId&&raw>=p.duration&&raw<p.duration+audioTail);if(raw>=p.duration+audioTail&&!transport.current.previewingId){stop();if(recorder.current?.state==='recording')recorder.current.stop();return;}raf=requestAnimationFrame(tick);}raf=requestAnimationFrame(tick);return()=>cancelAnimationFrame(raf);},[playing,audioTail]);
+  useEffect(()=>{if(!playing)return;let raf=0;function tick(){if(!playRef.current)return;const p=projectRef.current;const raw=transport.current.time,t=clamp(raw,0,p.duration);setTime(t);transport.current.update(recordingPlayback.current??p,raw);setTailPlaying(!transport.current.previewingId&&raw>=p.duration&&raw<p.duration+audioTail);if(raw>=p.duration+audioTail&&!transport.current.previewingId){finishRecording.current?.();stop();return;}raf=requestAnimationFrame(tick);}raf=requestAnimationFrame(tick);return()=>cancelAnimationFrame(raf);},[playing,audioTail]);
   useEffect(()=>{if(!notice)return;const t=setTimeout(()=>setNotice(''),6000);return()=>clearTimeout(t);},[notice]);
   useEffect(()=>{if(splash)void listAutosaves().then(p=>{setRecentProjects(p);setRecent(p[0]??null);}).catch(()=>setSaveStatus('Browser recovery unavailable'));},[splash]);
   useEffect(()=>{const node=stageWorkspace.current;if(!node)return;const fit=()=>{const width=Math.max(1,node.clientWidth-76),height=Math.max(1,node.clientHeight-74),ratio=project.width/project.height;const fittedWidth=Math.min(width,height*ratio);setStageSize({width:fittedWidth,height:fittedWidth/ratio});};fit();const observer=new ResizeObserver(fit);observer.observe(node);return()=>observer.disconnect();},[project.width,project.height]);
@@ -613,30 +616,39 @@ export default function App(){
   function zoomTimeline(factor:number,clientX?:number){const viewport=timelineBody.current;if(!viewport)return;const rect=viewport.getBoundingClientRect();const x=clientX===undefined?rect.width/2:clientX-rect.left;const label=rulerBody.current?.previousElementSibling?.getBoundingClientRect().width??220;const relative=clamp((viewport.scrollLeft+x-label)/Math.max(1,viewport.scrollWidth-label),0,1);setTimelineScale(current=>clamp(current*factor,1,16));requestAnimationFrame(()=>{viewport.scrollLeft=Math.max(0,relative*Math.max(1,viewport.scrollWidth-label)+label-x);});}
   function timelineWheel(ev:React.WheelEvent){const viewport=timelineBody.current;if(!viewport)return;if(ev.ctrlKey||ev.metaKey){ev.preventDefault();zoomTimeline(ev.deltaY<0?1.25:.8,ev.clientX);return;}if(ev.shiftKey){ev.preventDefault();viewport.scrollTop+=ev.deltaY||ev.deltaX;return;}if((ev.target as Element).closest('.timeline-lane,.ruler')){ev.preventDefault();viewport.scrollLeft+=ev.deltaY+ev.deltaX;}}
   async function record(){
-    if(recording){recorder.current?.stop();return;}
+    if(recording){finishRecording.current?.();return;}
     try{
       if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder)throw new Error('Microphone recording needs a supported browser on HTTPS or localhost.');
       stop();setPreparing(true);
       const stream=await navigator.mediaDevices.getUserMedia({audio:true});recStream.current=stream;
+      if(monitorWhileRecording){
+        const monitor=new AudioContext();recordingMonitor.current=monitor;
+        monitor.createMediaStreamSource(stream).connect(monitor.destination);
+        await monitor.resume();
+      }
       const mime=['audio/webm;codecs=opus','audio/mp4','audio/ogg;codecs=opus'].find(t=>MediaRecorder.isTypeSupported(t));
       const r=new MediaRecorder(stream,mime?{mimeType:mime}:undefined);recorder.current=r;const chunks:Blob[]=[];
       const requestedStart=time>=projectRef.current.duration?0:time;
-      await transport.current.play(projectRef.current,requestedStart);
-      const start=transport.current.time;let started=performance.now();
+      const playback=recordingPlaybackProject(projectRef.current,muteWhileRecording);
+      recordingPlayback.current=playback;
+      await transport.current.play(playback,requestedStart);
+      let start=transport.current.time,endedAt:number|null=null;
+      finishRecording.current=()=>{if(r.state==='recording'){endedAt=transport.current.time;r.stop();}};
+      r.onstart=()=>{start=transport.current.time;};
       r.ondataavailable=e=>{if(e.data.size)chunks.push(e.data);};
       r.onstop=()=>{
-        const elapsed=Math.max(1/projectRef.current.fps,(performance.now()-started)/1000);
-        stream.getTracks().forEach(t=>t.stop());setRecording(false);stop();
+        const elapsed=Math.max(1/projectRef.current.fps,(endedAt??transport.current.time)-start);
+        stream.getTracks().forEach(t=>t.stop());void recordingMonitor.current?.close();recordingMonitor.current=null;setRecording(false);stop();finishRecording.current=null;recorder.current=null;
         const blob=new Blob(chunks,{type:r.mimeType});
         if(!blob.size){alert('No microphone audio was captured.');return;}
         void readData(new File([blob],'Voice recording')).then(dataUrl=>{
           const p=clone(projectRef.current);const asset:Asset={id:uid(),name:'Voice recording',mime:blob.type,kind:'audio',dataUrl,duration:elapsed};p.assets.push(asset);
-          const e=createElement('audio',{name:'Voice recording',assetId:asset.id,start,duration:elapsed,sceneId:sceneIdAt(p,start)});p.elements.push(e);p.duration=Math.max(p.duration,start+elapsed);commit(p);setSelected([e.id]);alert('Recording inserted. Device input latency may require nudging its start.');
+          const e=createElement('audio',{name:'Voice recording',assetId:asset.id,start,duration:elapsed,sceneId:sceneIdAt(p,start),recorded:true,recordingOffset:0});p.elements.push(e);p.duration=Math.max(p.duration,start+elapsed);commit(p);setSelected([e.id]);
         }).catch(e=>alert(String(e)));
       };
-      r.onerror=()=>{alert('Microphone recording failed.');stream.getTracks().forEach(t=>t.stop());setRecording(false);stop();};
-      started=performance.now();r.start();setTime(start);setRecording(true);setPreparing(false);playRef.current=true;setPlaying(true);
-    }catch(e){alert(String(e));recStream.current?.getTracks().forEach(t=>t.stop());setRecording(false);stop();}
+      r.onerror=()=>{alert('Microphone recording failed.');stream.getTracks().forEach(t=>t.stop());void recordingMonitor.current?.close();recordingMonitor.current=null;setRecording(false);stop();finishRecording.current=null;recorder.current=null;};
+      r.start();setTime(start);setRecording(true);setPreparing(false);playRef.current=true;setPlaying(true);
+    }catch(e){alert(String(e));recStream.current?.getTracks().forEach(t=>t.stop());void recordingMonitor.current?.close();recordingMonitor.current=null;setRecording(false);stop();finishRecording.current=null;recorder.current=null;}
   }
 
   useEffect(()=>{function handler(ev:KeyboardEvent){const typing=(ev.target as HTMLElement).matches('input,textarea,select,[contenteditable]');if(ev.key==='Escape'){setMenu(null);setDialog(null);setContext(null);setTimelineContext(null);setPivotMode(false);return;}if(typing)return;const mod=ev.ctrlKey||ev.metaKey;if(mod&&ev.key.toLowerCase()==='s'){ev.preventDefault();void save();}else if(mod&&ev.key.toLowerCase()==='z'){ev.preventDefault();ev.shiftKey?redo():undo();}else if(mod&&ev.key.toLowerCase()==='d'){ev.preventDefault();duplicate();}else if(mod&&ev.key.toLowerCase()==='g'){ev.preventDefault();groupSelection();}else if(ev.code==='Space'){ev.preventDefault();void togglePlay();}else if(ev.key==='Delete'||ev.key==='Backspace'){ev.preventDefault();if(selectedCaptionId)removeCaption(selectedCaptionId);else if(timelineItems.length)deleteTimelineSelection();else if(keySelection)deleteSelectedKeyframe();else removeSelected();}else if(ev.key==='ArrowLeft'||ev.key==='ArrowRight'){ev.preventDefault();if(timelineItems.length){const direction=ev.key==='ArrowRight'?1:-1;const span=visibleTimelineRange[1]-visibleTimelineRange[0];const step=timelineNudgeStep(span,project.fps,snap);try{const next=moveTimelineItems(projectRef.current,timelineItems,direction*step,{ripple});if(next!==projectRef.current)commit(next);}catch(error){alert(error instanceof Error?error.message:String(error));}}else seek(time+(ev.key==='ArrowRight'?1:-1)/project.fps);}}window.addEventListener('keydown',handler);return()=>window.removeEventListener('keydown',handler);});
@@ -726,6 +738,8 @@ export default function App(){
           {autoKeySuggested&&<span className="auto-key-hint">Animated transform: turn on Auto key to edit this pose.</span>}
           <button className={`record-keys ${recordKeys?'on':''} ${autoKeySuggested?'suggested':''}`} title={autoKeySuggested?'This object has animated position or rotation. Turn on Auto key to edit its current pose.':'Record changed properties as keyframes'} aria-label="Auto key" aria-pressed={recordKeys} onClick={()=>setRecordKeys(!recordKeys)}><span/>Auto key</button>
           <Button icon={Mic} label={recording?'Stop microphone recording':'Record microphone with scene playback'} active={recording} onClick={()=>void record()}/>
+          <label className="record-mute-option" title="Mute existing audio and video sound only while recording"><input aria-label="Mute existing audio while recording" type="checkbox" checked={muteWhileRecording} disabled={recording} onChange={event=>setMuteWhileRecording(event.target.checked)}/>Mute while recording</label>
+          <label className="record-mute-option" title="Hear the microphone through your speakers or headphones while recording"><input aria-label="Monitor microphone while recording" type="checkbox" checked={monitorWhileRecording} disabled={recording} onChange={event=>setMonitorWhileRecording(event.target.checked)}/>Monitor mic</label>
           <button className={`tool-text ${ripple?'active':''}`} title="Ripple moves later clips and scene boundaries when you move or trim a clip" aria-pressed={ripple} onClick={()=>setRipple(!ripple)}>{ripple?'Ripple':'Normal'}</button>
           <Button icon={showAll?Eye:EyeOff} label={showAll?'Showing all timeline rows':'Showing active timeline rows'} active={!showAll} onClick={()=>setShowAll(!showAll)}/>
           <Button icon={ZoomOut} label="Zoom timeline out" onClick={()=>zoomTimeline(.8)}/><Button icon={ZoomIn} label="Zoom timeline in" onClick={()=>zoomTimeline(1.25)}/>

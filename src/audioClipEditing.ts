@@ -1,5 +1,5 @@
 import { evaluateElement } from './engine';
-import { uid } from './model';
+import { sceneIdAt, uid } from './model';
 import type { AnimProperty, Asset, Keyframe, Project, StoryElement, Track } from './model';
 
 const EPSILON = 1e-7;
@@ -22,6 +22,20 @@ function sourceDuration(project: Project, element: StoryElement): number {
 export function sourceWindow(element: StoryElement, assetDuration: number): { inTime: number; outTime: number } {
   const inTime = clip(element.sourceOffset ?? 0, 0, assetDuration);
   return { inTime, outTime: clip(inTime + element.duration * (element.speed ?? 1), inTime, assetDuration) };
+}
+
+/** Move a recorded take without altering its source audio or effect chain.
+ * The stored correction is relative to the capture position, so it can be reset. */
+export function setRecordingOffset(base:Project,id:string,offset:number):Project{
+  const original=base.elements.find(item=>item.id===id&&item.kind==='audio'&&item.recorded);
+  if(!original)throw new Error('Select a microphone recording to adjust its alignment.');
+  if(!finite(offset)||Math.abs(offset)>5)throw new Error('Recording offset must be between −5 and +5 seconds.');
+  const start=original.start+offset-(original.recordingOffset??0);
+  if(start<0)throw new Error('The recording cannot begin before the project starts.');
+  const next=structuredClone(base),element=next.elements.find(item=>item.id===id)!;
+  element.start=start;element.recordingOffset=offset;element.sceneId=sceneIdAt(next,start);
+  next.duration=Math.max(next.duration,start+element.duration);
+  return next;
 }
 
 /** Keep the chosen source range when changing playback speed. Picture, embedded

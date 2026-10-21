@@ -201,6 +201,12 @@ function validate(model: unknown, assembly: boolean): asserts model is DocumentM
     }
     if (element.linkSpeedPitch !== undefined) check(typeof element.linkSpeedPitch === 'boolean', 'Pitch/speed link must be on or off.');
     for (const prop of ['sourceOffset', 'volume', 'mediaOpacity']) if (element[prop] !== undefined) number(element[prop], prop, 0);
+    if (element.recorded !== undefined) check(element.kind === 'audio' && typeof element.recorded === 'boolean', 'Invalid recording marker.');
+    if (element.recordingOffset !== undefined) {
+      check(element.kind === 'audio' && element.recorded === true, 'Only microphone clips can have a recording offset.');
+      number(element.recordingOffset, 'Recording offset', -5);
+      check(element.recordingOffset <= 5, 'Recording offset must be at most five seconds.');
+    }
     if (element.videoEndBehavior !== undefined) check(element.videoEndBehavior === 'hold' || element.videoEndBehavior === 'hide', 'Invalid video end behavior.');
     for (const prop of ['fadeIn', 'fadeOut']) if (element[prop] !== undefined) {
       number(element[prop], prop, 0);

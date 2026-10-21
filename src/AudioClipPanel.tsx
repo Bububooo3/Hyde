@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Copy, Link2, Link2Off, Scissors, Volume2, VolumeX } from 'lucide-react';
 import type { Project, StoryElement } from './model';
 import { getDefaultLinkSpeedPitch, setDefaultLinkSpeedPitch } from './model';
-import { duplicateMediaClip, loadWaveform, setMediaFades, setMediaSourceWindow, sourceWindow, splitMediaClip } from './audioClipEditing';
+import { duplicateMediaClip, loadWaveform, setMediaFades, setMediaSourceWindow, setRecordingOffset, sourceWindow, splitMediaClip } from './audioClipEditing';
 import './audio-clip.css';
 
 interface Props {
@@ -39,6 +39,7 @@ export function AudioClipPanel({ project, element, time, onCommit, onSelect }: P
   const [waveformError, setWaveformError] = useState(false);
   const [error, setError] = useState('');
   const [pitchDraft, setPitchDraft] = useState(String(element.pitchSemitones ?? 0));
+  const [offsetDraft,setOffsetDraft]=useState(String(element.recordingOffset??0));
   const [defaultLinked, setDefaultLinked] = useState(getDefaultLinkSpeedPitch);
   const sourceDuration = asset?.duration || waveform?.duration || 0;
   const range = sourceDuration > 0 ? sourceWindow(element, sourceDuration) : { inTime: element.sourceOffset ?? 0, outTime: (element.sourceOffset ?? 0) + element.duration * (element.speed ?? 1) };
@@ -48,6 +49,7 @@ export function AudioClipPanel({ project, element, time, onCommit, onSelect }: P
     setDraft({ inTime: String(range.inTime), outTime: String(range.outTime), fadeIn: String(element.fadeIn ?? 0), fadeOut: String(element.fadeOut ?? 0) });
   }, [element.id, element.sourceOffset, element.duration, element.speed, element.fadeIn, element.fadeOut, sourceDuration]);
   useEffect(() => { setPitchDraft(String(element.pitchSemitones ?? 0)); }, [element.id, element.pitchSemitones]);
+  useEffect(() => { setOffsetDraft(String(element.recordingOffset ?? 0)); }, [element.id, element.recordingOffset]);
   useEffect(() => {
     if (!asset) return;
     let cancelled = false;
@@ -85,6 +87,11 @@ export function AudioClipPanel({ project, element, time, onCommit, onSelect }: P
       patchElement({ pitchSemitones: pitch });
     });
   }
+  function applyRecordingOffset(){
+    const offset=offsetDraft.trim()===''?NaN:Number(offsetDraft);
+    if(offset===(element.recordingOffset??0))return;
+    attempt(()=>onCommit(setRecordingOffset(project,element.id,offset)));
+  }
   function keyCommit(event: React.KeyboardEvent<HTMLInputElement>) { if (event.key === 'Enter') event.currentTarget.blur(); }
   const availableSplit = time > element.start + 1 / project.fps && time < element.start + element.duration - 1 / project.fps;
 
@@ -102,12 +109,14 @@ export function AudioClipPanel({ project, element, time, onCommit, onSelect }: P
       <label><span>Fade in · s</span><input aria-label="Fade in seconds" type="number" min="0" max={element.duration} step="0.05" value={draft.fadeIn} onChange={event => setDraft(value => ({ ...value, fadeIn: event.target.value }))} onBlur={applyFades} onKeyDown={keyCommit}/></label>
       <label><span>Fade out · s</span><input aria-label="Fade out seconds" type="number" min="0" max={element.duration} step="0.05" value={draft.fadeOut} onChange={event => setDraft(value => ({ ...value, fadeOut: event.target.value }))} onBlur={applyFades} onKeyDown={keyCommit}/></label>
       <label><span>Pitch offset · semitones</span><input aria-label="Pitch offset in semitones" type="number" min="-24" max="24" step="0.1" value={pitchDraft} onChange={event => setPitchDraft(event.target.value)} onBlur={applyPitch} onKeyDown={keyCommit}/></label>
+      {element.recorded&&<label><span>Recording alignment · s</span><input aria-label="Recording alignment seconds" type="number" min="-5" max="5" step="0.01" value={offsetDraft} onChange={event=>setOffsetDraft(event.target.value)} onBlur={applyRecordingOffset} onKeyDown={keyCommit}/></label>}
       <label className="audio-pitch-link"><span>Speed and pitch</span><button type="button" aria-label={(element.linkSpeedPitch ?? true) ? 'Unlink pitch from speed' : 'Link pitch to speed'} aria-pressed={element.linkSpeedPitch ?? true} onClick={() => patchElement({ linkSpeedPitch: !(element.linkSpeedPitch ?? true) })}>{(element.linkSpeedPitch ?? true) ? <Link2 size={14}/> : <Link2Off size={14}/>} {(element.linkSpeedPitch ?? true) ? 'Linked' : 'Independent'}</button></label>
       <label><span>Volume · %</span><input aria-label="Clip volume percent" type="number" min="0" max="200" step="1" value={Math.round((element.volume ?? 1) * 100)} onChange={event => { const value = Number(event.target.value); if (Number.isFinite(value)) patchElement({ volume: clamp(value / 100, 0, 2) }); }}/></label>
       <label className="audio-clip-mute"><span>Playback</span><button type="button" aria-label={element.muted ? 'Unmute clip' : 'Mute clip'} aria-pressed={!!element.muted} onClick={() => patchElement({ muted: !element.muted })}>{element.muted ? <VolumeX size={14}/> : <Volume2 size={14}/>} {element.muted ? 'Muted' : 'Audible'}</button></label>
     </div>
     <label className="audio-pitch-default"><input type="checkbox" checked={defaultLinked} onChange={event => { setDefaultLinkSpeedPitch(event.target.checked); setDefaultLinked(event.target.checked); }}/> Link pitch to speed for new audio and video clips</label>
     {element.loop && <p className="muted-note">Turn off Loop to trim or split this clip.</p>}
+    {element.recorded&&<p className="muted-note">Positive values move the take later; negative values move it earlier. This does not change the recorded sound.</p>}
     {error && <p className="audio-clip-error" role="alert">{error}</p>}
   </section>;
 }

@@ -1,8 +1,11 @@
 import {expect,test} from '@playwright/test';
-import {readFile} from 'node:fs/promises';
+import {mkdtemp,readFile,realpath,rm,writeFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {basename,join,resolve,sep} from 'node:path';
+import {pathToFileURL} from 'node:url';
 import {unzipSync} from 'fflate';
 
-test('animated reflow follows a keyed shape and survives project and web export',async({page})=>{
+test('animated reflow follows a keyed shape and survives project and web export',async({page,context})=>{
   test.setTimeout(90_000);
   await page.goto('/');
   await page.getByRole('button',{name:'New project'}).click();
@@ -51,4 +54,24 @@ test('animated reflow follows a keyed shape and survives project and web export'
   await page.getByRole('button',{name:/Standalone web story/}).click();
   const zip=unzipSync(new Uint8Array(await readFile((await (await webDownload).path())!)));
   expect(new TextDecoder().decode(zip['index.html'])).toContain('textReflow');
+  const directory=await mkdtemp(join(tmpdir(),'hyde-reflow-'));
+  try{
+    const html=join(directory,'index.html');await writeFile(html,zip['index.html']);
+    const viewer=await context.newPage(),errors:string[]=[];
+    viewer.on('pageerror',error=>errors.push(error.message));
+    await viewer.goto(pathToFileURL(html).href);
+    const portable=viewer.locator('canvas').first();
+    await expect.poll(()=>portable.evaluate((canvas:HTMLCanvasElement)=>canvas.toDataURL().length)).toBeGreaterThan(1000);
+    const beginning=await portable.evaluate((canvas:HTMLCanvasElement)=>canvas.toDataURL());
+    await viewer.getByRole('slider',{name:'Playback position'}).evaluate((input:HTMLInputElement)=>{
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(input,'1');
+      input.dispatchEvent(new Event('input',{bubbles:true}));input.dispatchEvent(new Event('change',{bubbles:true}));
+    });
+    await expect.poll(()=>portable.evaluate((canvas:HTMLCanvasElement)=>canvas.toDataURL())).not.toBe(beginning);
+    expect(errors).toEqual([]);
+    await viewer.close();
+  }finally{
+    const absolute=await realpath(directory);
+    if(absolute.startsWith(resolve(tmpdir())+sep)&&basename(absolute).startsWith('hyde-reflow-'))await rm(absolute,{recursive:true,force:true});
+  }
 });

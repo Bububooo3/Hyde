@@ -124,6 +124,8 @@ export interface StoryElement {
   /** Image/video source warped into four element-local corners. */
   mediaPin?: PinCorners;
   start: number; duration: number; sourceOffset?: number; speed?: number; volume?: number;
+  /** Captured microphone clips keep a reversible manual synchronization correction. */
+  recorded?: boolean; recordingOffset?: number;
   /** Semitone adjustment in addition to any pitch change caused by linked speed. */
   pitchSemitones?: number;
   /** Defaults to true for older projects: audio pitch rises and falls with speed. */
