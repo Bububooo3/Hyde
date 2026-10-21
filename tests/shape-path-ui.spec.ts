@@ -1,0 +1,42 @@
+import {expect,test} from '@playwright/test';
+
+test('editable shape paths can be curved, dragged, undone, and reopened',async({page})=>{
+  await page.goto('/');
+  await page.getByRole('button',{name:'New project'}).click();
+  await page.getByRole('button',{name:'Done'}).click();
+  await page.getByRole('button',{name:'Add rectangle'}).first().click();
+  await page.getByRole('button',{name:'Convert to editable path'}).click();
+  const overlay=page.locator('.path-overlay');
+  await expect(overlay).toBeVisible();
+  await page.getByRole('button',{name:'Curve point'}).click();
+  await expect(overlay.locator('path')).toHaveAttribute('d',/C /);
+  const canvas=page.locator('.stage-frame canvas');
+  const frame=()=>canvas.evaluate((element:HTMLCanvasElement)=>element.toDataURL());
+  await expect.poll(async()=>{const first=await frame();await page.waitForTimeout(80);return first===await frame();}).toBe(true);
+  const renderedBefore=await frame();
+  const before=await overlay.locator('path').getAttribute('d');
+  const anchor=overlay.locator('circle[aria-label="Move path point 1"]');
+  const box=await anchor.boundingBox();expect(box).toBeTruthy();
+  await page.mouse.move(box!.x+box!.width/2,box!.y+box!.height/2);
+  await page.mouse.down();
+  await page.mouse.move(box!.x+box!.width/2+28,box!.y+box!.height/2+18,{steps:5});
+  await page.mouse.up();
+  const after=await overlay.locator('path').getAttribute('d');
+  expect(after).not.toBe(before);
+  await expect.poll(frame).not.toBe(renderedBefore);
+  const renderedAfter=await frame();
+  await page.keyboard.press('Control+z');
+  await expect(overlay.locator('path')).toHaveAttribute('d',before!);
+  await expect.poll(frame).toBe(renderedBefore);
+  await page.keyboard.press('Control+Shift+z');
+  await expect(overlay.locator('path')).toHaveAttribute('d',after!);
+  await expect.poll(frame).toBe(renderedAfter);
+  const downloaded=page.waitForEvent('download');
+  await page.getByRole('button',{name:'File',exact:true}).click();
+  await page.getByRole('button',{name:'Download project copy'}).click();
+  await page.locator('input[type=file][accept=".hyde,.hy"]').setInputFiles((await (await downloaded).path())!);
+  await page.locator('.layer-name').filter({hasText:'Rectangle'}).click();
+  if(await page.getByRole('button',{name:'Edit path on stage'}).isVisible())
+    await page.getByRole('button',{name:'Edit path on stage'}).click();
+  await expect(overlay.locator('path')).toHaveAttribute('d',after!);
+});

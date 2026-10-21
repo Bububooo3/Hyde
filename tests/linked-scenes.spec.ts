@@ -1,0 +1,52 @@
+import {expect,test} from '@playwright/test';
+import {readFile} from 'node:fs/promises';
+import {strFromU8,unzipSync} from 'fflate';
+
+test('a linked scene follows source edits, survives reopening, and exports as a standalone story',async({page})=>{
+  const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));
+  await page.goto('/');
+  await page.getByRole('button',{name:/New project Choose a size/}).click();
+  await page.getByRole('button',{name:'Done',exact:true}).click();
+  await page.getByRole('button',{name:'Add rectangle',exact:true}).first().click();
+  await page.getByRole('textbox',{name:'Element name'}).fill('Source shape');
+  await page.locator('.sequence-block').first().click({button:'right'});
+  await page.getByRole('button',{name:'Place linked copy'}).click();
+  await expect(page.locator('.sequence-block.linked')).toHaveCount(1);
+  await page.locator('.sequence-block.linked').click({button:'right'});
+  expect((await page.locator('.timeline-context-menu').boundingBox())!.width).toBeLessThan(200);
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('heading',{name:'Linked scene'})).toBeVisible();
+  await page.getByRole('button',{name:'Picture in picture'}).click();
+  await page.getByRole('spinbutton',{name:'Frame rotation °'}).fill('30');
+  await page.getByRole('spinbutton',{name:'Source in s'}).fill('1');
+  await page.getByRole('spinbutton',{name:'Source out s'}).fill('7');
+  const canvas=page.locator('.render-host canvas');
+  await expect.poll(()=>canvas.evaluate((element:HTMLCanvasElement)=>element.toDataURL().length)).toBeGreaterThan(1000);
+  const before=await canvas.evaluate((element:HTMLCanvasElement)=>element.toDataURL());
+  await page.getByRole('button',{name:'Edit source scene'}).click();
+  await page.getByLabel('Fill color',{exact:true}).fill('#00cc44');
+  await page.locator('.sequence-block.linked').click();
+  await expect.poll(()=>canvas.evaluate((element:HTMLCanvasElement)=>element.toDataURL())).not.toBe(before);
+
+  const copy=page.waitForEvent('download');
+  await page.getByRole('button',{name:'File',exact:true}).click();
+  await page.getByRole('button',{name:'Download project copy',exact:true}).click();
+  const file=await copy;
+  await page.locator('input[type=file][accept=".hyde,.hy"]').setInputFiles((await file.path())!);
+  await expect(page.locator('.sequence-block.linked')).toHaveCount(1);
+  await page.locator('.sequence-block.linked').click();
+  await expect(page.getByRole('spinbutton',{name:'Source in s'})).toHaveValue('1');
+  await expect(page.getByRole('spinbutton',{name:'Source out s'})).toHaveValue('7');
+  await expect(page.getByRole('spinbutton',{name:'Frame rotation °'})).toHaveValue('30');
+
+  await page.getByRole('button',{name:'Export',exact:true}).click();
+  const downloaded=page.waitForEvent('download');
+  await page.getByRole('button',{name:/Standalone web story/}).click();
+  const zip=unzipSync(new Uint8Array(await readFile((await (await downloaded).path())!)));
+  const story=JSON.parse(strFromU8(zip['story.json']));
+  expect(story.sequences[1].sourceSceneId).toBe(story.sequences[0].id);
+  expect(story.sequences[1].frame.width).toBeGreaterThan(0);
+  expect(story.sequences[1].frameRotation).toBe(30);
+  expect(story.elements.filter((element:{kind:string})=>element.kind==='rectangle')).toHaveLength(1);
+  expect(errors).toEqual([]);
+});

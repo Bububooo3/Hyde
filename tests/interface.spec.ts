@@ -1,0 +1,132 @@
+import {test,expect} from '@playwright/test';
+
+test('contents search, type filter, assembly collapse and range selection preserve stage order',async({page})=>{
+  await page.goto('/');await page.getByRole('button',{name:'Open example',exact:true}).click();
+  await expect(page.locator('canvas')).toHaveCount(1);
+  const names=await page.locator('.layer-name').allTextContents();
+  await page.locator('.layer-name').getByText('Story title',{exact:true}).click();
+  const canvas=page.locator('canvas');
+  const before=await canvas.evaluate((c:HTMLCanvasElement)=>c.toDataURL());
+  await page.getByLabel('Search scene contents',{exact:true}).fill('lid');
+  await expect(page.locator('.layer-name')).toHaveText(['Paper Box · body','Paper Box · hinged lid']);
+  await expect(page.getByText('Selection is inside a closed folder or hidden by a filter.')).toBeVisible();
+  await page.getByRole('button',{name:'Reveal',exact:true}).click();
+  await expect(page.locator('.layer-name')).toHaveText(names);
+  await page.getByLabel('Filter scene contents by type').selectOption('text');
+  await expect(page.locator('.layer-name')).toHaveText(['Story subtitle','Story title','Chapter number']);
+  await page.getByLabel('Search scene contents',{exact:true}).fill('missing');
+  await expect(page.getByText('No matching elements.')).toBeVisible();
+  await page.getByRole('button',{name:'Clear filters',exact:true}).click();
+  await page.getByRole('button',{name:'Collapse assembly Paper Box · body'}).click();
+  await expect(page.locator('.layer-name').filter({hasText:'Paper Box · hinged lid'})).toHaveCount(0);
+  await page.getByRole('button',{name:'Expand assembly Paper Box · body'}).click();
+  await expect(page.locator('.layer-name')).toHaveText(names);
+  await page.locator('.layer-name').getByText('Story title',{exact:true}).click();
+  await page.locator('.layer-name').getByText('Story subtitle',{exact:true}).click({modifiers:['Shift']});
+  expect(await page.locator('.scene-element-row.selected').count()).toBeGreaterThan(2);
+  expect(await page.evaluate(()=>getSelection()?.toString()??'')).toBe('');
+  await page.locator('.layer-name').getByText('Paper Box · body',{exact:true}).click();
+  await page.locator('.layer-name').getByText('Story title',{exact:true}).click({modifiers:['Control']});
+  await expect(page.locator('.scene-element-row.selected')).toHaveCount(2);
+  expect(await canvas.evaluate((c:HTMLCanvasElement)=>c.toDataURL())).toEqual(before);
+});
+
+test('same-name assemblies stay separate and scene folders can contain them',async({page})=>{
+  await page.goto('/');await page.getByRole('button',{name:/New project Choose a size/}).click();await page.getByRole('button',{name:'Done',exact:true}).click();
+  await page.getByRole('button',{name:'Add object'}).click();await page.getByRole('button',{name:'Rectangle',exact:true}).click();
+  await page.getByRole('textbox',{name:'Element name',exact:true}).fill('First part');
+  await page.getByRole('button',{name:'Create assembly from selection'}).click();
+  await page.getByRole('button',{name:'Add object'}).click();await page.getByRole('button',{name:'Ellipse',exact:true}).click();
+  await page.getByRole('textbox',{name:'Element name',exact:true}).fill('Second part');
+  await page.getByRole('button',{name:'Create assembly from selection'}).click();
+  await expect(page.locator('.layer-name').filter({hasText:'New assembly'})).toHaveCount(2);
+  await page.getByRole('button',{name:'Collapse assembly New assembly'}).first().click();
+  await expect(page.locator('.layer-name').filter({hasText:'Second part'})).toHaveCount(0);
+  await expect(page.locator('.layer-name').filter({hasText:'First part'})).toHaveCount(1);
+  await page.getByRole('button',{name:'Expand assembly New assembly'}).first().click();
+  await page.locator('.scene-element-row').filter({hasText:'Second part'}).first().click({button:'right'});
+  await page.getByRole('button',{name:'Detach from assembly'}).click();
+  await page.getByRole('button',{name:'Add object'}).click();await page.getByRole('button',{name:'Folder',exact:true}).click();
+  await page.getByRole('textbox',{name:'Rename folder'}).fill('Characters');await page.getByRole('textbox',{name:'Rename folder'}).press('Enter');
+  const folder=page.locator('.scene-folder-row').filter({hasText:'Characters'});
+  await page.locator('.scene-element-row').filter({hasText:'Second part'}).first().dragTo(folder);
+  await expect(folder).toContainText('Characters');
+  await folder.getByRole('button',{name:'Collapse folder Characters'}).click();
+  await expect(page.locator('.layer-name').filter({hasText:'Second part'})).toHaveCount(0);
+  await expect(page.locator('.layer-name').filter({hasText:'First part'})).toHaveCount(1);
+  await folder.getByRole('button',{name:'Expand folder Characters'}).click();
+  await expect(page.locator('.layer-name').filter({hasText:'Second part'})).toHaveCount(1);
+});
+
+test('menus dismiss on outside press and controls use plain labels',async({page})=>{
+  await page.goto('/');await page.screenshot({path:'test-results/hyde-welcome.png'});
+  await page.getByRole('button',{name:'Open example',exact:true}).click();
+  await page.getByRole('button',{name:'File',exact:true}).click();await expect(page.locator('.dropdown')).toBeVisible();
+  await page.getByLabel('Search scene contents',{exact:true}).click();await expect(page.locator('.dropdown')).toHaveCount(0);
+  await page.getByRole('button',{name:'File',exact:true}).click();await page.getByRole('button',{name:'Help',exact:true}).click();
+  await expect(page.locator('.dropdown')).toHaveCount(1);await expect(page.getByRole('button',{name:'Open example project',exact:true})).toBeVisible();
+  await page.locator('.stage-breadcrumb').click();await expect(page.locator('.dropdown')).toHaveCount(0);
+  await expect(page.getByRole('button',{name:'World',exact:true}).locator('svg')).toHaveCount(0);
+  await page.getByRole('button',{name:'World',exact:true}).click();await expect(page.getByRole('button',{name:'Local',exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Export',exact:true}).click();await expect(page.getByRole('heading',{name:'Export',exact:true})).toBeVisible();
+  await expect(page.getByText(/foundation build|internal milestone|Take your story/i)).toHaveCount(0);
+  await page.getByRole('button',{name:'Close dialog',exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>document.fonts.check('400 40px "JetBrains Mono"'))).toBeTruthy();
+  await page.screenshot({path:'test-results/hyde-editor.png'});
+});
+
+test('custom tips stay open when hovered and close buttons have no tip',async({page})=>{
+  await page.goto('/');
+  await page.getByRole('button',{name:'Close welcome',exact:true}).hover();
+  await page.waitForTimeout(300);
+  await expect(page.locator('.hyde-tooltip')).toHaveCount(0);
+  await page.getByRole('button',{name:'Open example',exact:true}).click();
+  await page.getByRole('button',{name:'Export',exact:true}).click();
+  await page.getByRole('button',{name:'Close dialog',exact:true}).hover();
+  await page.waitForTimeout(300);
+  await expect(page.locator('.hyde-tooltip')).toHaveCount(0);
+  await page.getByRole('button',{name:'Close dialog',exact:true}).click();
+  await page.getByRole('button',{name:'Add rectangle',exact:true}).hover();
+  await expect(page.locator('.hyde-tooltip')).toContainText('Add rectangle');
+  await page.locator('.hyde-tooltip').hover();
+  await page.locator('.hyde-tooltip button').focus();
+  await page.waitForTimeout(350);
+  await expect(page.locator('.hyde-tooltip')).toContainText('Add rectangle');
+  await page.locator('.stage-breadcrumb').hover();
+  await expect(page.locator('.hyde-tooltip')).toContainText('Add rectangle');
+  await page.keyboard.press('Tab');
+  await expect(page.locator('.hyde-tooltip')).toHaveCount(0);
+});
+
+test('rotation handle takes priority over overlapping stage objects and supports undo',async({page})=>{
+  await page.goto('/');await page.getByRole('button',{name:/New project Choose a size/}).click();await page.getByRole('button',{name:'Done',exact:true}).click();
+  await page.getByRole('button',{name:'Add rectangle',exact:true}).first().click();
+  await page.getByRole('textbox',{name:'Element name',exact:true}).fill('Target');
+  await page.getByRole('button',{name:'Add ellipse',exact:true}).click();
+  await page.getByRole('textbox',{name:'Element name',exact:true}).fill('Cover');
+  await page.getByRole('spinbutton',{name:'Y',exact:true}).fill('150');
+  await page.locator('.layer-name').getByText('Target',{exact:true}).click();
+  const handle=page.getByLabel('Rotate selection',{exact:true});
+  const box=await handle.boundingBox();expect(box).toBeTruthy();expect(box!.width).toBeGreaterThan(23);expect(box!.width).toBeLessThan(27);
+  const rotation=page.getByRole('spinbutton',{name:'Rotation °',exact:true});
+  await page.mouse.move(box!.x+box!.width/2,box!.y+box!.height/2);await page.mouse.down();
+  await page.mouse.move(box!.x+box!.width/2+70,box!.y+box!.height/2+40,{steps:8});await page.mouse.up();
+  await expect(page.getByRole('textbox',{name:'Element name',exact:true})).toHaveValue('Target');
+  await expect(rotation).not.toHaveValue('0');
+  await page.getByRole('button',{name:'Undo (Ctrl Z)',exact:true}).click();await expect(rotation).toHaveValue('0');
+});
+
+test('hinge rotation works and a locked pivot does not select the object underneath',async({page})=>{
+  await page.goto('/');await page.getByRole('button',{name:'Open example',exact:true}).click();
+  await page.locator('.layer-name').getByText('Paper Box · hinged lid',{exact:true}).click();
+  await page.getByRole('button',{name:'Auto key',exact:true}).click();
+  const handle=await page.getByLabel('Rotate selection',{exact:true}).boundingBox();expect(handle).toBeTruthy();
+  await page.mouse.move(handle!.x+handle!.width/2,handle!.y+handle!.height/2);await page.mouse.down();
+  await page.mouse.move(handle!.x+handle!.width/2-45,handle!.y+handle!.height/2-65,{steps:8});await page.mouse.up();
+  await expect(page.getByRole('textbox',{name:'Element name',exact:true})).toHaveValue('Paper Box · hinged lid');
+  expect(Number(await page.getByRole('spinbutton',{name:'Rotation °',exact:true}).inputValue())).toBeLessThan(0);
+  await page.getByRole('button',{name:'Edit pivot (keeps artwork stationary)',exact:true}).click();
+  await page.getByLabel('Pivot locked by attachment',{exact:true}).click();
+  await expect(page.getByRole('textbox',{name:'Element name',exact:true})).toHaveValue('Paper Box · hinged lid');
+  await expect(page.getByText('Pivot is locked by the attachment. Edit attachment settings in Properties.')).toBeVisible();
+});

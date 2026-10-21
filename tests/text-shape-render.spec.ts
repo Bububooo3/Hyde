@@ -1,0 +1,74 @@
+import {expect,test} from '@playwright/test';
+import {createHash} from 'node:crypto';
+
+test('text can flow around, inside, or clip to a shape without retaining old masks',async({page})=>{
+  await page.goto('/');
+  await page.getByRole('button',{name:'New project'}).click();
+  await page.getByRole('button',{name:'Done'}).click();
+  await page.getByRole('button',{name:'Add rectangle'}).click();
+  await page.getByRole('spinbutton',{name:'Width',exact:true}).fill('130');
+  await page.getByRole('spinbutton',{name:'Height',exact:true}).fill('180');
+  await page.getByRole('button',{name:'Add text'}).click();
+  await page.getByRole('textbox',{name:'Text content'}).fill('A shape can direct these words through the page with a change in layout.');
+  await page.getByRole('spinbutton',{name:'Width',exact:true}).fill('360');
+  await page.getByRole('spinbutton',{name:'Height',exact:true}).fill('240');
+  await page.getByRole('spinbutton',{name:'Font size'}).fill('26');
+  await page.getByLabel('Fill color').fill('#1f2933');
+  const frame=()=>page.locator('.stage-frame canvas').evaluate((canvas:HTMLCanvasElement)=>canvas.toDataURL());
+  const ready=async()=>{
+    await expect.poll(async()=>{const first=await frame();await page.waitForTimeout(50);return first===await frame();}).toBe(true);
+    return frame();
+  };
+  const ordinary=await ready();
+  await page.getByRole('combobox',{name:'Text shape target'}).selectOption({label:'Rectangle'});
+  const around=await ready();
+  expect(around).not.toBe(ordinary);
+  await page.getByRole('combobox',{name:'Text shape mode'}).selectOption('inside');
+  const inside=await ready();
+  expect(inside).not.toBe(around);
+  await page.getByRole('combobox',{name:'Text shape mode'}).selectOption('clip');
+  const clipped=await ready();
+  const digest=(frame:string)=>createHash('sha256').update(frame).digest('hex').slice(0,12);
+  expect(digest(clipped)).not.toBe(digest(inside));
+  expect(digest(clipped)).not.toBe(digest(ordinary));
+  await page.getByRole('combobox',{name:'Text shape target'}).selectOption('');
+  expect(await ready()).toBe(ordinary);
+  await page.getByRole('combobox',{name:'Text shape target'}).selectOption({label:'Rectangle'});
+  expect(await ready()).toBe(clipped);
+  await page.getByRole('combobox',{name:'Text shape mode'}).selectOption('around');
+  expect(await ready()).toBe(around);
+});
+
+test('shape clipping also constrains an image used as a text fill',async({page})=>{
+  await page.goto('/');
+  await page.getByRole('button',{name:'New project'}).click();
+  await page.getByRole('button',{name:'Done'}).click();
+  await page.getByRole('button',{name:'Add rectangle'}).click();
+  await page.getByRole('spinbutton',{name:'Width',exact:true}).fill('130');
+  await page.getByRole('spinbutton',{name:'Height',exact:true}).fill('180');
+  await page.getByRole('button',{name:'Add text'}).click();
+  await page.getByRole('textbox',{name:'Text content'}).fill('COLOR FLOWS THROUGH TEXT, AND THE SHAPE CROPS ITS EDGES.');
+  await page.getByRole('spinbutton',{name:'Width',exact:true}).fill('360');
+  await page.getByRole('spinbutton',{name:'Height',exact:true}).fill('240');
+  await page.getByRole('spinbutton',{name:'Font size'}).fill('28');
+  await page.getByRole('combobox',{name:'Text shape target'}).selectOption({label:'Rectangle'});
+  await page.getByRole('combobox',{name:'Text shape mode'}).selectOption('clip');
+  const svg='<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128"><rect width="128" height="128" fill="#f02010"/></svg>';
+  await page.locator('input[type=file][accept="image/*,video/*,audio/*"]').setInputFiles({name:'red.svg',mimeType:'image/svg+xml',buffer:Buffer.from(svg)});
+  await page.getByRole('button',{name:'Hide red'}).click();
+  await page.locator('.layer-name').filter({hasText:'Text'}).click();
+  await page.getByRole('combobox',{name:'Texture asset'}).selectOption({label:'red.svg'});
+  const countRed=()=>page.locator('.stage-frame canvas').evaluate((canvas:HTMLCanvasElement)=>{
+    const sample=document.createElement('canvas');sample.width=canvas.width;sample.height=canvas.height;
+    const context=sample.getContext('2d')!;context.drawImage(canvas,0,0);
+    const {data}=context.getImageData(0,0,sample.width,sample.height);
+    let count=0;for(let index=0;index<data.length;index+=4)if(data[index]>180&&data[index+1]<80&&data[index+2]<80)count++;
+    return count;
+  });
+  await expect.poll(countRed).toBeGreaterThan(20);
+  const clipped=await countRed();
+  await page.getByRole('combobox',{name:'Text shape target'}).selectOption('');
+  await expect.poll(countRed).toBeGreaterThan(clipped);
+  await page.getByRole('combobox',{name:'Text shape target'}).selectOption({label:'Rectangle'});
+  await expect.poll(countRed).toBe(clipped);
+});

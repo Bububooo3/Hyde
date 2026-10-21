@@ -1,0 +1,38 @@
+import {expect,test} from '@playwright/test';
+import {readFile} from 'node:fs/promises';
+import {unzipSync} from 'fflate';
+
+test('text flows around a shape and the relationship survives project and web export',async({page})=>{
+  test.setTimeout(90_000);
+  await page.goto('/');
+  await page.getByRole('button',{name:'New project'}).click();
+  await page.getByRole('button',{name:'Done'}).click();
+  await page.getByRole('button',{name:'Add rectangle'}).click();
+  await page.getByRole('spinbutton',{name:'Width',exact:true}).fill('80');
+  await page.getByRole('button',{name:'Add text'}).click();
+  await page.getByRole('textbox',{name:'Text content'}).fill('Words can move around a shape while the story continues. Each line finds the open space.');
+  await page.getByRole('spinbutton',{name:'Width',exact:true}).fill('360');
+  await page.getByRole('spinbutton',{name:'Height',exact:true}).fill('240');
+  await page.getByRole('spinbutton',{name:'Font size'}).fill('26');
+  const canvas=page.locator('.stage-frame canvas');
+  const frame=()=>canvas.evaluate((element:HTMLCanvasElement)=>element.toDataURL());
+  await expect.poll(async()=>{const first=await frame();await page.waitForTimeout(70);return first===await frame();}).toBe(true);
+  const before=await frame();
+  await page.getByRole('combobox',{name:'Text shape target'}).selectOption({label:'Rectangle'});
+  await expect.poll(frame).not.toBe(before);
+  const after=await frame();
+  const download=page.waitForEvent('download');
+  await page.getByRole('button',{name:'File',exact:true}).click();
+  await page.getByRole('button',{name:'Download project copy'}).click();
+  const path=await (await download).path();expect(path).toBeTruthy();
+  await page.locator('input[type=file][accept=".hyde,.hy"]').setInputFiles(path!);
+  await page.locator('.layer-name').filter({hasText:'Text'}).click();
+  await expect(page.getByRole('combobox',{name:'Text shape target'})).toHaveValue(/.+/);
+  await expect.poll(frame).toBe(after);
+  await page.getByRole('button',{name:'Export',exact:true}).click();
+  const webDownload=page.waitForEvent('download');
+  await page.getByRole('button',{name:/Standalone web story/}).click();
+  const zip=unzipSync(new Uint8Array(await readFile((await (await webDownload).path())!)));
+  const html=new TextDecoder().decode(zip['index.html']);
+  expect(html).toContain('flowAroundId');
+});

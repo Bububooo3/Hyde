@@ -1,0 +1,35 @@
+# Hyde capability matrix
+
+Updated 2026-10-21. **Implemented** means code exists; **Integrated** means it is reachable in the product; **Verified** means the relevant workflow has been exercised. The complete target remains [PLAN.md](PLAN.md).
+
+| Capability | State | Current boundary |
+|---|---|---|
+| Workspace, stage navigation, selection, folders, history, help | Verified | Chrome editor workflows pass. Floating windows and arbitrary docking are outside the plan. |
+| Pivots and world-point rotation | Verified | Pick or enter a world point, rotate numerically or with the stage handle, use Auto key, and undo/redo; Chrome workflows pass. |
+| Timeline navigation, snapping, multi-selection, group edits, ripple | Verified | Ordinary wheel pans; Ctrl/Command-wheel zooms. Key and clip group interactions are browser-tested. |
+| Scene naming, frame-aligned duration, ownership, move/retime/delete | Verified | Inline rename, undo, and exact 3-second duration at 30 FPS are browser-tested. |
+| Linked and nested scene placements | Verified | Source edits, composition frames, independent copies, save/reopen, and standalone nested audio are exercised. |
+| Per-scene camera position, zoom, and rotation | Verified | The shared evaluator drives editor, player, and frame export; key edits and persistence are browser-tested. |
+| Shape paths and masks | Integrated | Bézier point/handle editing, shape hit testing, and archive round trips are browser-tested; dedicated export appearance coverage remains. |
+| Four-corner media pinning | Verified | Images and visual media fills use one projective mesh in the shared renderer; stage drag, pixels, undo, archives, and standalone web rendering pass in Chrome. |
+| Media drop-to-fill and texture placement | Verified | Dropping an image on a shape keeps its editable mask; independent texture offset/scale/rotation work on image/video fills. Browser save/reopen and isolated web export pass. |
+| Motion / Static rendering hint | Verified | Auto classifies still and animated parts; manual choices can inherit through assemblies. Unchanged static visuals are reused, while animated poses and video remain live. Inspector, animation, and archive reopen pass in Chrome; sustained performance remains unmeasured. |
+| Reusable assemblies and `.hyproj` archives | Integrated | Clip definitions and placement-only key edits, derived master curves, direct key dragging, archives, and identity remapping are browser- and unit-tested. Assembly audio survives import and resolves to ordinary audio lanes in a focused core test. |
+| Keyframes, easing, interpolation, and clip transitions | Integrated | Selectable assembly gap tweens/Hold/easing, per-property overlap priority, and texture conflict cadence/options are connected to playback, archives, and timeline controls. |
+| Session component libraries | Verified | Complete assemblies and audio appear in a folder tree with adjustable depth; directory-handle refresh and snapshot reselection pass in Chrome. |
+| Procedural motion behaviors | Verified | Follow-path points and handles, oscillation, and seeded shake are editable. Stage drag, undo/redo, archives, seeking, and isolated web rendering pass. |
+| Audio import, recording, effects, clip editing, preview | Integrated | Imported clips, effects, solo Preview, and finite effect-tail playback/timeline display are browser-tested; bounded seek preroll is unit-tested. Live microphone latency and broader recording coverage remain. |
+| Linked speed/pitch and independent pitch/time | Verified | Browser playback and video export share processing; Chrome confirms downloaded and local-package output. |
+| Pretext layout, creative text motion, captions | Integrated | Live/static text, shape-aware flow and clipping, word/line motion, captions, project font import, and three bundled Google Fonts work in project and standalone output. Animated reflow, broader font catalog, and export appearance coverage remain. |
+| Project archives, autosave/recovery, direct file save | Verified | `.hyde` is the default project archive, `.hy` is an equivalent project archive, and `.hyproj` is for complete assemblies. Large recovery assets use browser-private storage with an IndexedDB fallback; storage-exhaustion recovery still needs coverage. |
+| Standalone web package, GIF, video export | Verified | Chrome download/playback paths pass, including `file://` playback and nested linked audio. Sustained memory and complete browser/format matrices remain. |
+| Split-screen, picture-in-picture, grid composition | Integrated | Scene cameras, opacity, editable frames, Fit/Fill, nested placements, source crop, and frame rotation are connected; Chrome placement/export checks pass. |
+| Cross-browser, accessibility, performance, deployment review | Not implemented | Chrome automation is the current verification baseline. |
+
+Checkpoint: 261 unit tests pass across 40 files; the production editor/player build and focused Chrome render-hint workflow pass. Earlier focused Chrome cases cover scene editing/alignment, audio preview and tails, world-point rotation, editable paths, text animation, media pinning and placement, procedural motion, assembly gap/mix/key/master editing, fonts, archives, directory libraries, and isolated web output.
+
+Architecture: React editor controls call reusable TypeScript project operations; one deterministic evaluator and Pixi renderer drive editor, player, and frame export. `.hyde` and `.hy` are equivalent ZIP/XML project archives; `.hyproj` is a self-contained assembly archive. Recovery is browser-private (large assets in OPFS with IndexedDB fallback); exports are independent static packages, including `file://` playback. Web Audio owns live time, with bounded effect-history reconstruction and finite tails. Render optimization is a hint only; cached visuals invalidate on project, evaluated pose, texture, and font changes. No backend or accounts.
+
+Open work: animated text reflow presets and broader fonts; recording latency/offset verification; sustained export/render memory and performance; storage-exhaustion recovery; target-browser, accessibility, and deployment checks. The portable IIFE build still emits `import.meta` warnings, although tested playback paths run. Create the richer primary showcase only after the planned capabilities are substantially complete, retaining the current example as secondary. [PLAN.md](PLAN.md) remains the scope authority.
+
+Next priorities: complete the remaining creative text behavior, then close audio/recording and export fidelity gaps; follow with the completion review and showcase. This Git repository has no commit yet and currently reports all source files as untracked; do not clean or reset it while resuming work.

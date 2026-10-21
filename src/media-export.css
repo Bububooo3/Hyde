@@ -1,0 +1,23 @@
+.media-export-panel { border-top: 1px solid var(--line, #5c6670); margin-top: 18px; padding-top: 17px; display: grid; gap: 12px; }
+.media-export-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.media-export-heading strong { font-family: 'JetBrains Mono', monospace; font-size: 13px; }
+.media-export-heading span, .media-export-detail { color: var(--muted, #5c6670); font-size: 12px; }
+.media-export-kind { display: flex; gap: 5px; }
+.media-export-kind button { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--line, #5c6670); border-radius: 3px; padding: 7px 11px; background: transparent; color: inherit; cursor: pointer; }
+.media-export-kind button.selected { background: #ffc857; border-color: #ffc857; color: #1f2933; }
+.media-export-kind button:disabled { opacity: .65; cursor: default; }
+.media-export-fields { display: grid; gap: 9px; }
+.media-export-fields > label, .media-export-range > label { display: grid; gap: 4px; font-size: 12px; }
+.media-export-fields input[type="number"], .media-export-fields select { width: 100%; min-width: 0; box-sizing: border-box; padding: 7px 8px; border: 1px solid var(--line, #5c6670); border-radius: 2px; background: var(--field, #1f2933); color: inherit; }
+.media-export-fields input[type="color"] { width: 100%; height: 31px; padding: 1px; border: 1px solid var(--line, #5c6670); border-radius: 2px; background: transparent; }
+.media-export-range { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.media-export-fields .media-export-check { display: flex; align-items: center; gap: 7px; }
+.media-export-check input { margin: 0; accent-color: #ffc857; }
+.media-export-recommended { width: fit-content; padding: 3px 6px; background: #ffc857; color: #1f2933; font-size: 11px; font-family: 'JetBrains Mono', monospace; }
+.media-export-progress { display: grid; gap: 4px; font-size: 12px; }
+.media-export-progress progress { width: 100%; height: 7px; accent-color: #ff8a00; }
+.media-export-message { margin: 0; font-size: 12px; }
+.media-export-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.media-export-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.media-export-spin { animation: media-export-spin .9s linear infinite; }
+@keyframes media-export-spin { to { transform: rotate(360deg); } }

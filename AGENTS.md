@@ -1,0 +1,11 @@
+# Hyde development instructions
+
+- Build the complete Hyde Story Studio specified in [docs/PLAN.md](docs/PLAN.md). Milestones are a dependency map and checkpoint list, not release gates or permission to reduce scope. Keep the existing example; create the richer primary showcase after the feature set is substantially complete.
+- Start a fresh conversation with [docs/PROGRESS.md](docs/PROGRESS.md), then inspect only code relevant to the next task. Its capability states and next priorities are the handoff; update it at meaningful integrated checkpoints, without logs, abandoned approaches, or duplicate plans.
+- Prefer coherent vertical slices: connect model/core operations, deterministic evaluation, editor controls, persistence, playback, and exports where applicable. Integrate existing disconnected code before replacing it. Mark work verified only after exercising the real workflow.
+- Keep project operations and versioned `.hyde`/`.hy` project archives and `.hyproj` assembly archives independent of React where practical. Hyde remains local-first and statically hostable: no Hyde backend, accounts, hosted user projects, or server rendering. Standalone web exports must work without the editor or CDN, including direct `file://` playback.
+- Fix confirmed hands-on UX defects directly. Make routine design decisions from the plan and established UI; seek human input only for material ambiguity or rework risk. Keep user reports to newly usable capability, meaningful verification, blockers, and the next high-impact work.
+- Use focused inspections and proportional tests while a subsystem is evolving; run broader checks at integration checkpoints. Do not repeatedly re-audit stable areas. If delegation is authorized, use narrow tasks with one integration owner, ordinarily no more than three concurrent agents.
+- Keep future programmatic agent authoring compatible with the core architecture, but do not implement that separate ecosystem now.
+
+Typical checks: `npm.cmd run test`, `npm.cmd run build`, and focused `npm.cmd run test:e2e -- tests/<name>.spec.ts`. Browser automation currently verifies Chrome; other target engines and completion review remain open unless the progress handoff says otherwise.
