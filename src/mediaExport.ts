@@ -153,7 +153,9 @@ async function makeFrameRenderer(project: Project, settings: MediaExportSettings
   let renderer: StageRenderer;
   try { renderer = await StageRenderer.create(host); }
   catch (error) { host.remove(); throw error; }
-  const raster = createRaster(settings.width, settings.height);
+  let raster:ReturnType<typeof createRaster>;
+  try { raster = createRaster(settings.width, settings.height); }
+  catch (error) { renderer.destroy(); host.remove(); throw error; }
   const renderProject = settings.format === 'gif' ? { ...project, background: settings.background } : project;
   return {
     canvas: raster.canvas,
@@ -212,33 +214,34 @@ async function encodeVideo(project: Project, settings: MediaExportSettings, opti
     options.onProgress?.({ phase: 'audio', completed: 1, total: 1 });
   }
   const source = await makeFrameRenderer(project, settings);
-  const target = new BufferTarget();
-  const output = new Output({ format: formatObject(settings.format as 'mp4' | 'webm'), target });
-  const videoSource = new CanvasSource(source.canvas, { codec: capability.codec, quality: quality(settings.quality), keyFrameInterval: 2 });
-  output.addVideoTrack(videoSource);
-  const audioSource = audioBuffer && capability.audioCodec ? new AudioBufferSource({ codec: capability.audioCodec, quality: quality(settings.quality) }) : null;
-  if (audioSource) output.addAudioTrack(audioSource);
   try {
-    throwIfCanceled(options.signal);
-    await output.start();
-    if (audioSource && audioBuffer) await audioSource.add(audioBuffer);
-    for (const frame of samples) {
+    const target = new BufferTarget();
+    const output = new Output({ format: formatObject(settings.format as 'mp4' | 'webm'), target });
+    try {
+      const videoSource = new CanvasSource(source.canvas, { codec: capability.codec, quality: quality(settings.quality), keyFrameInterval: 2 });
+      output.addVideoTrack(videoSource);
+      const audioSource = audioBuffer && capability.audioCodec ? new AudioBufferSource({ codec: capability.audioCodec, quality: quality(settings.quality) }) : null;
+      if (audioSource) output.addAudioTrack(audioSource);
       throwIfCanceled(options.signal);
-      await source.sample(frame.projectTime);
+      await output.start();
+      if (audioSource && audioBuffer) await audioSource.add(audioBuffer);
+      for (const frame of samples) {
+        throwIfCanceled(options.signal);
+        await source.sample(frame.projectTime);
+        throwIfCanceled(options.signal);
+        await videoSource.add(frame.timestamp, frame.duration);
+        options.onProgress?.({ phase: 'rendering', completed: frame.index + 1, total: samples.length });
+        if (frame.index % 2 === 0) await yieldToUI();
+      }
       throwIfCanceled(options.signal);
-      await videoSource.add(frame.timestamp, frame.duration);
-      options.onProgress?.({ phase: 'rendering', completed: frame.index + 1, total: samples.length });
-      if (frame.index % 2 === 0) await yieldToUI();
+      options.onProgress?.({ phase: 'finalizing', completed: samples.length, total: samples.length });
+      await output.finalize();
+      if (!target.buffer) throw new Error('The video encoder did not produce a file.');
+      return { blob: new Blob([target.buffer], { type: output.format.mimeType }), fileName: `${safeName(project.name)}.${settings.format}`, format: settings.format, includesAudio: !!audioSource, frameCount: samples.length, duration: samples.reduce((sum, sample) => sum + sample.duration, 0) };
+    } finally {
+      if (output.state !== 'finalized' && output.state !== 'canceled') await output.cancel().catch(() => {});
     }
-    throwIfCanceled(options.signal);
-    options.onProgress?.({ phase: 'finalizing', completed: samples.length, total: samples.length });
-    await output.finalize();
-    if (!target.buffer) throw new Error('The video encoder did not produce a file.');
-    return { blob: new Blob([target.buffer], { type: output.format.mimeType }), fileName: `${safeName(project.name)}.${settings.format}`, format: settings.format, includesAudio: !!audioSource, frameCount: samples.length, duration: samples.reduce((sum, sample) => sum + sample.duration, 0) };
-  } finally {
-    if (output.state !== 'finalized' && output.state !== 'canceled') await output.cancel().catch(() => {});
-    source.destroy();
-  }
+  } finally { source.destroy(); }
 }
 
 /** Render to a downloadable Blob. It never mutates the editable project. */

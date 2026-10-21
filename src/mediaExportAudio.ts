@@ -65,6 +65,7 @@ export async function renderExportAudio(project: Project, start: number, end: nu
   const decoded = new Map<string, AudioBuffer>();
   const prepared = new Map<string,AudioBuffer>();
   const graphs: ReturnType<typeof connectAudioEffects>[] = [];
+  try {
   for (const segment of clips) {
     if (signal?.aborted) throw new DOMException('Export canceled.', 'AbortError');
     const {element,asset}=segment;
@@ -118,7 +119,6 @@ export async function renderExportAudio(project: Project, start: number, end: nu
     source.start(startAt, offset);
     source.stop(stopAt);
   }
-  try {
     const rendered = await context.startRendering();
     if (signal?.aborted) throw new DOMException('Export canceled.', 'AbortError');
     const first = Math.round((start - prerollStart) * SAMPLE_RATE);

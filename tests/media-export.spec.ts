@@ -59,3 +59,23 @@ test('video export offers probed formats and renders a supported format', async 
   }
   expect(errors).toEqual([]);
 });
+
+test('canceling a long GIF releases its hidden renderer and permits another export',async({page})=>{
+  test.setTimeout(90_000);
+  const panel=await openSmallExport(page);
+  await panel.getByRole('button',{name:'GIF',exact:true}).click();
+  await panel.getByRole('spinbutton',{name:'Export to seconds'}).fill('5');
+  await panel.getByRole('spinbutton',{name:'Export width'}).fill('512');
+  await panel.getByRole('combobox',{name:'Export frame rate'}).selectOption('30');
+  await panel.getByRole('button',{name:'Export GIF'}).click();
+  await expect(panel.getByRole('button',{name:'Cancel'})).toBeVisible();
+  await panel.getByRole('button',{name:'Cancel'}).click();
+  await expect(panel.getByRole('status')).toContainText('Export canceled');
+  await expect.poll(()=>page.evaluate(()=>document.querySelectorAll('div[style*="-100000px"] canvas').length)).toBe(0);
+  await panel.getByRole('spinbutton',{name:'Export to seconds'}).fill('0.3');
+  await panel.getByRole('spinbutton',{name:'Export width'}).fill('64');
+  await panel.getByRole('combobox',{name:'Export frame rate'}).selectOption('6');
+  const download=page.waitForEvent('download');
+  await panel.getByRole('button',{name:'Export GIF'}).click();
+  expect((await download).suggestedFilename()).toMatch(/\.gif$/);
+});
