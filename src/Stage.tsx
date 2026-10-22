@@ -4,35 +4,50 @@ import { evaluateProject } from './engine';
 import { StageRenderer } from './render';
 import {sceneFrameMinimumScale,sceneFrameSvgTransform} from './sceneFrame';
 
-export function Stage({project,time,onError,onWarning,editorOverscan=0}: {project:Project;time:number;onError?:(message:string)=>void;onWarning?:(message:string)=>void;editorOverscan?:number}) {
+export function Stage({project,time,onError,onWarning,onFramePending,onFrameReady,prepareAheadSeconds=0,editorOverscan=0}: {project:Project;time:number;onError?:(message:string)=>void;onWarning?:(message:string)=>void;onFramePending?:(time:number)=>void;onFrameReady?:(time:number)=>void;prepareAheadSeconds?:number;editorOverscan?:number}) {
   const host = useRef<HTMLDivElement>(null);
   const renderer = useRef<StageRenderer|null>(null);
   const latest = useRef({project,time}); latest.current={project,time};
   const last = useRef<{project:Project;time:number}|null>(null);
   const reportedWarnings=useRef('');
+  const prepared=useRef<{project:Project;bucket:number}|null>(null);
   useEffect(()=>{
-    let stopped=false, raf=0;
+    let stopped=false, raf=0,pendingTimer=0;
     async function loop() {
       if(stopped) return;
       const next=latest.current;
-      if(renderer.current && (last.current?.project!==next.project || last.current.time!==next.time)) {
+      const stage=renderer.current;
+      if(stage && (last.current?.project!==next.project || last.current.time!==next.time)) {
+        pendingTimer=onFramePending?window.setTimeout(()=>onFramePending(next.time),200):0;
         try {
-          await renderer.current.render(next.project,evaluateProject(next.project,next.time),next.time);
+          await stage.render(next.project,evaluateProject(next.project,next.time),next.time);
+          if(stopped)return;
           last.current=next;
-          const warnings=renderer.current.warnings;
+          const warnings=stage.warnings;
           const signature=warnings.length?`${next.project.id}:${warnings.join('|')}`:'';
           if(signature!==reportedWarnings.current&&latest.current.project===next.project){
             if(onWarning)onWarning(warnings.join(' '));
             else if(signature)onError?.(warnings.join(' '));
           }
           reportedWarnings.current=signature;
+          onFrameReady?.(next.time);
+          if(prepareAheadSeconds>0){
+            const bucket=Math.floor(next.time*2);
+            if(prepared.current?.project!==next.project||prepared.current.bucket!==bucket){
+              prepared.current={project:next.project,bucket};
+              const samples=[.5,1,2].filter(offset=>offset<=prepareAheadSeconds&&next.time+offset<next.project.duration);
+              const upcoming=samples.flatMap(offset=>evaluateProject(next.project,next.time+offset));
+              void stage.prepareMedia(next.project,upcoming).catch(error=>onError?.(error instanceof Error?error.message:String(error)));
+            }
+          }
         }
         catch(e) {onError?.(e instanceof Error?e.message:'Stage render failed');}
+        finally{if(pendingTimer)window.clearTimeout(pendingTimer);pendingTimer=0;}
       }
       if(!stopped) raf=requestAnimationFrame(()=>{void loop();});
     }
     void document.fonts.load('400 40px "JetBrains Mono"').then(()=>stopped?null:StageRenderer.create(host.current!,editorOverscan)).then(r=>{if(!r)return;if(stopped){r.destroy();return;}renderer.current=r;last.current=null;void loop();}).catch(e=>onError?.(String(e)));
-    return()=>{stopped=true;cancelAnimationFrame(raf);renderer.current?.destroy();renderer.current=null;};
+    return()=>{stopped=true;cancelAnimationFrame(raf);if(pendingTimer)window.clearTimeout(pendingTimer);renderer.current?.destroy();renderer.current=null;};
   },[]);
   return <div ref={host} className={`render-host ${editorOverscan?'editor-overscan':''}`} style={editorOverscan?{'--editor-canvas-width':`${(project.width+editorOverscan*2)/project.width*100}%`,'--editor-canvas-height':`${(project.height+editorOverscan*2)/project.height*100}%`,'--editor-canvas-left':`${-editorOverscan/project.width*100}%`,'--editor-canvas-top':`${-editorOverscan/project.height*100}%`} as React.CSSProperties:undefined} />;
 }

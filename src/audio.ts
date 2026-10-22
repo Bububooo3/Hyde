@@ -36,13 +36,21 @@ export class AudioTransport {
   private gains: ActiveClip[] = [];
   private generation = 0;
   private anchor = 0;
+  private wallAnchor = 0;
+  private wallClock = false;
   private offset = 0;
+  private paused = true;
   private loading = new Map<string, Promise<AudioBuffer>>();
   private prepared = new Map<string,Promise<AudioBuffer>>();
   private previewSession: PreviewSession | null = null;
   private seekTailPlaying = false;
-  get time() { return this.context ? this.offset + Math.max(0, this.context.currentTime - this.anchor) : this.offset; }
+  get time() {
+    if (this.paused) return this.offset;
+    if (this.context) return this.offset + Math.max(0, this.context.currentTime - this.anchor);
+    return this.wallClock ? this.offset + Math.max(0, performance.now() / 1000 - this.wallAnchor) : this.offset;
+  }
   get ready() { return !!this.context && this.context.state === 'running'; }
+  get audioSupported() { return !!(globalThis.AudioContext || (globalThis as typeof globalThis & {webkitAudioContext?:typeof AudioContext}).webkitAudioContext); }
   get previewingId() { return this.previewSession?.id ?? null; }
   /** Viewer-level gain leaves clip volume automation and effects unchanged. */
   setOutputVolume(volume: number) {
@@ -53,6 +61,7 @@ export class AudioTransport {
   /** Isolate one existing timeline clip without changing its saved mute state.
    * Starting another transport operation cancels this preview and notifies the UI. */
   async preview(project: Project, elementId: string, time?: number, onEnded?: () => void) {
+    if (!this.audioSupported) throw new Error('Audio playback is unavailable in this browser.');
     const composed = materializeScenePlacements(project);
     const element = composed.elements.find(item => item.id === elementId);
     const window = element ? elementWindow(composed, element) : null;
@@ -77,7 +86,19 @@ export class AudioTransport {
     this.stop();
     this.previewSession = preview ?? null;
     const token = this.generation;
-    this.context ??= new AudioContext();
+    if (!this.context) {
+      const Context = globalThis.AudioContext || (globalThis as typeof globalThis & {webkitAudioContext?:typeof AudioContext}).webkitAudioContext;
+      if (!Context) {
+        // Keep visual playback responsive even in browser environments without
+        // Web Audio. The player surfaces the missing sound as a warning.
+        this.offset = time;
+        this.wallAnchor = performance.now() / 1000;
+        this.wallClock = true;
+        this.paused = false;
+        return;
+      }
+      this.context = new Context();
+    }
     await this.context.resume();
     if (token !== this.generation) return;
     const ctx = this.context;
@@ -126,7 +147,7 @@ export class AudioTransport {
       }
     }
     if (token !== this.generation) return;
-    this.offset = time; this.anchor = ctx.currentTime + .025;
+    this.offset = time; this.anchor = ctx.currentTime + .025;this.paused=false;
     if (seekTail) {
       const tailSource = ctx.createBufferSource();
       tailSource.buffer = seekTail;
@@ -196,7 +217,18 @@ export class AudioTransport {
       g.gain.gain.value = audible && time < g.end && pose && (previewed || !pose.muted) ? g.lastVolume : inTail ? g.lastVolume : 0;
     }
   }
+  /** Freeze the audio-clock position while visual media buffers. A later play()
+   * rebuilds sources from this exact timeline time. */
+  pause(): number {
+    const at=this.time;
+    this.stop();
+    this.offset=at;
+    return at;
+  }
   stop() {
+    this.offset=this.time;
+    this.paused=true;
+    this.wallClock=false;
     this.generation++;
     const preview = this.previewSession;
     this.previewSession = null;

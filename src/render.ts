@@ -221,6 +221,17 @@ export class StageRenderer {
     return next;
   }
 
+  /** Start decoding nearby image/video assets before their first visible frame.
+   * The normal render path still seeks video to its exact project timestamp. */
+  async prepareMedia(project: Project, elements: StoryElement[]): Promise<void> {
+    if(this.disposed||this.projectId!==project.id)return;
+    const assets=new Map(project.assets.map(asset=>[asset.id,asset]));
+    await Promise.all(elements.filter(element=>!element.hidden&&element.kind!=='audio'&&element.kind!=='group').map(async element=>{
+      const asset=element.assetId?assets.get(element.assetId):undefined;
+      if(asset&&(asset.kind==='image'||asset.kind==='video'))await this.loadResource(element,asset);
+    }));
+  }
+
   private createSceneLayer(parent:Container):SceneLayer {
     const frame=new Container({eventMode:'none'}),viewport=new Container({eventMode:'none'}),camera=new Container({eventMode:'none'});
     const backdrop=new Graphics(),clip=new Graphics();

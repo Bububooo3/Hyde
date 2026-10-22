@@ -30,6 +30,40 @@ describe('audio scheduling',()=>{
    transport.destroy();
    expect(context.gains[0].disconnect).toHaveBeenCalled();
  });
+ it('freezes the shared clock during buffering and resumes from the same timeline time',async()=>{
+   const p=setup();p.elements=[createElement('audio',{assetId:'sound',duration:8})];
+   const transport=new AudioTransport();await transport.play(p,1);
+   const context=FakeAudioContext.last;
+   context.currentTime=10.525;
+   const frozen=transport.pause();expect(frozen).toBeCloseTo(1.5,5);
+   context.currentTime=15;
+   expect(transport.time).toBeCloseTo(frozen,5);
+   await transport.play(p,frozen);
+   expect(context.sources.at(-1).start).toHaveBeenCalledWith(15.025,1.5);
+   context.currentTime=15.525;
+   expect(transport.time).toBeCloseTo(2,5);
+   transport.destroy();
+ });
+ it('runs visual time without Web Audio and freezes that clock while buffering',async()=>{
+   const p=setup();
+   vi.stubGlobal('AudioContext',undefined);
+   vi.stubGlobal('webkitAudioContext',undefined);
+   let now=1000;
+   vi.spyOn(performance,'now').mockImplementation(()=>now);
+   const transport=new AudioTransport();
+   expect(transport.audioSupported).toBe(false);
+   await transport.play(p,.5);
+   now=1625;
+   expect(transport.time).toBeCloseTo(1.125,5);
+   const held=transport.pause();
+   now=2625;
+   expect(transport.time).toBeCloseTo(held,5);
+   await transport.play(p,held);
+   now=2875;
+   expect(transport.time).toBeCloseTo(1.375,5);
+   transport.destroy();
+   vi.restoreAllMocks();
+ });
  it('schedules future clips from the same anchor and excludes hidden/muted sources',async()=>{const p=setup();p.elements=[createElement('audio',{assetId:'sound',start:4,duration:3}),createElement('audio',{assetId:'sound',muted:true}),createElement('audio',{assetId:'sound',hidden:true})];const t=new AudioTransport();await t.play(p,1);const s=FakeAudioContext.last.sources;expect(s).toHaveLength(1);expect(s[0].start).toHaveBeenCalledWith(13.025,0);expect(s[0].stop).toHaveBeenCalledWith(16.025);t.destroy();});
  it('includes video used as a shape fill, sharing its source timing',async()=>{const p=setup();p.assets[0].kind='video';p.elements=[createElement('ellipse',{assetId:'sound',sourceOffset:1,speed:2,duration:6})];const t=new AudioTransport();await t.play(p,2);expect(FakeAudioContext.last.sources[0].start).toHaveBeenCalledWith(10.025,5);t.destroy();});
  it('switches embedded video sound with an animated shape texture and preserves the project source clock',async()=>{
