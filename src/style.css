@@ -22,6 +22,8 @@
 .panel-tabs button:not(.selected),.unselected p,.project-summary>span{color:#aab4c0}
 .muted-note{color:#aab4c0}
 .timeline-title>span,.timecode em,.section-strip>span{color:#aeb8c2}
+.scene-element-row button.layer-name{padding:0;background:transparent;color:inherit;text-align:left;opacity:1;min-width:0}
+.scene-element-row button:focus-visible{opacity:1;outline:2px solid #ffc857;outline-offset:2px}
 .stage-guides,.stage-marquee{position:absolute;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none}.stage-guides{z-index:1}.stage-marquee{z-index:3}.stage-marquee rect{fill:#ffc85725;stroke:#ffc857;stroke-width:1;stroke-dasharray:5 4;vector-effect:non-scaling-stroke}.grid-count{width:40px;padding:3px 4px;font:10px 'JetBrains Mono',monospace}.onion-toggle{padding:5px 4px;font-size:9px}
 .path-overlay{position:absolute;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none;z-index:4}.path-handle-hit{fill:transparent;stroke:transparent;pointer-events:all;cursor:move}.path-point-controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}.path-point-controls button{border:1px solid #414850;background:#293038;padding:7px 6px;font-size:10px}.path-point-controls button:hover{border-color:#ffc857}.path-point-list{display:flex;flex-wrap:wrap;gap:4px;margin:8px 0}.path-point-list button{border:1px solid #414850;background:#293038;min-width:27px;height:27px;font:10px var(--font-heading)}.path-point-list button.active{border-color:#ffc857;color:#ffc857;background:#3b3934}
 .pin-overlay{position:absolute;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none;z-index:5}.pin-corner-hit{fill:transparent;stroke:transparent;pointer-events:all;cursor:move}
