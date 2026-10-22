@@ -2,13 +2,13 @@
 
 ## Architecture
 
-GitHub Actions builds Hyde on pushes to `main` and publishes only the compiled `dist/` files to a private `hyde-site` branch. cPanel uses an **outbound**, read-only SSH deploy key to clone/pull that branch. A cPanel cron job (every 15 minutes) synchronizes files into a **dedicated** `public_html/hyde/` directory.
+GitHub Actions builds Hyde on pushes to `main` and publishes only the compiled `dist/` files to a private `hyde-site` branch. cPanel uses an **outbound**, read-only SSH deploy key to clone/pull that branch. A cPanel cron job (every 15 minutes) synchronizes files into a **dedicated** `public_html/ai/hyde/` directory.
 
 This avoids relying on inbound SSH from a GitHub-hosted runner, which may not be reachable under Illinois campus SSH/VPN restrictions. Node.js is **not required on cPanel**.
 
 ## Initial GitHub setup
 
-1. Merge this PR into `main`. Open **Actions → Build Hyde for Illinois cPanel**.
+1. Ensure the deployment workflow is present on `main`. Open **Actions → Build Hyde for Illinois cPanel**.
 2. Run manually or push to `main`; wait for a successful action and the generated `hyde-site` branch.
 3. If publishing fails with HTTP 403, review **Settings → Actions → General → Workflow permissions** for `GITHUB_TOKEN` write access, subject to repository policy.
 
@@ -49,11 +49,11 @@ git ls-remote git@github-hyde:Bububooo3/Hyde.git refs/heads/hyde-site
 
 ## Prepare the website directory
 
-The script assumes `$HOME/public_html/hyde` is the desired document root for `https://YOUR-WEBSITE/hyde/`. Check cPanel **Domains → Document Root**: some UIUC accounts use a different root. Edit `WEBROOT` in the script as needed; **never** point it at a shared `public_html` directory containing other websites.
+The script assumes `$HOME/public_html/ai/hyde` is the desired document root for `https://YOUR-WEBSITE/ai/hyde/`. Check cPanel **Domains → Document Root**: some UIUC accounts use a different root. Edit `WEBROOT` in the script as needed; **never** point it at a shared `public_html` directory containing other websites.
 
 ```bash
-mkdir -p "$HOME/public_html/hyde"
-touch "$HOME/public_html/hyde/.hyde-deploy-managed"
+mkdir -p "$HOME/public_html/ai/hyde"
+touch "$HOME/public_html/ai/hyde/.hyde-deploy-managed"
 ```
 
 Upload the repo's `deploy/cpanel-sync.sh` to `$HOME/hyde-sync.sh` using cPanel File Manager. **Keep it outside public_html**.
