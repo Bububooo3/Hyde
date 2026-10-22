@@ -1,0 +1,73 @@
+name: Build Hyde for Illinois cPanel
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: hyde-publish-site
+  cancel-in-progress: false
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Hyde source
+        uses: actions/checkout@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install exact dependency versions
+        run: npm ci
+
+      - name: Build editor and portable player
+        run: npm run build
+
+      - name: Check static build files
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s dist/index.html
+          test -s dist/player.html
+          test -s dist/portable/player.js
+          test -s dist/portable/player.css
+
+      # This branch contains ONLY generated dist files, not source code.
+      # Illinois cPanel pulls this branch outbound over SSH via a cron job.
+      - name: Publish dist-only hyde-site branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          publish_dir="$(mktemp -d)"
+          cp -a dist/. "$publish_dir/"
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          if git ls-remote --exit-code --heads origin refs/heads/hyde-site >/dev/null 2>&1; then
+            git fetch --no-tags origin refs/heads/hyde-site
+            git switch -C hyde-site FETCH_HEAD
+          else
+            git switch --orphan hyde-site
+          fi
+
+          # Safe on GitHub's disposable Actions checkout.
+          rsync -a --delete --exclude='/.git/' "$publish_dir/" ./
+          test -s index.html
+          git add --all
+
+          if git diff --cached --quiet; then
+            echo 'Static build unchanged; no deployment commit required.'
+            exit 0
+          fi
+
+          git commit -m "Deploy Hyde build ${GITHUB_SHA}"
+          git push origin HEAD:refs/heads/hyde-site
