@@ -5,7 +5,7 @@ set -euo pipefail
 SOURCE='git@github-hyde:Bububooo3/Hyde.git'
 BRANCH='hyde-site'
 CACHE="$HOME/.hyde-site-cache"
-WEBROOT="$HOME/public_html/hyde"
+WEBROOT="$HOME/public_html/ai/hyde"
 MARKER='.hyde-deploy-managed'
 LOCK="$HOME/.hyde-deploy-lock"
 
