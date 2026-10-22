@@ -81,7 +81,7 @@ export function sampleMotionPath(points:readonly MotionPathPoint[],progress:numb
       table.push({segment,t,length});previous=point;
     }
   }
-  if(length<1e-8)return {x:0,y:0,angle:0};
+  if(length<1e-8)return {x:first.x,y:first.y,angle:0};
   const target=p*length;
   let lo=0,hi=table.length-1;
   while(lo<hi){const mid=(lo+hi)>>1;if(table[mid].length<target)lo=mid+1;else hi=mid;}
@@ -90,7 +90,7 @@ export function sampleMotionPath(points:readonly MotionPathPoint[],progress:numb
   const segment=fraction>0?right.segment:left.segment;
   const t=left.segment===right.segment?left.t+(right.t-left.t)*fraction:fraction>0?right.t:left.t;
   const point=atSegment(points,segment,t);
-  return {x:point.x-first.x,y:point.y-first.y,angle:point.angle};
+  return {x:point.x,y:point.y,angle:point.angle};
 }
 
 function envelope(elapsed:number,duration:number,fadeIn:number,fadeOut:number):number {
@@ -113,19 +113,23 @@ function noise(seed:number,position:number,channel:number,smooth:boolean):number
   return a+(hash(seed,index+1,channel)-a)*t;
 }
 
-/** Pure additive evaluation. The caller supplies the shared easing evaluator
- * and applies this after assembly clips, before attachment constraints. */
-export function applyMotionBehaviors(pose:StoryElement,source:StoryElement,time:number,ease:Ease):StoryElement {
+/** The path uses the position sampled when it starts. Keyed or assembly-clip
+ * movement after that instant must not drag the authored path along with the
+ * object. Oscillation and shake remain additive to the resolved pose. */
+export function applyMotionBehaviors(pose:StoryElement,source:StoryElement,time:number,ease:Ease,pathAnchor?:{x:number;y:number}):StoryElement {
   if(!source.motionBehaviors?.length||!Number.isFinite(time))return pose;
   const local=time-source.start;
   let result:StoryElement|undefined;
+  let pathStarted=false;
   for(const behavior of source.motionBehaviors){
     if(!behavior.enabled||local<behavior.start)continue;
     const elapsed=local-behavior.start;
     if(behavior.type==='followPath'){
       const raw=behavior.loop ? (elapsed%behavior.duration)/behavior.duration : clamp(elapsed/behavior.duration,0,1);
       const point=sampleMotionPath(behavior.points,clamp(ease(behavior.easing,behavior.direction,raw),0,1));
-      result??={...pose};result.x+=point.x;result.y+=point.y;
+      result??={...pose};
+      if(!pathStarted){result.x=pathAnchor?.x??source.x;result.y=pathAnchor?.y??source.y;pathStarted=true;}
+      result.x+=point.x;result.y+=point.y;
       if(behavior.orient)result.rotation+=point.angle;
     }else if(elapsed<=behavior.duration){
       const strength=envelope(elapsed,behavior.duration,behavior.fadeIn,behavior.fadeOut);

@@ -38,17 +38,18 @@ test('independent clip pitch reaches audio video export and the offline web play
     name: '440Hz.wav', mimeType: 'audio/wav', buffer: toneWav(),
   });
 
-  const clip = page.locator('.audio-clip-panel');
-  await expect(clip.getByRole('spinbutton', { name: 'Source out seconds' })).toHaveValue('2');
   await page.getByRole('spinbutton', { name: 'Speed ×' }).fill('2');
   await page.getByRole('spinbutton', { name: 'Speed ×' }).press('Tab');
   await expect(page.getByRole('spinbutton', { name: 'Duration s' })).toHaveValue('1');
+  await page.getByRole('button',{name:'Edit clip…'}).click();
+  const clip = page.locator('.audio-clip-panel');
   await expect(clip.getByRole('spinbutton', { name: 'Source out seconds' })).toHaveValue('2');
   await clip.getByRole('button', { name: 'Unlink pitch from speed' }).click();
   await expect(clip.getByRole('button', { name: 'Link pitch to speed' })).toBeVisible();
   await clip.getByRole('spinbutton', { name: 'Pitch offset in semitones' }).fill('12');
   await clip.getByRole('spinbutton', { name: 'Pitch offset in semitones' }).press('Tab');
   await expect(clip.getByRole('spinbutton', { name: 'Pitch offset in semitones' })).toHaveValue('12');
+  await page.getByRole('dialog',{name:'Edit media clip'}).getByRole('button',{name:'Apply'}).click();
 
   await page.getByRole('button', { name: 'Export', exact: true }).click();
   const panel = page.getByRole('region', { name: 'Video and GIF export' });

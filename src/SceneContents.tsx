@@ -22,6 +22,9 @@ interface Props {
   onImportMedia: () => void;
   onGroup: () => void;
   onDuplicate: () => void;
+  onCopy: () => void;
+  onPaste: () => void;
+  canPaste: boolean;
   onExportAssembly: () => void;
   onEditPivot: () => void;
   onMoveLayer: (direction: number) => void;
@@ -34,7 +37,7 @@ function IconButton({ icon: Icon, label, onClick, disabled = false }: { icon: Lu
   return <button type="button" className="icon-button" aria-label={label} title={label} disabled={disabled} onClick={onClick}><Icon size={16}/></button>;
 }
 
-export function SceneContents({ project, time, selected, onSelect, onChangeProject, onAdd, onImportMedia, onGroup, onDuplicate, onExportAssembly, onEditPivot, onMoveLayer, onRemove, deleteLabel = 'Delete selection', onNotice }: Props) {
+export function SceneContents({ project, time, selected, onSelect, onChangeProject, onAdd, onImportMedia, onGroup, onDuplicate, onCopy, onPaste, canPaste, onExportAssembly, onEditPivot, onMoveLayer, onRemove, deleteLabel = 'Delete selection', onNotice }: Props) {
   const [query, setQuery] = useState('');
   const [kind, setKind] = useState('all');
   const [closed, setClosed] = useState<Set<string>>(() => new Set());
@@ -171,6 +174,8 @@ export function SceneContents({ project, time, selected, onSelect, onChangeProje
         {activeElement.kind === 'group' && <button onClick={() => { toggle(`element:${activeElement.id}`); setMenu(null); }}><Layers size={14}/>{closed.has(`element:${activeElement.id}`) ? 'Expand assembly' : 'Collapse assembly'}</button>}
         {parentId(activeElement) && <button onClick={() => detach(activeElement.id)}><Unlink size={14}/>Detach from assembly</button>}
         <button onClick={() => { onDuplicate(); setMenu(null); }}><Copy size={14}/>Duplicate</button>
+        <button onClick={() => { onCopy(); setMenu(null); }}><Copy size={14}/>Copy selection</button>
+        <button disabled={!canPaste} onClick={() => { onPaste(); setMenu(null); }}><Copy size={14}/>Paste at playhead</button>
         <button onClick={() => { onGroup(); setMenu(null); }}><Layers size={14}/>Create assembly</button>
         <button onClick={() => { onExportAssembly(); setMenu(null); }}><Download size={14}/>Export assembly</button>
         <button onClick={() => { onEditPivot(); setMenu(null); }}><Target size={14}/>Edit pivot</button>
@@ -182,7 +187,7 @@ export function SceneContents({ project, time, selected, onSelect, onChangeProje
         <button onClick={() => { toggle(`folder:${activeFolder.id}`); setMenu(null); }}><Folder size={14}/>{closed.has(`folder:${activeFolder.id}`) ? 'Expand folder' : 'Collapse folder'}</button>
         <hr/><button onClick={() => { onChangeProject(removeSceneFolder(project, activeFolder.id)); setMenu(null); }}><Trash2 size={14}/>Remove folder, keep contents</button>
       </>}
-      {menu.type === 'blank' && <><button onClick={() => createFolder()}><FolderPlus size={14}/>New folder</button><button onClick={() => { onAdd('rectangle'); setMenu(null); }}><Square size={14}/>Add rectangle</button><button onClick={() => { onImportMedia(); setMenu(null); }}><Upload size={14}/>Import media</button></>}
+      {menu.type === 'blank' && <><button onClick={() => createFolder()}><FolderPlus size={14}/>New folder</button><button disabled={!canPaste} onClick={() => { onPaste(); setMenu(null); }}><Copy size={14}/>Paste at playhead</button><button onClick={() => { onAdd('rectangle'); setMenu(null); }}><Square size={14}/>Add rectangle</button><button onClick={() => { onImportMedia(); setMenu(null); }}><Upload size={14}/>Import media</button></>}
     </div>}
   </>;
 }

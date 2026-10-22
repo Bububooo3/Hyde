@@ -52,7 +52,7 @@ function requirePose(poses: Map<string, StoryElement>, id: string): StoryElement
   return result;
 }
 
-function offsetPosition(element: StoryElement, x: number, y: number): void {
+export function offsetPosition(element: StoryElement, x: number, y: number): void {
   element.x += x;
   element.y += y;
   for (const track of element.tracks) {

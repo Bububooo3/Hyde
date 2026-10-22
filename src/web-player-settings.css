@@ -1,0 +1,5 @@
+.web-player-settings { margin: 14px 0; padding: 12px; border: 1px solid #45505a; background: #28333d; }
+.web-player-settings h3 { margin: 0 0 6px; font-size: 13px; }
+.web-player-settings .muted-note { margin: 0 0 10px; }
+.web-player-settings .number-field { max-width: 200px; margin-bottom: 10px; }
+.web-player-control-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px 10px; padding-left: 14px; border-left: 2px solid #45505a; }

@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react';
 import type { MouseEvent } from 'react';
 import { Box, ChevronRight, Download, Eye, Film, Folder, FolderOpen, ImagePlus, Library, Music2, Plus, Trash2, Type, Upload, X } from 'lucide-react';
 import type { Asset, Project } from './model';
-import { createElement,sceneIdAt, uid } from './model';
+import { createElement,createProject,sceneIdAt, uid } from './model';
+import { insertAssemblyAt } from './editing';
+import { Stage } from './Stage';
 import { buildLibraryTree, folderDepth, libraryPath, supportedLibraryFile } from './libraryTree';
 import type { LibraryFile, LibraryFolder } from './libraryTree';
 import { loadAssemblyFile } from './storage';
@@ -19,8 +21,9 @@ function useOutsideMenu(close: () => void) {
   }, [close]);
 }
 
-function Preview({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
-  return <div className="modal-backdrop" onPointerDown={onClose}><div className="dialog asset-preview" onPointerDown={event => event.stopPropagation()}><div className="dialog-title"><h2>{title}</h2><button className="icon-button" aria-label="Close preview" onClick={onClose}><X size={16}/></button></div>{children}</div></div>;
+function Preview({ title, onClose, children, wide=false }: { title: string; onClose: () => void; children: React.ReactNode; wide?:boolean }) {
+  useEffect(()=>{const escape=(event:KeyboardEvent)=>{if(event.key==='Escape')onClose();};window.addEventListener('keydown',escape);return()=>window.removeEventListener('keydown',escape);},[onClose]);
+  return <div className="modal-backdrop" onPointerDown={onClose}><div className={`dialog asset-preview ${wide?'assembly-preview-dialog':''}`} role="dialog" aria-label={title} aria-modal="true" onPointerDown={event => event.stopPropagation()}><div className="dialog-title"><h2>{title}</h2><button className="icon-button" aria-label="Close preview" onClick={onClose}><X size={16}/></button></div>{children}</div></div>;
 }
 
 interface AssetProps {
@@ -65,6 +68,15 @@ function LibraryAudio({ file }: { file: File }) {
   return <audio controls preload="none" src={url || undefined}/>;
 }
 
+function AssemblyVisualPreview({project,onNotice}:{project:Project;onNotice:(message:string)=>void}){
+  const [time,setTime]=useState(0);
+  const lastFrame=Math.max(0,project.duration-1/project.fps);
+  return <div className="assembly-visual-preview">
+    <div className="assembly-preview-frame"><Stage project={project} time={time} onError={onNotice}/></div>
+    <label className="assembly-preview-scrub">Preview position <input type="range" aria-label="Assembly preview position" min={0} max={lastFrame} step={1/project.fps} value={time} onChange={event=>setTime(Number(event.target.value))}/><span>{time.toFixed(2)} s</span></label>
+  </div>;
+}
+
 interface LibraryProps {
   files: File[]; depth: number; onDepthChange: (depth: number) => void;
   source: 'handle' | 'snapshot' | null; folderName: string; onRefresh: () => void;
@@ -74,7 +86,7 @@ interface LibraryProps {
 
 export function SessionLibrary({ files, depth, source, folderName, onRefresh, onDepthChange, onOpenFolder, onInsertAssembly, onImportMedia, onNotice }: LibraryProps) {
   const [menu, setMenu] = useState<Menu | null>(null);
-  const [preview, setPreview] = useState<{ file: File; summary?: string } | null>(null);
+  const [preview, setPreview] = useState<{ file: File; summary?: string; project?: Project } | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   useOutsideMenu(() => setMenu(null));
   useEffect(() => { setCollapsed(new Set()); setPreview(null); setMenu(null); }, [files]);
@@ -84,7 +96,12 @@ export function SessionLibrary({ files, depth, source, folderName, onRefresh, on
   function insert(file: File) { if (/\.hyproj$/i.test(file.name)) onInsertAssembly(file); else onImportMedia([file]); setMenu(null); }
   async function showPreview(file: File) {
     try {
-      if (/\.hyproj$/i.test(file.name)) { const assembly = await loadAssemblyFile(file); setPreview({ file, summary: `${assembly.elements.length} object${assembly.elements.length === 1 ? '' : 's'} · ${assembly.assets.length} asset${assembly.assets.length === 1 ? '' : 's'}` }); }
+      if (/\.hyproj$/i.test(file.name)) {
+        const assembly = await loadAssemblyFile(file);
+        const base=createProject(assembly.name);base.width=960;base.height=540;
+        const project=insertAssemblyAt(base,assembly,0);
+        setPreview({ file, project, summary: `${assembly.elements.length} object${assembly.elements.length === 1 ? '' : 's'} · ${assembly.assets.length} asset${assembly.assets.length === 1 ? '' : 's'}` });
+      }
       else setPreview({ file });
     } catch (error) { onNotice(String(error)); }
     setMenu(null);
@@ -130,6 +147,6 @@ export function SessionLibrary({ files, depth, source, folderName, onRefresh, on
     {!!files.length && !eligible.length && <p className="library-empty">No .hyproj or audio files in this folder.</p>}
     {hiddenCount > 0 && <p className="muted-note library-depth-note">{hiddenCount} file{hiddenCount === 1 ? '' : 's'} in deeper folders. Increase folder depth to show {hiddenCount === 1 ? 'it' : 'them'}.</p>}
     {menu && current && <div className="context-menu asset-context-menu" style={{ left: Math.min(menu.x, window.innerWidth - 230), top: Math.min(menu.y, window.innerHeight - 160) }} onPointerDown={event => event.stopPropagation()}><button onClick={() => insert(current)}><Plus size={14}/>Insert</button><button onClick={() => void showPreview(current)}><Eye size={14}/>Preview</button><button onClick={() => { void navigator.clipboard.writeText(libraryPath(current)).then(() => onNotice('Path copied')).catch(error => onNotice(String(error))); setMenu(null); }}><Download size={14}/>Copy relative path</button></div>}
-    {preview && <Preview title={preview.file.name} onClose={() => setPreview(null)}>{preview.summary ? <p>{preview.summary}</p> : <LibraryAudio file={preview.file}/>}</Preview>}
+    {preview && <Preview title={preview.file.name} onClose={() => setPreview(null)} wide={!!preview.project}>{preview.project ? <><AssemblyVisualPreview project={preview.project} onNotice={onNotice}/><p className="assembly-preview-summary">{preview.summary}</p><button className="primary assembly-preview-insert" onClick={()=>{insert(preview.file);setPreview(null);}}>Insert this assembly</button></> : <LibraryAudio file={preview.file}/>}</Preview>}
   </>;
 }

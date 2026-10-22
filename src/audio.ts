@@ -29,6 +29,8 @@ interface PreviewSession {
 /** Playback-only audio graph. Sources are rebuilt from an explicit timeline anchor. */
 export class AudioTransport {
   private context: AudioContext | null = null;
+  private output: GainNode | null = null;
+  private outputVolume = 1;
   private buffers = new Map<string, AudioBuffer>();
   private sources: AudioBufferSourceNode[] = [];
   private gains: ActiveClip[] = [];
@@ -42,6 +44,11 @@ export class AudioTransport {
   get time() { return this.context ? this.offset + Math.max(0, this.context.currentTime - this.anchor) : this.offset; }
   get ready() { return !!this.context && this.context.state === 'running'; }
   get previewingId() { return this.previewSession?.id ?? null; }
+  /** Viewer-level gain leaves clip volume automation and effects unchanged. */
+  setOutputVolume(volume: number) {
+    this.outputVolume = Number.isFinite(volume) ? Math.max(0, Math.min(1, volume)) : 1;
+    if (this.output) this.output.gain.value = this.outputVolume;
+  }
 
   /** Isolate one existing timeline clip without changing its saved mute state.
    * Starting another transport operation cancels this preview and notifies the UI. */
@@ -74,6 +81,11 @@ export class AudioTransport {
     await this.context.resume();
     if (token !== this.generation) return;
     const ctx = this.context;
+    if (!this.output) {
+      this.output = ctx.createGain();
+      this.output.connect(ctx.destination);
+    }
+    this.output.gain.value = this.outputVolume;
     const segments = mediaAudioSegments(project, Math.max(0, time - MAX_EFFECT_TAIL), project.duration, preview?.id);
     const audible = segments.filter(segment => segment.end > time);
     const history = seekEffectHistory(segments, time).segments;
@@ -118,7 +130,7 @@ export class AudioTransport {
     if (seekTail) {
       const tailSource = ctx.createBufferSource();
       tailSource.buffer = seekTail;
-      tailSource.connect(ctx.destination);
+      tailSource.connect(this.output);
       this.seekTailPlaying = true;
       tailSource.onended = () => {
         tailSource.disconnect();
@@ -144,7 +156,7 @@ export class AudioTransport {
       source.connect(fadeGain);
       const gain = ctx.createGain(); gain.gain.value = e.volume ?? 1;
       const graph = connectAudioEffects(ctx, fadeGain, gain, e.audioEffects);
-      gain.connect(ctx.destination);
+      gain.connect(this.output);
       const active: ActiveClip = {id:e.id,gain,fadeGain,graph,tail:graph.tailSeconds,lastVolume:e.volume??1,end:segment.end,disposed:false};
       source.onended = () => {
         if (active.disposed || active.cleanupTimer !== undefined) return;
@@ -199,5 +211,5 @@ export class AudioTransport {
     this.seekTailPlaying = false;
     preview?.onEnded?.();
   }
-  destroy() {this.stop(); void this.context?.close(); this.context=null; this.buffers.clear();this.prepared.clear();}
+  destroy() {this.stop(); this.output?.disconnect(); this.output=null; void this.context?.close(); this.context=null; this.buffers.clear();this.prepared.clear();}
 }

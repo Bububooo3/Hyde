@@ -10,7 +10,7 @@ import {loadProjectFile,saveProjectBlob} from './storage';
 const sceneProject=()=>{const project=createProject('Motion');project.sequences[0].duration=8;return project;};
 
 describe('procedural motion evaluation',()=>{
-  it('adds path motion after keyed and assembly animation, before constraints',()=>{
+  it('holds the authored path at its start position while clips change the object pose',()=>{
     const project=sceneProject(),sceneId=project.sequences[0].id;
     const root=createElement('group',{id:'root',sceneId,x:100,y:100,assemblyClips:[{
       id:'clip',name:'Move',duration:2,tracks:[{elementId:'part',property:'x',keyframes:[
@@ -22,7 +22,7 @@ describe('procedural motion evaluation',()=>{
     path.points=[{x:0,y:0},{x:20,y:0}];
     const part=createElement('rectangle',{id:'part',sceneId,parentId:'root',x:0,y:0,motionBehaviors:[path]});
     project.elements=[root,part];
-    expect(evaluateProject(project,1).find(element=>element.id==='part')?.x).toBeCloseTo(160);
+    expect(evaluateProject(project,1).find(element=>element.id==='part')?.x).toBeCloseTo(110);
     expect(evaluateProject(project,1).find(element=>element.id==='part')?.y).toBe(100);
     const constrained=structuredClone(project);
     constrained.elements[1].attachment={type:'hinge',parentId:'root'};
@@ -39,6 +39,16 @@ describe('procedural motion evaluation',()=>{
       distances.push(Math.hypot(b.x-a.x,b.y-a.y));
     }
     expect(Math.max(...distances)/Math.min(...distances)).toBeLessThan(1.3);
+  });
+
+  it('renders a moved first path point at the same position as its stage guide',()=>{
+    const project=sceneProject(),sceneId=project.sequences[0].id;
+    const path=createMotionBehavior('followPath',2);
+    path.points=[{x:30,y:15},{x:130,y:15}];
+    project.elements=[createElement('rectangle',{sceneId,x:100,y:100,motionBehaviors:[path]})];
+    expect(sampleMotionPath(path.points,0)).toMatchObject({x:30,y:15});
+    expect(evaluateProject(project,0)[0]).toMatchObject({x:130,y:115});
+    expect(evaluateProject(project,2)[0]).toMatchObject({x:230,y:115});
   });
 
   it('seeks and repeats seeded shake without random state or changing project data',()=>{

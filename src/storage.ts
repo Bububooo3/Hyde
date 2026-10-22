@@ -447,6 +447,13 @@ function validate(model: unknown, assembly: boolean): asserts model is DocumentM
   if (!assembly) {
     string(model.id, 'Project ID'); string(model.background, 'Background'); string(model.updatedAt, 'Update time');
     for (const prop of ['width', 'height', 'fps', 'duration']) positive(model[prop], prop);
+    if (model.webPlayer !== undefined) {
+      check(record(model.webPlayer), 'Invalid standalone player settings.');
+      number(model.webPlayer.posterTime, 'Poster frame time', 0);
+      check(model.webPlayer.posterTime <= 3600, 'Poster frame time is too long.');
+      for (const field of ['loop','controlsVisible','showSeek','showVolume','showFullscreen','showCaptions','showLoop'])
+        check(typeof model.webPlayer[field] === 'boolean', `Standalone player ${field} must be on or off.`);
+    }
     check(Array.isArray(model.sequences) && Array.isArray(model.captions), 'Invalid sequences or captions.');
     // Folders only organize the editor list. Older V1 projects may omit them.
     if (model.folders !== undefined) {

@@ -3,9 +3,9 @@ import { descendantIds, parentId } from './editing';
 import type { Project, StoryElement } from './model';
 
 export type Alignment = 'left' | 'centerX' | 'right' | 'top' | 'centerY' | 'bottom' | 'distributeX' | 'distributeY';
-type Bounds = { left: number; right: number; top: number; bottom: number };
+export type Bounds = { left: number; right: number; top: number; bottom: number };
 
-function elementBounds(element: StoryElement): Bounds {
+export function elementBounds(element: StoryElement): Bounds {
   const radians = element.rotation * Math.PI / 180;
   const cosine = Math.cos(radians), sine = Math.sin(radians);
   const corners = [[0, 0], [element.width, 0], [element.width, element.height], [0, element.height]];

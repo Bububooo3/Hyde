@@ -5,15 +5,27 @@ body { margin: 0; background: #1f2933; color: #d9dde3; font: 14px system-ui, san
 .player-heading strong { font: 600 15px 'JetBrains Mono', monospace; }
 .player-frame { position: relative; width: 100%; background: #000; }
 .player-screen { position: relative; width: 100%; overflow: hidden; }
+.player-stage-toggle { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; display: grid; place-items: center; border: 0; background: transparent; color: #fff; cursor: pointer; }
+.player-stage-toggle svg { box-sizing: content-box; padding: 18px; border: 2px solid #fff; border-radius: 50%; background: #1f2933c9; filter: drop-shadow(0 2px 7px #000b); }
+.player-stage-toggle:hover svg, .player-stage-toggle:focus-visible svg { background: #364b5de8; border-color: #ffc857; }
+.player-stage-toggle:focus-visible { outline: 3px solid #ffc857; outline-offset: -5px; }
+.player-stage-toggle:disabled { cursor: wait; }
+.player-stage-toggle-subtle svg { opacity: 0; transition: opacity .15s; }
+.player-stage-toggle-subtle:hover svg, .player-stage-toggle-subtle:focus-visible svg { opacity: 1; }
 .render-host { width: 100%; height: 100%; }
 .render-host canvas { display: block; width: 100% !important; height: 100% !important; }
 .player-frame:fullscreen { width: 100vw; height: 100vh; aspect-ratio: auto !important; display: grid; place-items: center; background: #000; }
 .player-frame:fullscreen .player-screen { width: min(100vw, calc(100vh * var(--stage-aspect))); height: min(100vh, calc(100vw / var(--stage-aspect))); }
 .player-fullscreen-exit { display: none; }
-.player-frame:fullscreen .player-fullscreen-exit { display: grid; position: absolute; top: 16px; right: 16px; opacity: 0; transition: opacity .15s; }
+.player-frame:fullscreen .player-fullscreen-exit { display: grid; position: absolute; z-index: 2; top: 16px; right: 16px; opacity: 0; transition: opacity .15s; }
 .player-frame:fullscreen:hover .player-fullscreen-exit, .player-frame:fullscreen .player-fullscreen-exit:focus-visible { opacity: 1; }
-.player-controls { display: flex; align-items: center; gap: 12px; padding: 16px 0; }
+.player-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 16px 0; }
 .player-controls input { flex: 1; min-width: 0; accent-color: #ffc857; }
+.player-controls > input { min-width: 100px; }
+.player-volume { display: flex; align-items: center; gap: 5px; }
+.player-volume input { width: 76px; }
+.player-status { margin: 0; color: #d9dde3; font-size: 12px; }
+.captions { pointer-events: none; }
 .player-icon-button { display: grid; place-items: center; flex: 0 0 40px; width: 40px; height: 40px; border: 1px solid #5c6670; border-radius: 2px; background: #303d4a; color: #d9dde3; cursor: pointer; }
 .player-icon-button:hover { background: #445260; border-color: #ffc857; }
 .player-icon-button[aria-pressed='true'] { color: #ffc857; border-color: #ffc857; }

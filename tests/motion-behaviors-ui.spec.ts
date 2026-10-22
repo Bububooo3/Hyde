@@ -4,6 +4,9 @@ import {tmpdir} from 'node:os';
 import {basename,join,resolve,sep} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {unzipSync} from 'fflate';
+import {createElement,createProject} from '../src/model';
+import {createMotionBehavior} from '../src/motion';
+import {saveProjectBlob} from '../src/storage';
 
 test('procedural motion is editable, seekable, saved, and rendered in a standalone web story',async({page,context})=>{
   test.setTimeout(90_000);
@@ -71,4 +74,28 @@ test('procedural motion is editable, seekable, saved, and rendered in a standalo
     const absolute=await realpath(directory);
     if(absolute.startsWith(resolve(tmpdir())+sep)&&basename(absolute).startsWith('hyde-motion-'))await rm(absolute,{recursive:true,force:true});
   }
+});
+
+test('a motion-path guide stays fixed as the object follows keyed position',async({page})=>{
+  const project=createProject('Fixed motion guide'),path=createMotionBehavior('followPath',4);
+  path.points=[{x:20,y:10},{x:240,y:0}];
+  project.elements.push(createElement('rectangle',{
+    id:'traveler',name:'Traveler',sceneId:project.sequences[0].id,x:100,y:200,duration:project.duration,motionBehaviors:[path],
+    tracks:[{property:'x',keyframes:[
+      {id:'first',time:0,value:100,easing:'linear',direction:'inOut',mode:'smooth'},
+      {id:'second',time:4,value:500,easing:'linear',direction:'inOut',mode:'smooth'},
+    ]}],
+  }));
+  const bytes=Buffer.from(await (await saveProjectBlob(project)).arrayBuffer());
+  await page.goto('/');
+  await page.locator('input[type=file][accept=".hyde,.hy"]').setInputFiles({name:'motion.hyde',mimeType:'application/octet-stream',buffer:bytes});
+  await page.locator('.layer-name').filter({hasText:'Traveler'}).click();
+  await page.getByRole('button',{name:'Edit motion path on stage'}).click();
+  const pathNode=page.locator('.motion-path-overlay path'),before=await pathNode.getAttribute('d');
+  expect(before).toMatch(/^M 120 210 /);
+  await expect(page.locator('.selection-overlay .pivot')).toHaveAttribute('cx','120');
+  await expect(page.locator('.selection-overlay .pivot')).toHaveAttribute('cy','210');
+  const ruler=await page.locator('.ruler').boundingBox();expect(ruler).toBeTruthy();
+  await page.mouse.click(ruler!.x+ruler!.width*2/project.duration,ruler!.y+ruler!.height/2);
+  await expect(pathNode).toHaveAttribute('d',before!);
 });

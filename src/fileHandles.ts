@@ -29,5 +29,10 @@ export async function chooseProjectSaveFile(name: string): Promise<HydeFileHandl
 export async function writeProjectFile(handle: HydeFileHandle, data: Blob): Promise<void> {
   const stream = await handle.createWritable();
   try { await stream.write(data); await stream.close(); }
-  catch (error) { await stream.abort?.(); throw error; }
+  catch (error) {
+    // A failed writable must never make the editor report a successful save.
+    // Preserve the write/close failure even if cleanup also fails.
+    try { await stream.abort?.(); } catch { /* preserve the original failure */ }
+    throw error;
+  }
 }

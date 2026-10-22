@@ -335,7 +335,11 @@ export function evaluateProject(project: Project, time: number): StoryElement[] 
     if (!local) { resolved.set(id, null); return null; }
     visiting.add(id);
     const animated=applyAssemblyTracks(local,clipTracks.get(id),clipGaps.get(id),time);
-    let world = constrain(applyMotionBehaviors(animated,original,time,ease), original);
+    const firstActivePath=original.motionBehaviors?.find(behavior=>behavior.type==='followPath'&&behavior.enabled&&time-original.start>=behavior.start);
+    const pathStart=firstActivePath?original.start+firstActivePath.start:time;
+    const startPose=firstActivePath?evaluateElement(original,pathStart):null;
+    const pathAnchor=startPose?applyAssemblyTracks(startPose,clipTracks.get(id),clipGaps.get(id),pathStart):undefined;
+    let world = constrain(applyMotionBehaviors(animated,original,time,ease,pathAnchor), original);
     const parentId = original.attachment?.parentId ?? original.parentId;
     if (parentId) {
       const parent = resolve(parentId);

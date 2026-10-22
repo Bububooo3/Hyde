@@ -95,6 +95,17 @@ describe('portable Hyde archives', () => {
     expect(xml).not.toContain('data:image');
     expect(xml).not.toContain('"keyframes":');
   });
+  it('preserves standalone player settings and rejects invalid imported values', async () => {
+    const project=createProject();
+    project.webPlayer={posterTime:1.5,loop:true,controlsVisible:false,showSeek:false,showVolume:true,showFullscreen:false,showCaptions:true,showLoop:false};
+    const blob=await saveProjectBlob(project);
+    for(const extension of ['hyde','hy'])expect((await loadProjectFile(new File([blob],`player.${extension}`))).webPlayer).toEqual(project.webPlayer);
+    project.webPlayer.posterTime=-1;
+    await expect(saveProjectBlob(project)).rejects.toThrow(/Poster frame time/);
+    project.webPlayer.posterTime=1;
+    (project.webPlayer as unknown as {showVolume:string}).showVolume='yes';
+    await expect(saveProjectBlob(project)).rejects.toThrow(/showVolume/);
+  });
   it('preserves explicit video end behavior and rejects unknown choices',async()=>{
     const project=createProject();
     project.elements.push(createElement('video',{videoEndBehavior:'hide'}));

@@ -59,3 +59,42 @@ test('Undo and Redo mark a previously saved project as changed',async({page})=>{
   await page.getByRole('button',{name:'Redo',exact:true}).click();
   await expect(page.getByText('Changes not saved to file',{exact:true})).toBeVisible();
 });
+
+test('an interrupted replacement preserves the prior file and leaves edits unsaved',async({page})=>{
+  await page.addInitScript(()=>{
+    const state:{file:Blob|null;writes:number;aborts:number;failNext:boolean}={file:null,writes:0,aborts:0,failNext:false};
+    (window as any).__hydeInterruptedSave=state;
+    (window as any).showSaveFilePicker=async(options:{suggestedName:string})=>({
+      name:options.suggestedName,
+      async createWritable(){
+        let pending:Blob|null=null;
+        return {
+          async write(blob:Blob){pending=blob;state.writes++;},
+          async close(){
+            if(state.failNext){state.failNext=false;throw new Error('Simulated interrupted file save');}
+            state.file=pending;
+          },
+          async abort(){state.aborts++;pending=null;},
+        };
+      },
+    });
+  });
+  await page.goto('/');
+  await page.getByRole('button',{name:/New project Choose a size/}).click();
+  await page.getByRole('button',{name:'Done',exact:true}).click();
+  await page.getByRole('button',{name:'Save',exact:true}).click();
+  await expect(page.getByText('Saved to Untitled story.hyde',{exact:true})).toBeVisible();
+  const original=await page.evaluate(async()=>Array.from(new Uint8Array(await (window as any).__hydeInterruptedSave.file.arrayBuffer())));
+  await page.getByRole('button',{name:'Add rectangle',exact:true}).click();
+  await page.evaluate(()=>(window as any).__hydeInterruptedSave.failNext=true);
+  await page.getByRole('button',{name:'Save',exact:true}).click();
+  await page.getByRole('button',{name:'Replace file'}).click();
+  await expect(page.getByText('Simulated interrupted file save')).toBeVisible();
+  await expect(page.getByText('Changes not saved to file',{exact:true})).toBeVisible();
+  expect(await page.evaluate(async()=>Array.from(new Uint8Array(await (window as any).__hydeInterruptedSave.file.arrayBuffer())))).toEqual(original);
+  expect(await page.evaluate(()=>(window as any).__hydeInterruptedSave.aborts)).toBe(1);
+  await page.getByRole('button',{name:'Save',exact:true}).click();
+  await page.getByRole('button',{name:'Replace file'}).click();
+  await expect(page.getByText('Saved to Untitled story.hyde',{exact:true})).toBeVisible();
+  expect(await page.evaluate(()=>(window as any).__hydeInterruptedSave.writes)).toBe(3);
+});

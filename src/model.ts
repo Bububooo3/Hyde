@@ -183,6 +183,18 @@ export interface Project {
   format: 'hyde'; version: 1; id: string; name: string; width: number; height: number; fps: number;
   duration: number; background: string; elements: StoryElement[]; assets: Asset[];
   sequences: Sequence[]; captions: Caption[]; folders?: SceneFolder[]; updatedAt: string;
+  /** Saved creator defaults for independently exported web players. */
+  webPlayer?: WebPlayerSettings;
+}
+export interface WebPlayerSettings {
+  posterTime: number;
+  loop: boolean;
+  controlsVisible: boolean;
+  showSeek: boolean;
+  showVolume: boolean;
+  showFullscreen: boolean;
+  showCaptions: boolean;
+  showLoop: boolean;
 }
 export interface Assembly { format: 'hyde-assembly'; version: 1; name: string; elements: StoryElement[]; assets: Asset[] }
 export const uid = () => crypto.randomUUID();

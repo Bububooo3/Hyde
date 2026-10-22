@@ -21,9 +21,11 @@ test('nested linked scenes package each audible pitch clip once and play from a 
   await page.getByRole('button',{name:'New project'}).click();
   await page.getByRole('button',{name:'Done',exact:true}).click();
   await page.locator('input[type=file][accept="image/*,video/*,audio/*"]').setInputFiles({name:'tone.wav',mimeType:'audio/wav',buffer:toneWav()});
+  await page.getByRole('button',{name:'Edit clip…'}).click();
   await page.locator('.audio-clip-panel').getByRole('button',{name:'Unlink pitch from speed'}).click();
   await page.getByRole('spinbutton',{name:'Pitch offset in semitones'}).fill('12');
   await page.getByRole('spinbutton',{name:'Pitch offset in semitones'}).press('Tab');
+  await page.getByRole('dialog',{name:'Edit media clip'}).getByRole('button',{name:'Apply'}).click();
   await page.locator('.sequence-block').first().click({button:'right'});
   await page.getByRole('button',{name:'Place linked copy'}).click();
   await page.locator('.sequence-block').nth(1).click({button:'right'});

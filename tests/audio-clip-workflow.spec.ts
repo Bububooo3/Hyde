@@ -32,6 +32,7 @@ test('an imported recording can be trimmed, faded, split, and duplicated in the 
     name: 'tone.wav', mimeType: 'audio/wav', buffer: toneWav(),
   });
 
+  await page.getByRole('button',{name:'Edit clip…'}).click();
   const panel = page.locator('.audio-clip-panel');
   await expect(panel.getByRole('heading', { name: 'Audio clip' })).toBeVisible();
   await expect(panel.getByRole('img', { name: 'Audio waveform for the selected source range' })).toBeVisible();
@@ -41,7 +42,7 @@ test('an imported recording can be trimmed, faded, split, and duplicated in the 
   await panel.getByRole('spinbutton', { name: 'Source in seconds' }).press('Tab');
   await panel.getByRole('spinbutton', { name: 'Source out seconds' }).fill('1.75');
   await panel.getByRole('spinbutton', { name: 'Source out seconds' }).press('Tab');
-  await expect(page.getByRole('spinbutton', { name: 'Duration s' })).toHaveValue('1.5');
+  await expect(panel.getByRole('spinbutton', { name: 'Source out seconds' })).toHaveValue('1.75');
 
   await panel.getByRole('spinbutton', { name: 'Fade in seconds' }).fill('0.2');
   await panel.getByRole('spinbutton', { name: 'Fade in seconds' }).press('Tab');
@@ -51,18 +52,18 @@ test('an imported recording can be trimmed, faded, split, and duplicated in the 
   await panel.getByRole('button', { name: 'Mute clip' }).click();
   await expect(panel.getByRole('button', { name: 'Unmute clip' })).toBeVisible();
 
-  const ruler = await page.locator('.ruler').boundingBox();
-  expect(ruler).toBeTruthy();
-  await page.mouse.click(ruler!.x + ruler!.width * (0.75 / 8), ruler!.y + ruler!.height / 2);
+  await page.getByRole('spinbutton',{name:'Clip edit playhead seconds'}).fill('0.75');
   await expect(panel.getByRole('button', { name: 'Split at playhead' })).toBeEnabled();
   await panel.getByRole('button', { name: 'Split at playhead' }).click();
-  await expect(page.locator('.audio-clip')).toHaveCount(2);
+  await expect(panel.getByRole('spinbutton', { name: 'Source in seconds' })).not.toHaveValue('0.25');
   await expect.poll(async () => Number(await panel.getByRole('spinbutton', { name: 'Source in seconds' }).inputValue()))
     .toBeGreaterThan(0.95);
   const splitSourceIn = Number(await panel.getByRole('spinbutton', { name: 'Source in seconds' }).inputValue());
   expect(splitSourceIn).toBeLessThan(1.05);
   await panel.getByRole('button', { name: 'Duplicate' }).click();
+  await page.getByRole('dialog',{name:'Edit media clip'}).getByRole('button',{name:'Apply'}).click();
   await expect(page.locator('.audio-clip')).toHaveCount(3);
+  await page.getByRole('button',{name:'Edit clip…'}).click();
   await expect(panel.getByRole('spinbutton', { name: 'Fade out seconds' })).toHaveValue('0.3');
   await expect(panel.getByRole('spinbutton', { name: 'Clip volume percent' })).toHaveValue('55');
   expect(errors).toEqual([]);

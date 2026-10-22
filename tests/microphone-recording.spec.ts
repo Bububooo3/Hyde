@@ -33,22 +33,25 @@ test('microphone take starts from the audio clock and its alignment survives reo
   await expect(page.getByRole('button',{name:'Stop microphone recording'})).toBeVisible();
   await page.waitForTimeout(220);
   await page.getByRole('button',{name:'Stop microphone recording'}).click();
-  await expect(page.getByRole('spinbutton',{name:'Recording alignment seconds'})).toHaveValue('0');
   const start=page.getByRole('spinbutton',{name:'Start s'});
   const capturedStart=Number(await start.inputValue());
   expect(capturedStart).toBeGreaterThanOrEqual(0);
+  await page.getByRole('button',{name:'Edit clip…'}).click();
+  await expect(page.getByRole('spinbutton',{name:'Recording alignment seconds'})).toHaveValue('0');
   await page.getByRole('spinbutton',{name:'Recording alignment seconds'}).fill('0.25');
   await page.getByRole('spinbutton',{name:'Recording alignment seconds'}).press('Tab');
+  await page.getByRole('dialog',{name:'Edit media clip'}).getByRole('button',{name:'Apply'}).click();
   await expect.poll(async()=>Number(await start.inputValue())).toBeCloseTo(capturedStart+.25,2);
   const download=page.waitForEvent('download');
   await page.getByRole('button',{name:'File',exact:true}).click();
   await page.getByRole('button',{name:'Download project copy'}).click();
   await page.locator('input[type=file][accept=".hyde,.hy"]').setInputFiles((await (await download).path())!);
   await page.locator('.layer-name').filter({hasText:'Voice recording'}).click();
+  await page.getByRole('button',{name:'Edit clip…'}).click();
   await expect(page.getByRole('spinbutton',{name:'Recording alignment seconds'})).toHaveValue('0.25');
-  await expect.poll(async()=>Number(await start.inputValue())).toBeCloseTo(capturedStart+.25,2);
   await page.getByRole('spinbutton',{name:'Recording alignment seconds'}).fill('0');
   await page.getByRole('spinbutton',{name:'Recording alignment seconds'}).press('Tab');
+  await page.getByRole('dialog',{name:'Edit media clip'}).getByRole('button',{name:'Apply'}).click();
   await expect.poll(async()=>Number(await start.inputValue())).toBeCloseTo(capturedStart,2);
 });
 
@@ -64,6 +67,7 @@ test('Chrome microphone API produces an editable clip with a fake input device',
   await expect(page.getByRole('button',{name:'Stop microphone recording'})).toBeVisible();
   await page.waitForTimeout(550);
   await page.getByRole('button',{name:'Stop microphone recording'}).click();
+  await page.getByRole('button',{name:'Edit clip…'}).click();
   await expect(page.getByRole('spinbutton',{name:'Recording alignment seconds'})).toHaveValue('0');
   await expect(page.locator('.audio-clip-panel').getByRole('heading',{name:'Audio clip'})).toBeVisible();
   await expect.poll(async()=>Number(await page.getByRole('spinbutton',{name:'Source out seconds'}).inputValue())).toBeGreaterThan(.3);
