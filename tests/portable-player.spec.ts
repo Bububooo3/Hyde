@@ -22,7 +22,7 @@ test('portable classic player runs directly from file without sibling files', as
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(pathToFileURL(htmlPath).href);
     await expect(page.locator('.player-screen canvas')).toHaveCount(1);
-    expect(await page.locator('canvas').evaluate((canvas: HTMLCanvasElement) => [canvas.width, canvas.height])).toEqual([960, 540]);
+    expect(await page.locator('canvas').evaluate((canvas: HTMLCanvasElement) => [canvas.width, canvas.height])).toEqual([project.width, project.height]);
     const screen = await page.locator('.player-screen').boundingBox();
     const canvas = await page.locator('canvas').boundingBox();
     expect(screen).toBeTruthy();expect(canvas).toBeTruthy();

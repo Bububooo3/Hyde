@@ -23,7 +23,7 @@ export function Stage({project,time,onError,editorOverscan=0}: {project:Project;
     void document.fonts.load('400 40px "JetBrains Mono"').then(()=>stopped?null:StageRenderer.create(host.current!,editorOverscan)).then(r=>{if(!r)return;if(stopped){r.destroy();return;}renderer.current=r;last.current=null;void loop();}).catch(e=>onError?.(String(e)));
     return()=>{stopped=true;cancelAnimationFrame(raf);renderer.current?.destroy();renderer.current=null;};
   },[]);
-  return <div ref={host} className={`render-host ${editorOverscan?'editor-overscan':''}`} style={editorOverscan?{'--editor-canvas-width':`${(project.width+editorOverscan*2)/project.width*100}%`,'--editor-canvas-height':`${(project.height+editorOverscan*2)/project.height*100}%`,'--editor-canvas-left':`${-editorOverscan/project.width*100}%`,'--editor-canvas-top':`${-editorOverscan/project.height*100}%`} as React.CSSProperties:undefined} aria-label="Story canvas" />;
+  return <div ref={host} className={`render-host ${editorOverscan?'editor-overscan':''}`} style={editorOverscan?{'--editor-canvas-width':`${(project.width+editorOverscan*2)/project.width*100}%`,'--editor-canvas-height':`${(project.height+editorOverscan*2)/project.height*100}%`,'--editor-canvas-left':`${-editorOverscan/project.width*100}%`,'--editor-canvas-top':`${-editorOverscan/project.height*100}%`} as React.CSSProperties:undefined} />;
 }
 
 export function SelectionOverlay({element,project,camera,pivotMode,rotationPoint,onStart,zoom=1}: {element:StoryElement|null;project:Project;camera:CameraState;pivotMode:boolean;rotationPoint?:{x:number;y:number};zoom?:number;onStart:(event:React.PointerEvent,mode:'move'|'resize'|'rotate'|'pivot')=>void}) {
@@ -40,7 +40,7 @@ export function SelectionOverlay({element,project,camera,pivotMode,rotationPoint
   const corners=[point(0,0),point(e.width,0),point(e.width,e.height),point(0,e.height)];
   const top=point(e.width/2,0),rotate={x:top.x+s*24*unit*Math.sign(e.scaleY||1),y:top.y-c*24*unit*Math.sign(e.scaleY||1)},resize=corners[2];
   const rotationLocked=!!e.attachment&&e.attachment.type!=='hinge';
-  return <svg ref={overlay} className="selection-overlay" viewBox={`0 0 ${project.width} ${project.height}`}><g transform={scene?sceneFrameSvgTransform(project,scene):undefined}><g transform={`translate(${project.width/2} ${project.height/2}) rotate(${-camera.rotation}) scale(${camera.zoom}) translate(${-camera.x} ${-camera.y})`}>
+  return <svg ref={overlay} className="selection-overlay" aria-hidden="true" viewBox={`0 0 ${project.width} ${project.height}`}><g transform={scene?sceneFrameSvgTransform(project,scene):undefined}><g transform={`translate(${project.width/2} ${project.height/2}) rotate(${-camera.rotation}) scale(${camera.zoom}) translate(${-camera.x} ${-camera.y})`}>
     {rotationPoint&&<g className="world-rotation-point" aria-label="World rotation point" pointerEvents="none"><circle cx={rotationPoint.x} cy={rotationPoint.y} r={7*unit}/><path d={`M ${rotationPoint.x-13*unit} ${rotationPoint.y} H ${rotationPoint.x+13*unit} M ${rotationPoint.x} ${rotationPoint.y-13*unit} V ${rotationPoint.y+13*unit}`}/></g>}
     <polygon points={corners.map(p=>`${p.x},${p.y}`).join(' ')} fill="none" stroke="#ffc857" strokeWidth={1.5} vectorEffect="non-scaling-stroke"/>
     {!e.locked&&!pivotMode&&<>

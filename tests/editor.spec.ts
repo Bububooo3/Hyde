@@ -107,7 +107,7 @@ test('browser recovery keeps two independently opened projects',async({page})=>{
   await page.goto('/');await page.getByRole('button',{name:'Open example'}).click();
   await page.getByRole('textbox',{name:'Project name',exact:true}).fill('Recovery A');
   await expect(page.getByText('Autosaved in this browser',{exact:true})).toBeVisible();
-  await page.getByRole('button',{name:'Hyde home',exact:true}).click();
+  await page.getByRole('button',{name:/hyde.*story studio/i}).click();
   await page.getByRole('button',{name:/New project Choose a size/}).click();
   await page.getByRole('button',{name:'Done',exact:true}).click();
   await page.getByRole('textbox',{name:'Project name',exact:true}).fill('Recovery B');

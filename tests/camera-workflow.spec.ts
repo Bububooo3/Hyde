@@ -17,7 +17,7 @@ test('scene camera keys move the stage and stay editable through selection, save
   await page.getByRole('button',{name:'Add rectangle',exact:true}).click();
   await page.getByRole('textbox',{name:'Element name',exact:true}).fill('Camera target');
   await page.locator('.camera-panel summary').click();
-  await expect(page.getByRole('spinbutton',{name:'Camera X'})).toHaveValue('480');
+  await expect(page.getByRole('spinbutton',{name:'Camera X'})).toHaveValue('960');
   const pivot=page.locator('.selection-overlay .pivot');
   const before=await pivot.boundingBox();expect(before).toBeTruthy();
 
@@ -25,7 +25,7 @@ test('scene camera keys move the stage and stay editable through selection, save
   const ruler=await page.locator('.ruler').boundingBox();expect(ruler).toBeTruthy();
   await page.mouse.click(ruler!.x+ruler!.width/2,ruler!.y+12);
   await page.getByRole('button',{name:'Auto key',exact:true}).click();
-  await page.getByRole('spinbutton',{name:'Camera X'}).fill('600');
+  await page.getByRole('spinbutton',{name:'Camera X'}).fill('1200');
   await page.getByRole('spinbutton',{name:'Camera X'}).press('Tab');
   const keys=page.locator('.camera-key-dot[data-property="x"]');
   await expect(keys).toHaveCount(2);
@@ -70,6 +70,6 @@ test('scene camera keys move the stage and stay editable through selection, save
   if(!await page.locator('.camera-panel').evaluate(node=>node.hasAttribute('open')))await page.locator('.camera-panel summary').click();
   const newRuler=await page.locator('.ruler').boundingBox();expect(newRuler).toBeTruthy();
   await page.mouse.click(newRuler!.x+newRuler!.width*.9,newRuler!.y+12);
-  await expect(page.getByRole('spinbutton',{name:'Camera X'})).toHaveValue('600');
+  await expect(page.getByRole('spinbutton',{name:'Camera X'})).toHaveValue('1200');
   expect(errors).toEqual([]);
 });

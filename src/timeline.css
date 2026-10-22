@@ -15,6 +15,12 @@
 .timeline .record-keys.suggested>span{background:#1f2933}
 .record-mute-option{display:inline-flex;align-items:center;gap:4px;white-space:nowrap;color:#aab2bb;font-size:10px;cursor:pointer}
 .record-mute-option input{accent-color:#ffc857}
+.ruler-row .timeline-label{color:#aab4c0}
+.sequence-block span{color:#d7dce2}
+.clip-block>span{color:#fff1d4;opacity:1}
+.timeline .clip-block>span{color:#ffffff;opacity:1}
+.timeline .ruler-row .timeline-label>span{color:#aab4c0}
+.timeline .sequence-block>span:last-child{color:#d7dce2}
 @media(max-width:1250px){.record-mute-option{font-size:0}.record-mute-option input{width:14px;height:14px}}
 .timeline .auto-key-hint{max-width:180px;color:#ffcf82;font-size:9px;line-height:1.2}
 .timeline .property-row{--track-color:#ffc857}

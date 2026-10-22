@@ -62,7 +62,7 @@ test('media corner pin warps the stage image and persists through project and we
     const rendered=()=>viewer.locator('canvas').first().evaluate((element:HTMLCanvasElement)=>{
       const probe=document.createElement('canvas');probe.width=element.width;probe.height=element.height;
       const context=probe.getContext('2d')!;context.drawImage(element,0,0);
-      return [...context.getImageData(480,270,1,1).data];
+      return [...context.getImageData(Math.floor(element.width/2),Math.floor(element.height/2),1,1).data];
     });
     await expect.poll(async()=>{const [red,green,blue]=await rendered();return red>180&&green<100&&blue<120;}).toBe(true);
     expect(errors).toEqual([]);

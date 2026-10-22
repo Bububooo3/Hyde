@@ -25,8 +25,7 @@ test('procedural motion is editable, seekable, saved, and rendered in a standalo
   await page.keyboard.press('Control+z');
   await expect(overlay.locator('path')).toHaveAttribute('d',pathBefore!);
   await expect(page.getByRole('button',{name:'Redo',exact:true})).toBeEnabled();
-  await page.locator('.stage-breadcrumb').click();
-  await page.keyboard.press('Control+Shift+z');
+  await page.getByRole('button',{name:'Redo',exact:true}).click();
   await expect(overlay.locator('path')).not.toHaveAttribute('d',pathBefore!);
   await page.locator('.motion-points summary').last().click();
   await page.getByRole('spinbutton',{name:'Point 2 X'}).fill('240');

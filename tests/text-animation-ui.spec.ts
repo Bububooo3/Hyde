@@ -12,7 +12,7 @@ test('word animation plays through editor and standalone renderer and survives r
   await page.getByRole('button',{name:'Done'}).click();
   await page.getByRole('button',{name:'Add text'}).click();
   await page.getByRole('textbox',{name:'Text content'}).fill('A bright new idea');
-  await page.getByRole('checkbox',{name:'Animate text'}).check();
+  await page.getByRole('checkbox',{name:'Animate text',exact:true}).check();
   await page.getByRole('combobox',{name:'Text animation effect'}).selectOption('scatter');
   await page.getByRole('combobox',{name:'Text animation unit'}).selectOption('word');
   const canvas=page.locator('.stage-frame canvas');
@@ -28,7 +28,7 @@ test('word animation plays through editor and standalone renderer and survives r
   await page.getByRole('button',{name:'Download project copy'}).click();
   await page.locator('input[type=file][accept=".hyde,.hy"]').setInputFiles((await (await downloaded).path())!);
   await page.locator('.layer-name').filter({hasText:'Text'}).click();
-  await expect(page.getByRole('checkbox',{name:'Animate text'})).toBeChecked();
+  await expect(page.getByRole('checkbox',{name:'Animate text',exact:true})).toBeChecked();
   await expect(page.getByRole('combobox',{name:'Text animation effect'})).toHaveValue('scatter');
   await seekTwoSeconds();
   await expect.poll(image).toBe(completed);
