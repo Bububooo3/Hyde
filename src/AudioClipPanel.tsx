@@ -115,6 +115,7 @@ export function AudioClipPanel({ project, element, time, onCommit, onSelect }: P
       <label className="audio-clip-mute"><span>Playback</span><button type="button" aria-label={element.muted ? 'Unmute clip' : 'Mute clip'} aria-pressed={!!element.muted} onClick={() => patchElement({ muted: !element.muted })}>{element.muted ? <VolumeX size={14}/> : <Volume2 size={14}/>} {element.muted ? 'Muted' : 'Audible'}</button></label>
     </div>
     <label className="audio-pitch-default"><input type="checkbox" checked={defaultLinked} onChange={event => { setDefaultLinkSpeedPitch(event.target.checked); setDefaultLinked(event.target.checked); }}/> Link pitch to speed for new audio and video clips</label>
+    <p className="muted-note">Large independent speed or pitch changes can alter transients and vocal tone. Preview the clip before exporting; longer sources may take time to process.</p>
     {element.loop && <p className="muted-note">Turn off Loop to trim or split this clip.</p>}
     {element.recorded&&<p className="muted-note">Positive values move the take later; negative values move it earlier. This does not change the recorded sound.</p>}
     {error && <p className="audio-clip-error" role="alert">{error}</p>}

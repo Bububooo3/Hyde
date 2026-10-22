@@ -36,5 +36,6 @@ test('standalone player holds time while a delayed image enters the scene',async
     release();
     await expect.poll(seconds,{timeout:8000}).toBeGreaterThan(frozen+.3);
     await expect(viewer.getByRole('status')).toHaveCount(0);
+    await expect(viewer.getByRole('alert')).toHaveCount(0);
   }finally{release();await viewer.close();}
 });

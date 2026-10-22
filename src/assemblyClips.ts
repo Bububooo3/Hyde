@@ -123,12 +123,13 @@ export function removeAssemblyClipInstance(project: Project, rootId: string, ins
 /** Retiming a placed clip changes only that instance. Its shared source clip
  * remains reusable by every other placement. Absolute `at` matches the story
  * timeline while the stored start stays relative to the assembly root. */
-export function editAssemblyClipInstance(project:Project,rootId:string,instanceId:string,patch:{at?:number;duration?:number;loop?:boolean}):Project{
+export function editAssemblyClipInstance(project:Project,rootId:string,instanceId:string,patch:{at?:number;duration?:number;loop?:boolean;alignToFrame?:boolean}):Project{
   const {root}=rootAndParts(project,rootId);
   const existing=root.clipInstances?.find(item=>item.id===instanceId);
   if(!existing)throw new Error('The placed assembly clip no longer exists.');
-  const at=Math.round((patch.at??root.start+existing.start)*project.fps)/project.fps;
-  const duration=Math.round((patch.duration??existing.duration)*project.fps)/project.fps;
+  const rawAt=patch.at??root.start+existing.start,rawDuration=patch.duration??existing.duration;
+  const at=patch.alignToFrame===false?rawAt:Math.round(rawAt*project.fps)/project.fps;
+  const duration=patch.alignToFrame===false?rawDuration:Math.round(rawDuration*project.fps)/project.fps;
   if(!Number.isFinite(at)||!Number.isFinite(duration)||at<root.start-epsilon||duration<1/project.fps-epsilon)
     throw new Error('A placed clip must start within its assembly and last at least one frame.');
   const end=at+duration;

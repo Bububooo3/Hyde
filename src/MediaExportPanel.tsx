@@ -72,7 +72,13 @@ export function MediaExportPanel({ project }: { project: Project }) {
       downloadBlob(result.blob, result.fileName);
       setMessage(`Downloaded ${result.fileName} · ${result.frameCount} frames${result.includesAudio ? ' + audio' : ''}.`);
     } catch (error) {
-      setMessage((error as Error)?.name === 'AbortError' ? 'Export canceled.' : error instanceof Error ? error.message : 'Export failed.');
+      if ((error as Error)?.name === 'AbortError') {
+        setMessage('Export canceled.');
+      } else if (error instanceof Error && (error.name === 'NotSupportedError' || /encoder|codec|configure/i.test(error.message))) {
+        setMessage(`Video encoder failed: ${error.message} Try another format or smaller size.`);
+      } else {
+        setMessage(error instanceof Error ? error.message : 'Export failed.');
+      }
     } finally {
       if (controller.current === next) controller.current = null;
       setBusy(false);

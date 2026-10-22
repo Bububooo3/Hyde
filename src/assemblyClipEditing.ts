@@ -43,9 +43,9 @@ function validValue(project:Project,property:AnimProperty,value:number|string):v
   }else if(typeof value!=='number'||!Number.isFinite(value))throw new Error('Enter a finite keyframe value.');
 }
 
-function alignedTime(value:number,fps:number,duration:number):number{
+function alignedTime(value:number,fps:number,duration:number,alignToFrame=true):number{
   if(!Number.isFinite(value)||value<0||value>duration)throw new Error('Keyframe time must be inside the clip.');
-  return Math.min(duration,Math.round(value*fps)/fps);
+  return alignToFrame?Math.min(duration,Math.round(value*fps)/fps):value;
 }
 
 function checkDistinct(track:AssemblyClipTrack):void{
@@ -54,11 +54,11 @@ function checkDistinct(track:AssemblyClipTrack):void{
   track.keyframes.sort((a,b)=>a.time-b.time);
 }
 
-export function editAssemblyClipKey(project:Project,target:AssemblyTrackTarget,keyIndex:number,patch:AssemblyKeyPatch):Project{
+export function editAssemblyClipKey(project:Project,target:AssemblyTrackTarget,keyIndex:number,patch:AssemblyKeyPatch,options:{alignToFrame?:boolean}={}):Project{
   const {next,track,duration}=mutableTrack(project,target);
   const key=track.keyframes[keyIndex];
   if(!key)throw new Error('The assembly keyframe no longer exists.');
-  if(patch.time!==undefined)key.time=alignedTime(patch.time,project.fps,duration);
+  if(patch.time!==undefined)key.time=alignedTime(patch.time,project.fps,duration,options.alignToFrame!==false);
   if(patch.value!==undefined){validValue(project,target.property,patch.value);key.value=patch.value;}
   if(patch.easing!==undefined){if(!['linear','sine','quad','cubic','quart','quint','expo','circ','back','bounce','elastic'].includes(patch.easing))throw new Error('Choose a valid easing family.');key.easing=patch.easing;}
   if(patch.direction!==undefined){if(!['in','out','inOut'].includes(patch.direction))throw new Error('Choose a valid easing direction.');key.direction=patch.direction;}

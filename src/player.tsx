@@ -7,6 +7,7 @@ import {captionWindow,type Project} from './model';
 import { Stage } from './Stage';
 import { AudioTransport } from './audio';
 import {materializeScenePlacements} from './scenePlacement';
+import {mediaAudioSegments} from './mediaAudioSegments';
 import {finalPlayerFrameTime,webPlayerSettings} from './webPlayerSettings';
 import './player.css';
 function loadStory(): Promise<Project> {
@@ -63,7 +64,7 @@ function Player(){
       await waitForFrame(at);
       if(token!==operation.current||!wantsPlayback.current)return;
       await audio.current.play(story,at);
-      if(!audio.current.audioSupported)setAudioWarning('Audio playback is unavailable in this browser; the story is playing without sound.');
+      if(!audio.current.audioSupported&&mediaAudioSegments(story).length)setAudioWarning('Audio playback is unavailable in this browser; the story is playing without sound.');
       if(token===operation.current&&wantsPlayback.current)markPlaying(true);
     }catch(error){if(token===operation.current)stageFailure(String(error));}
     finally{if(token===operation.current){setLoading(false);setBuffering(false);}}
