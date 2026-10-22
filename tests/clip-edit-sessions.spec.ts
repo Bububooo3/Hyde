@@ -116,3 +116,74 @@ test('attachment hierarchy and limits apply together or discard together',async(
   await expect(dialog.getByRole('spinbutton',{name:'Min attachment limit'})).toHaveValue('0');
   await expect(dialog.getByRole('spinbutton',{name:'Max attachment limit'})).toHaveValue('100');
 });
+
+test('global editing shortcuts cannot mutate the base project under a clip edit',async({page})=>{
+  await page.goto('/');
+  await page.getByRole('button',{name:'New project'}).click();
+  await page.getByRole('button',{name:'Done'}).click();
+  await page.getByRole('button',{name:'Add rectangle'}).first().click();
+  await page.getByRole('textbox',{name:'Element name'}).fill('Root');
+  await page.getByRole('button',{name:'Add rectangle'}).first().click();
+  await page.getByRole('textbox',{name:'Element name'}).fill('Part');
+  await page.getByRole('button',{name:'Edit parent & attachment…'}).click();
+  const dialog=page.getByRole('dialog',{name:'Edit assembly attachment'});
+  await page.keyboard.press('Control+z');
+  await page.keyboard.press('Control+Shift+z');
+  await page.keyboard.press('Delete');
+  await page.keyboard.press('Control+d');
+  await expect(page.locator('.scene-element-row')).toHaveCount(2);
+  await dialog.getByRole('combobox',{name:'Parent assembly'}).selectOption({label:'Root'});
+  await dialog.getByRole('button',{name:'Apply'}).click();
+  await expect(page.locator('.scene-element-row')).toHaveCount(2);
+  await expect(page.getByRole('textbox',{name:'Element name'})).toHaveValue('Part');
+  await page.getByRole('button',{name:'Edit parent & attachment…'}).click();
+  await expect(dialog.getByRole('combobox',{name:'Parent assembly'}).locator('option:checked')).toHaveText('Root');
+});
+
+test('a stale clip draft remains available until explicit recovery or discard',async({page})=>{
+  await page.goto('/');
+  await page.getByRole('button',{name:'New project'}).click();
+  await page.getByRole('button',{name:'Done'}).click();
+  await page.getByRole('button',{name:'Add rectangle'}).first().click();
+  await page.getByRole('textbox',{name:'Element name'}).fill('Root');
+  await page.getByRole('button',{name:'Add rectangle'}).first().click();
+  await page.getByRole('textbox',{name:'Element name'}).fill('Part');
+  await page.getByRole('button',{name:'Edit parent & attachment…'}).click();
+  await page.getByRole('dialog',{name:'Edit assembly attachment'}).getByRole('combobox',{name:'Parent assembly'}).selectOption({label:'Root'});
+  await expect(page.getByText('Unapplied draft · recoverable in this browser')).toBeVisible();
+  const savedDrafts=()=>page.evaluate(async()=>{
+    const request=indexedDB.open('hyde-edit-drafts');
+    const db=await new Promise<IDBDatabase>((resolve,reject)=>{request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});
+    try{return await new Promise<{projectId:string;elements:{parentId?:string;attachment?:{parentId:string}}[]}[]>((resolve,reject)=>{const tx=db.transaction('drafts','readonly');const read=tx.objectStore('drafts').getAll();read.onsuccess=()=>resolve(read.result);read.onerror=()=>reject(read.error);});}finally{db.close();}
+  });
+  await expect.poll(async()=>(await savedDrafts()).length).toBe(1);
+  const stored=await savedDrafts();
+  expect(stored[0].elements.some(element=>!!(element.parentId||element.attachment?.parentId))).toBe(true);
+  const originalId=stored[0].projectId;
+  expect(originalId).toBeTruthy();
+  await expect(page.getByText('Autosaved in this browser')).toBeVisible();
+  await page.evaluate(async id=>{
+    const request=indexedDB.open('hyde-local');
+    const db=await new Promise<IDBDatabase>((resolve,reject)=>{request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});
+    try{await new Promise<void>((resolve,reject)=>{const tx=db.transaction('recovery','readwrite');const store=tx.objectStore('recovery');const read=store.get(`project:${id}`);read.onsuccess=()=>{const entry=read.result;entry.project.updatedAt='newer-project-revision';store.put(entry,`project:${id}`);};tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);});}finally{db.close();}
+  },originalId);
+  page.on('dialog',dialog=>void dialog.accept());
+  await page.reload();
+  await page.getByRole('button',{name:/Resume /}).click();
+  const review=page.getByRole('alertdialog',{name:'Unfinished clip edit needs review'});
+  await expect(review).toBeVisible();
+  await expect(page.locator('.scene-element-row')).toHaveCount(2);
+  await review.getByRole('button',{name:'Keep for later'}).click();
+  await expect(page.getByRole('button',{name:'Unfinished clip draft needs review'})).toBeVisible();
+  await page.getByRole('button',{name:'Select Part'}).click();
+  await page.getByRole('button',{name:'Edit parent & attachment…'}).click();
+  await expect(review).toBeVisible();
+  await review.getByRole('button',{name:'Recover as separate copy'}).click();
+  const editor=page.getByRole('dialog',{name:'Edit assembly attachment'});
+  await expect(editor).toBeVisible();
+  await expect(page.locator('input[aria-label="Project name"]')).toHaveValue('Untitled story (recovered clip edit)');
+  await expect(editor.getByRole('combobox',{name:'Parent assembly'}).locator('option:checked')).toHaveText('Root');
+  await editor.getByRole('button',{name:'Cancel'}).click();
+  await page.getByRole('button',{name:'Edit parent & attachment…'}).click();
+  await expect(editor.getByRole('combobox',{name:'Parent assembly'})).toHaveValue('');
+});

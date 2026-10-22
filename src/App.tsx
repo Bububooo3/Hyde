@@ -4,6 +4,7 @@ import type { LucideIcon } from 'lucide-react';
 import type { AnimProperty, Assembly, AssemblyGapTransition, AssemblyTextureOverlap, Asset, CameraProperty, EasingFamily, ElementKind, Project, StoryElement, TextAnimation } from './model';
 import { assignSceneOwnership,captionWindow,createElement, createProject,elementWindow,sceneIdAt, uid } from './model';
 import { createExampleProject } from './example';
+import {createPrimaryShowcase} from './showcase';
 import { cameraToStage, evaluateCamera, evaluateCameraForScene, evaluateElement, evaluateProject, stageToCamera } from './engine';
 import { Stage, SelectionOverlay } from './Stage';
 import {PathOverlay} from './PathOverlay';
@@ -61,7 +62,7 @@ import {AssemblyClipEditorPanel} from './AssemblyClipEditorPanel';
 import {AssemblyStructurePanel} from './AssemblyStructurePanel';
 import {AssemblyMasterRows} from './AssemblyMasterRows';
 import {addAssemblyClipKey,assemblyTrackView,editAssemblyClipKey,removeAssemblyClipKey,resetAssemblyClipTrackOverride,type AssemblyKeyPatch,type AssemblyTrackTarget} from './assemblyClipEditing';
-import {deleteClipDraft,loadClipDraft,restoreClipDraft,saveClipDraft,type ClipEditKind} from './clipEditDrafts';
+import {ClipDraftConflictError,deleteClipDraft,loadClipDraft,recoverClipDraftCopy,restoreClipDraft,saveClipDraft,type ClipEditKind,type SavedClipDraft} from './clipEditDrafts';
 import type {AssemblyMasterKey} from './assemblyMaster';
 import { makeSceneIndependent, materializeScenePlacements, placeLinkedScene } from './scenePlacement';
 import { alignSelection, type Alignment } from './alignment';
@@ -124,6 +125,9 @@ export default function App(){
   const [focusedAssemblyInstance,setFocusedAssemblyInstance]=useState<string|null>(null);
   const [focusedAssemblyTrack,setFocusedAssemblyTrack]=useState<{rootId:string;elementId:string;property:AnimProperty;scope:'shared'|'instance';keyIndex:number}|null>(null);
   const [clipSession,setClipSession]=useState<ClipEditSession|null>(null),clipSessionRef=useRef<ClipEditSession|null>(null);
+  const [staleClipDraft,setStaleClipDraft]=useState<SavedClipDraft|null>(null),staleClipDraftRef=useRef<SavedClipDraft|null>(null);
+  const [staleDraftIssue,setStaleDraftIssue]=useState(''),[showStaleDraft,setShowStaleDraft]=useState(false),[staleDraftBusy,setStaleDraftBusy]=useState(false);
+  const draftLookup=useRef<Project|null>(null);
   const objectClipboard=useRef<ObjectClipboard|null>(null),pasteCount=useRef(0);
   const [clipLeavePrompt,setClipLeavePrompt]=useState(false);
   const clipSessionOpener=useRef<HTMLElement|null>(null),appRoot=useRef<HTMLDivElement>(null);
@@ -196,12 +200,16 @@ export default function App(){
   },[project.duration,timelineScale,timelineCollapsed,timelineHeight]);
   useEffect(()=>{const dismiss=(event:PointerEvent)=>{if(!(event.target instanceof Element)||!event.target.closest('.timeline-context-menu'))setTimelineContext(null);};document.addEventListener('pointerdown',dismiss,true);return()=>document.removeEventListener('pointerdown',dismiss,true);},[]);
   function alert(message:string){setNotice(message);}
-  function commit(next:Project,before=projectRef.current){next.updatedAt=new Date().toISOString();setHistory(h=>[...h.slice(-79),before]);setFuture([]);projectRef.current=next;setProject(next);dirty.current=true;setFileStatus('Changes not saved to file');}
+  function commit(next:Project,before=projectRef.current){if(clipSessionRef.current){alert('Apply or discard the clip edit before changing the project.');return;}next.updatedAt=new Date().toISOString();setHistory(h=>[...h.slice(-79),before]);setFuture([]);projectRef.current=next;setProject(next);dirty.current=true;setFileStatus('Changes not saved to file');}
   function edit(fn:(p:Project)=>void){const next=clone(projectRef.current);fn(next);commit(next);}
-  function undo(){if(!history.length)return;stop();const current=projectRef.current,next=history[history.length-1];setFuture(f=>[current,...f]);setHistory(h=>h.slice(0,-1));projectRef.current=next;setProject(next);dirty.current=true;setFileStatus('Changes not saved to file');}
-  function redo(){if(!future.length)return;stop();const current=projectRef.current,next=future[0];setHistory(h=>[...h,current]);setFuture(f=>f.slice(1));projectRef.current=next;setProject(next);dirty.current=true;setFileStatus('Changes not saved to file');}
+  function undo(){if(clipSessionRef.current||!history.length)return;stop();const current=projectRef.current,next=history[history.length-1];setFuture(f=>[current,...f]);setHistory(h=>h.slice(0,-1));projectRef.current=next;setProject(next);dirty.current=true;setFileStatus('Changes not saved to file');}
+  function redo(){if(clipSessionRef.current||!future.length)return;stop();const current=projectRef.current,next=future[0];setHistory(h=>[...h,current]);setFuture(f=>f.slice(1));projectRef.current=next;setProject(next);dirty.current=true;setFileStatus('Changes not saved to file');}
   function setActiveClipSession(next:ClipEditSession|null){clipSessionRef.current=next;setClipSession(next);}
+  function setPendingStaleDraft(next:SavedClipDraft|null){staleClipDraftRef.current=next;setStaleClipDraft(next);}
   function beginClipSession(kind:ClipEditKind,targetId:string){
+    if(clipSessionRef.current)return;
+    if(draftLookup.current){alert('Checking browser recovery for an unfinished clip edit. Try again in a moment.');return;}
+    if(staleClipDraftRef.current){setShowStaleDraft(true);return;}
     stop();const base=projectRef.current;
     clipSessionOpener.current=document.activeElement instanceof HTMLElement?document.activeElement:null;
     setActiveClipSession({kind,targetId,base,draft:clone(base),dirty:false});
@@ -210,7 +218,7 @@ export default function App(){
     const current=clipSessionRef.current;if(!current)return;
     const next={...current,draft:nextProject,targetId:targetId??current.targetId,dirty:true};
     setActiveClipSession(next);
-    void saveClipDraft(next.base,next.draft,next.kind,next.targetId).catch(()=>alert('Could not preserve the unfinished clip edit in browser recovery. Keep this editor open or apply the changes.'));
+    void saveClipDraft(next.base,next.draft,next.kind,next.targetId).catch(error=>alert(error instanceof ClipDraftConflictError?error.message:'Could not preserve the unfinished clip edit in browser recovery. Keep this editor open or apply the changes.'));
   }
   function patchClipSessionElement(patch:Partial<StoryElement>){
     const current=clipSessionRef.current;if(!current)return;
@@ -230,9 +238,11 @@ export default function App(){
   }
   function applyClipSession(){
     const current=clipSessionRef.current;if(!current)return;
+    if(projectRef.current!==current.base||projectRef.current.id!==current.base.id||projectRef.current.updatedAt!==current.base.updatedAt){alert('The project changed while this clip edit was open. The draft was not applied.');return;}
+    setActiveClipSession(null);
     if(current.dirty){stop();commit(current.draft,current.base);}
     if(current.kind==='media')setSelected([current.targetId]);
-    setActiveClipSession(null);setClipLeavePrompt(false);
+    setClipLeavePrompt(false);
     void deleteClipDraft(current.base.id).catch(()=>alert('The applied clip draft could not be removed from browser recovery.'));
     requestAnimationFrame(()=>clipSessionOpener.current?.isConnected&&clipSessionOpener.current.focus());
   }
@@ -243,12 +253,34 @@ export default function App(){
     requestAnimationFrame(()=>clipSessionOpener.current?.isConnected&&clipSessionOpener.current.focus());
   }
   function leaveClipSession(){if(clipSessionRef.current?.dirty)setClipLeavePrompt(true);else discardClipSession();}
-  function replaceProject(p:Project){if(dirty.current)void saveAutosave(projectRef.current).catch(()=>alert("Could not preserve the previous project in browser recovery. Save a project file before closing."));stop();setActiveClipSession(null);setClipLeavePrompt(false);const opened=assignSceneOwnership(p);projectRef.current=opened;projectHandle.current=null;setProject(opened);setSelected([]);setSelectedCaptionId(null);setTimelineItems([]);setHistory([]);setFuture([]);setTime(0);setSplash(false);dirty.current=false;setFileStatus('Opened project');setHiddenSections([]);setKeySelection(null);setSceneDialog(null);
+  function replaceProject(p:Project){if(clipSessionRef.current){alert('Apply or discard the open clip edit before opening another project.');return false;}if(dirty.current)void saveAutosave(projectRef.current).catch(()=>alert("Could not preserve the previous project in browser recovery. Save a project file before closing."));stop();setActiveClipSession(null);setClipLeavePrompt(false);const opened=assignSceneOwnership(p);draftLookup.current=opened;setPendingStaleDraft(null);setShowStaleDraft(false);setStaleDraftIssue('');projectRef.current=opened;projectHandle.current=null;setProject(opened);setSelected([]);setSelectedCaptionId(null);setTimelineItems([]);setHistory([]);setFuture([]);setTime(0);setSplash(false);dirty.current=false;setFileStatus('Opened project');setHiddenSections([]);setKeySelection(null);setSceneDialog(null);
     void loadClipDraft(opened.id).then(saved=>{
       if(!saved||projectRef.current!==opened)return;
       try{setActiveClipSession({kind:saved.kind,targetId:saved.targetId,base:opened,draft:restoreClipDraft(opened,saved),dirty:true});setSelected([saved.targetId]);alert('Recovered an unfinished clip edit. Apply or discard it when ready.');}
-      catch(error){alert(`${error instanceof Error?error.message:String(error)} The draft remains in browser recovery.`);}
-    }).catch(()=>alert('Could not inspect unfinished clip edits in browser recovery.'));
+      catch(error){setPendingStaleDraft(saved);setStaleDraftIssue(error instanceof Error?error.message:String(error));setShowStaleDraft(true);}
+    }).catch(()=>alert('Could not inspect unfinished clip edits in browser recovery.')).finally(()=>{if(draftLookup.current===opened)draftLookup.current=null;});
+    return true;
+  }
+  async function recoverStaleClipDraft(){
+    const saved=staleClipDraftRef.current,source=projectRef.current;
+    if(!saved||source.id!==saved.projectId)return;
+    setStaleDraftBusy(true);
+    try{
+      const {base,draft}=recoverClipDraftCopy(source,saved,uid());
+      await saveAutosave(base);
+      await saveClipDraft(base,draft,saved.kind,saved.targetId);
+      await deleteClipDraft(source.id);
+      setPendingStaleDraft(null);setShowStaleDraft(false);
+      replaceProject(base);
+    }catch(error){alert(`Could not recover the clip draft: ${error instanceof Error?error.message:String(error)} The original draft remains in browser recovery.`);}
+    finally{setStaleDraftBusy(false);}
+  }
+  async function discardStaleClipDraft(){
+    const saved=staleClipDraftRef.current;if(!saved)return;
+    setStaleDraftBusy(true);
+    try{await deleteClipDraft(saved.projectId);setPendingStaleDraft(null);setShowStaleDraft(false);setStaleDraftIssue('');}
+    catch(error){alert(`Could not discard the clip draft: ${error instanceof Error?error.message:String(error)}`);}
+    finally{setStaleDraftBusy(false);}
   }
   useEffect(()=>{if(selected.length)setSelectedCaptionId(null);},[selected]);
   function stop(){previewToken.current++;previewReturn.current=null;setPreviewingAudioId(null);setTailPlaying(false);playRef.current=false;setPlaying(false);setPreparing(false);transport.current.stop();recordingPlayback.current=null;}
@@ -297,6 +329,13 @@ export default function App(){
     focus?.focus();
     return()=>{for(const [child,inert] of previous)(child as HTMLElement).inert=inert;};
   },[!!clipSession,clipLeavePrompt]);
+  useLayoutEffect(()=>{
+    if(!showStaleDraft||!appRoot.current)return;
+    const previous=Array.from(appRoot.current.children).map(child=>[child,(child as HTMLElement).inert] as const);
+    for(const [child] of previous)(child as HTMLElement).inert=!child.classList.contains('stale-draft-backdrop');
+    appRoot.current.querySelector<HTMLElement>('.stale-draft-backdrop button')?.focus();
+    return()=>{for(const [child,inert] of previous)(child as HTMLElement).inert=inert;};
+  },[showStaleDraft]);
 
   function projectFileName(){return safeName(projectRef.current.name)+projectFileExtension;}
   function overwriteChoiceSaved(){try{return localStorage.getItem(`hyde:replace:${projectRef.current.id}`)==='yes';}catch{return false;}}
@@ -310,7 +349,7 @@ export default function App(){
     if(handle.name!==projectFileName()){alert(`Choose ${projectFileName()} to keep the project name and file name in sync.`);return;}
     projectHandle.current=handle;await writeCurrentProject(handle);
   }catch(error){if((error as DOMException)?.name!=='AbortError')alert(String(error));}}
-  async function openFile(file:File,handle?:HydeFileHandle){try{setBusy('Opening project…');const p=await loadProjectFile(file);replaceProject(p);projectHandle.current=handle??null;setProjectFileExtension(file.name.toLowerCase().endsWith('.hy')?'.hy':'.hyde');alert(`Opened ${file.name}`);}catch(e){alert(String(e));}finally{setBusy('');}}
+  async function openFile(file:File,handle?:HydeFileHandle){try{setBusy('Opening project…');const p=await loadProjectFile(file);if(!replaceProject(p))return;projectHandle.current=handle??null;setProjectFileExtension(file.name.toLowerCase().endsWith('.hy')?'.hy':'.hyde');alert(`Opened ${file.name}`);}catch(e){alert(String(e));}finally{setBusy('');}}
   async function chooseOpenProject(){try{const handle=await chooseProjectToOpen();if(handle)await openFile(await handle.getFile(),handle);else fileInput.current?.click();}catch(error){if((error as DOMException)?.name!=='AbortError')alert(String(error));}}
   async function exportAssembly(){if(!selected.length)return;try{const assembly=makeAssembly(project,selected,time);downloadBlob(await saveAssemblyBlob(assembly),safeName(assembly.name)+'.hyproj');alert('Assembly exported with its keyframes and assets.');}catch(e){alert(String(e));}}
   async function insertAssembly(file:File){try{const a=await loadAssemblyFile(file);const current=projectRef.current;const p=insertAssemblyAt(current,a,time);const old=new Set(current.elements.map(e=>e.id));const inserted=p.elements.filter(e=>!old.has(e.id));const sceneId=sceneIdAt(p,time);for(const element of inserted)element.sceneId=sceneId;commit(p);setSelected(inserted.length?[inserted[0].id]:[]);alert(`Imported ${a.name}`);}catch(e){alert(String(e));}}
@@ -743,6 +782,21 @@ export default function App(){
     }catch(e){alert(String(e));recStream.current?.getTracks().forEach(t=>t.stop());void recordingMonitor.current?.close();recordingMonitor.current=null;setRecording(false);stop();finishRecording.current=null;recorder.current=null;}
   }
 
+  useEffect(()=>{const handler=(event:KeyboardEvent)=>{
+    if(!clipSessionRef.current&&!showStaleDraft)return;
+    const target=event.target instanceof Element?event.target:null;
+    if(event.key==='Escape'){
+      event.preventDefault();event.stopImmediatePropagation();
+      if(clipSessionRef.current){if(clipLeavePrompt)setClipLeavePrompt(false);else leaveClipSession();}
+      else setShowStaleDraft(false);
+      return;
+    }
+    if(target?.matches('input,textarea,select,[contenteditable]'))return;
+    const mod=event.ctrlKey||event.metaKey;
+    if(mod&&'szdgcv'.includes(event.key.toLowerCase())||['Delete','Backspace','ArrowLeft','ArrowRight'].includes(event.key)||event.code==='Space'&&!target?.closest('button,a,summary,[role="button"],[role="checkbox"],[role="slider"]')){
+      event.preventDefault();event.stopImmediatePropagation();
+    }
+  };window.addEventListener('keydown',handler,true);return()=>window.removeEventListener('keydown',handler,true);},[clipLeavePrompt,showStaleDraft]);
   useEffect(()=>{function handler(ev:KeyboardEvent){const target=ev.target instanceof Element?ev.target:null;const typing=!!target?.matches('input,textarea,select,[contenteditable]');if(ev.key==='Escape'){setMenu(null);setDialog(null);setContext(null);setTimelineContext(null);setPivotMode(false);return;}if(typing)return;const mod=ev.ctrlKey||ev.metaKey;if(mod&&ev.key.toLowerCase()==='s'){ev.preventDefault();void save();}else if(mod&&ev.key.toLowerCase()==='z'){ev.preventDefault();ev.shiftKey?redo():undo();}else if(mod&&ev.key.toLowerCase()==='d'){ev.preventDefault();duplicate();}else if(mod&&ev.key.toLowerCase()==='g'){ev.preventDefault();groupSelection();}else if(ev.code==='Space'){if(target?.closest('button,a,summary,[role="button"],[role="checkbox"],[role="slider"]'))return;ev.preventDefault();void togglePlay();}else if(ev.key==='Delete'||ev.key==='Backspace'){ev.preventDefault();if(selectedCaptionId)removeCaption(selectedCaptionId);else if(timelineItems.length)deleteTimelineSelection();else if(keySelection)deleteSelectedKeyframe();else removeSelected();}else if(ev.key==='ArrowLeft'||ev.key==='ArrowRight'){ev.preventDefault();if(timelineItems.length){const direction=ev.key==='ArrowRight'?1:-1;const span=visibleTimelineRange[1]-visibleTimelineRange[0];const step=timelineNudgeStep(span,project.fps,snap);try{const next=moveTimelineItems(projectRef.current,timelineItems,direction*step,{ripple});if(next!==projectRef.current)commit(next);}catch(error){alert(error instanceof Error?error.message:String(error));}}else seek(time+(ev.key==='ArrowRight'?1:-1)/project.fps);}}window.addEventListener('keydown',handler);return()=>window.removeEventListener('keydown',handler);});
 
   useEffect(()=>{const handler=(event:KeyboardEvent)=>{
@@ -781,7 +835,7 @@ export default function App(){
       {name==='File'&&<><button onClick={()=>{setSplash(true);setMenu(null);}}><FilePlus2 size={14}/>New / recent project</button><button onClick={()=>{void chooseOpenProject();setMenu(null);}}><FolderOpen size={14}/>Open project…</button><button onClick={()=>{void save();setMenu(null);}}><Save size={14}/>Save project file <kbd>Ctrl S</kbd></button><button onClick={()=>{void save(true);setMenu(null);}}><Save size={14}/>Save as…</button><button onClick={()=>{void downloadProjectCopy();setMenu(null);}}><Download size={14}/>Download project copy</button><hr/><button onClick={()=>{mediaInput.current?.click();setMenu(null);}}>Import media…</button><button onClick={()=>{assemblyInput.current?.click();setMenu(null);}}>Import assembly…</button><button disabled={!selected.length} onClick={()=>{void exportAssembly();setMenu(null);}}>Export selected assembly…</button><hr/><button onClick={()=>{setDialog('export');setMenu(null);}}>Export story…</button></>}
       {name==='Edit'&&<><button disabled={!history.length} onClick={()=>{undo();setMenu(null);}}>Undo <kbd>Ctrl Z</kbd></button><button disabled={!future.length} onClick={()=>{redo();setMenu(null);}}>Redo <kbd>Ctrl Shift Z</kbd></button><hr/><button disabled={!selected.length} onClick={()=>{duplicate();setMenu(null);}}>Duplicate <kbd>Ctrl D</kbd></button><button disabled={!selected.length} onClick={()=>{copySelection();setMenu(null);}}>Copy selection <kbd>Ctrl C</kbd></button><button disabled={!objectClipboard.current} onClick={()=>{pasteSelection();setMenu(null);}}>Paste at playhead <kbd>Ctrl V</kbd></button><button disabled={!selected.length} onClick={()=>{groupSelection();setMenu(null);}}>Create assembly <kbd>Ctrl G</kbd></button><button disabled={!selected.length} onClick={()=>{removeSelected();setMenu(null);}}>{keySelection?'Delete keyframe':'Delete selection'}</button></>}
       {name==='View'&&<><button onClick={()=>{homeStage();setLeftWidth(220);setRightWidth(252);setRightCollapsed(false);setTimelineHeight(Math.max(205,Math.round(window.innerHeight*.29)));setTimelineCollapsed(false);setTimelineScale(1);setMenu(null);}}>Reset workspace view</button><button onClick={()=>{setShowAll(!showAll);setMenu(null);}}>{showAll?'Show active rows only':'Show all timeline rows'}</button><button onClick={()=>{setHiddenSections([]);setMenu(null);}}>Reveal timeline sections</button><button onClick={()=>{setDialog('settings');setMenu(null);}}>Project settings…</button></>}
-      {name==='Help'&&<><button onClick={()=>{setDialog('help');setMenu(null);}}>Guide & shortcuts</button><button onClick={()=>{replaceProject(createExampleProject());setMenu(null);}}>Open example project</button></>}
+      {name==='Help'&&<><button onClick={()=>{setDialog('help');setMenu(null);}}>Guide & shortcuts</button><button onClick={()=>{replaceProject(createPrimaryShowcase());setMenu(null);}}>Open primary showcase</button><button onClick={()=>{replaceProject(createExampleProject());setMenu(null);}}>Open example project</button></>}
     </div>}</div>)}</nav><div className="document-title"><span className="document-dot"/><input aria-label="Project name" value={project.name} onChange={e=>edit(p=>{p.name=e.target.value;})}/><span className="local-pill">LOCAL</span></div><div className="header-right"><Button icon={Undo2} label="Undo (Ctrl Z)" onClick={undo} disabled={!history.length}/><Button icon={Redo2} label="Redo" onClick={redo} disabled={!future.length}/><span className="divider"/><button className="save-button" onClick={()=>void save()}><Save size={14}/>Save</button><button className="primary small" onClick={()=>setDialog('export')}><Download size={14}/>Export</button></div></header>
     <div ref={workspaceBox} className="workspace" style={{gridTemplateColumns:`${leftWidth}px minmax(0,1fr) ${rightCollapsed?36:rightWidth}px`}}>
       <aside className="left-panel"><div className="panel-tabs">{(['layers','assets','library'] as const).map(t=><button className={leftTab===t?'selected':''} onClick={()=>setLeftTab(t)} key={t}>{t==='library'?'Libraries':t[0].toUpperCase()+t.slice(1)}</button>)}</div>
@@ -870,10 +924,11 @@ export default function App(){
         {timelineContext.kind==='clip'&&<><button onClick={()=>{addKeyAt(timelineContext.element!,'x',timelineContext.at??time);addKeyAt(timelineContext.element!,'y',timelineContext.at??time);}}><Diamond size={14}/>Add position keyframes</button><button onClick={()=>{setSelected([timelineContext.element!]);duplicate();setTimelineContext(null);}}><Copy size={14}/>Duplicate object</button><button className="danger" onClick={()=>{setSelected([timelineContext.element!]);edit(p=>{const ids=descendantIds(p,[timelineContext.element!]);p.elements=p.elements.filter(item=>!ids.has(item.id));for(const element of p.elements)if(element.flowAroundId&&ids.has(element.flowAroundId))delete element.flowAroundId;});setSelected([]);setTimelineContext(null);}}><Trash2 size={14}/>Delete object</button></>}
       </div>}
     </section>
-    <footer className="statusbar"><span><i className={saveStatus.includes('failed')?'error-dot':'status-dot'}/>{saveStatus}</span><span>{fileStatus}</span><div className="flex-spacer"/><button onClick={()=>setDialog('help')}><HelpCircle size={12}/>Guide & shortcuts</button><span>Hyde</span></footer>
+    <footer className="statusbar"><span><i className={saveStatus.includes('failed')?'error-dot':'status-dot'}/>{saveStatus}</span><span>{fileStatus}</span><div className="flex-spacer"/>{staleClipDraft&&<button onClick={()=>setShowStaleDraft(true)}>Unfinished clip draft needs review</button>}<button onClick={()=>setDialog('help')}><HelpCircle size={12}/>Guide & shortcuts</button><span>Hyde</span></footer>
     {(notice||busy)&&<div className={`toast ${busy?'busy':''}`} role="status"><span>{busy||notice}</span>{!busy&&<button onClick={()=>setNotice('')} aria-label="Dismiss notification"><X size={14}/></button>}</div>}
     {context&&<div className="context-menu" style={{left:Math.min(context.x,window.innerWidth-220),top:Math.min(context.y,window.innerHeight-210)}} onPointerDown={e=>e.stopPropagation()}><button onClick={duplicate} disabled={!selected.length}><Copy size={14}/>Duplicate</button><button onClick={()=>{copySelection();setContext(null);}} disabled={!selected.length}><Copy size={14}/>Copy selection</button><button onClick={()=>{pasteSelection();setContext(null);}} disabled={!objectClipboard.current}><Copy size={14}/>Paste at playhead</button><button onClick={()=>{groupSelection();setContext(null);}} disabled={!selected.length}><Layers size={14}/>Create assembly</button><button onClick={()=>{void exportAssembly();setContext(null);}} disabled={!selected.length}><Download size={14}/>Export assembly</button><button onClick={()=>{setPivotMode(true);setContext(null);}}><Target size={14}/>Edit pivot</button><hr/><button className="danger" onClick={removeSelected}><Trash2 size={14}/>{keySelection?'Delete keyframe':'Delete selection'}</button></div>}
-    {splash&&<div className="modal-backdrop"><div className="welcome"><div className="welcome-content"><div className="welcome-top"><span className="brand-mark">h<span>•</span></span><Button icon={X} label="Close welcome" onClick={()=>setSplash(false)}/></div><h1>Hyde Story Studio</h1><p>Create a project or open an existing one.</p><button className="welcome-action" onClick={()=>{replaceProject(createProject());setDialog('settings');}}><FilePlus2/><span><strong>New project</strong><small>Choose a size and start editing.</small></span><ChevronRight size={16}/></button><button className="welcome-action" onClick={()=>void chooseOpenProject()}><FolderOpen/><span><strong>Open a project</strong><small>.hyde and .hy files</small></span><ChevronRight size={16}/></button>{recent&&<button className="welcome-action" onClick={()=>replaceProject(recent)}><RotateCcw/><span><strong>Resume {recent.name}</strong><small>Recovered from this browser</small></span><ChevronRight size={16}/></button>}{recentProjects.length>1&&<details className="recent-list"><summary>More recent projects ({recentProjects.length-1})</summary>{recentProjects.slice(1).map(p=><button key={p.id} onClick={()=>replaceProject(p)}><span>{p.name}</span><small>{new Date(p.updatedAt).toLocaleDateString()}</small></button>)}</details>}<div className="welcome-bottom"><button onClick={()=>replaceProject(createExampleProject())}><Sparkles size={14}/>Open example</button><button onClick={()=>{setSplash(false);setDialog('help');}}><HelpCircle size={14}/>Quick guide</button></div></div></div></div>}
+    {splash&&<div className="modal-backdrop"><div className="welcome"><div className="welcome-content"><div className="welcome-top"><span className="brand-mark">h<span>•</span></span><Button icon={X} label="Close welcome" onClick={()=>setSplash(false)}/></div><h1>Hyde Story Studio</h1><p>Create a project or open an existing one.</p><button className="welcome-action" onClick={()=>{replaceProject(createProject());setDialog('settings');}}><FilePlus2/><span><strong>New project</strong><small>Choose a size and start editing.</small></span><ChevronRight size={16}/></button><button className="welcome-action" onClick={()=>void chooseOpenProject()}><FolderOpen/><span><strong>Open a project</strong><small>.hyde and .hy files</small></span><ChevronRight size={16}/></button><button className="welcome-action" onClick={()=>replaceProject(createPrimaryShowcase())}><Sparkles/><span><strong>Explore the lantern keeper</strong><small>Scenes, articulated art, animated text, and sound.</small></span><ChevronRight size={16}/></button>{recent&&<button className="welcome-action" onClick={()=>replaceProject(recent)}><RotateCcw/><span><strong>Resume {recent.name}</strong><small>Recovered from this browser</small></span><ChevronRight size={16}/></button>}{recentProjects.length>1&&<details className="recent-list"><summary>More recent projects ({recentProjects.length-1})</summary>{recentProjects.slice(1).map(p=><button key={p.id} onClick={()=>replaceProject(p)}><span>{p.name}</span><small>{new Date(p.updatedAt).toLocaleDateString()}</small></button>)}</details>}<div className="welcome-bottom"><button onClick={()=>replaceProject(createExampleProject())}><Sparkles size={14}/>Open example</button><button onClick={()=>{setSplash(false);setDialog('help');}}><HelpCircle size={14}/>Quick guide</button></div></div></div></div>}
+    {showStaleDraft&&staleClipDraft&&<div className="modal-backdrop stale-draft-backdrop"><div className="dialog" role="alertdialog" aria-modal="true" aria-label="Unfinished clip edit needs review"><div className="dialog-title"><h2>Unfinished clip edit needs review</h2></div><p className="dialog-description">{staleDraftIssue} The draft remains in browser recovery. Recover it as an unapplied edit in a separate project copy, or discard it. The current project will not change.</p><div className="dialog-actions"><button className="secondary" disabled={staleDraftBusy} onClick={()=>setShowStaleDraft(false)}>Keep for later</button><button className="secondary" disabled={staleDraftBusy} onClick={()=>void discardStaleClipDraft()}>Discard draft</button><button className="primary" disabled={staleDraftBusy} onClick={()=>void recoverStaleClipDraft()}>Recover as separate copy</button></div></div></div>}
     {clipSession&&clipSessionElement&&<div className="modal-backdrop clip-edit-backdrop" onPointerDown={leaveClipSession}>
       <div className="dialog clip-edit-dialog" role="dialog" aria-modal="true" aria-label={clipSessionLabel} onPointerDown={event=>event.stopPropagation()}>
         <div className="dialog-title"><h2>{clipSessionLabel}</h2><Button icon={X} label="Close clip editor" onClick={leaveClipSession}/></div>
