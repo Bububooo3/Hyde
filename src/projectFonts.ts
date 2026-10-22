@@ -32,9 +32,11 @@ export function fontFamilyForAsset(asset: Pick<Asset, 'name'>): string {
 
 interface LoadedFont {
   family: string;
+  name: string;
   source: string;
   references: number;
   face?: FontFace;
+  failed?: boolean;
   ready: Promise<void>;
 }
 
@@ -59,7 +61,7 @@ function acquire(asset: Asset): LoadedFont {
     existing.references++;
     return existing;
   }
-  const font: LoadedFont = { family, source: asset.dataUrl, references: 1, ready: Promise.resolve() };
+  const font: LoadedFont = { family, name: asset.name, source: asset.dataUrl, references: 1, ready: Promise.resolve() };
   loadedFonts.set(family, font);
   font.ready = (async () => {
     try {
@@ -71,6 +73,7 @@ function acquire(asset: Asset): LoadedFont {
         font.face = face;
       }
     } catch (error) {
+      font.failed = true;
       console.warn(`Hyde could not load font ${asset.name}:`, error);
     }
   })();
@@ -80,23 +83,31 @@ function acquire(asset: Asset): LoadedFont {
 /** Keeps a renderer's packaged fonts registered before its first text layout. */
 export class ProjectFontLoader {
   private retained = new Map<string, LoadedFont>();
+  private registrationErrors = new Map<string,string>();
   private disposed = false;
+
+  get warnings(): string[] {
+    return [...this.retained.values()].filter(font=>font.failed).map(font=>`Font ${font.name} could not be loaded; fallback text is shown.`)
+      .concat([...this.registrationErrors.values()]);
+  }
 
   async sync(assets: readonly Asset[]): Promise<boolean> {
     if (this.disposed) return false;
     const desired = new Map<string, Asset>();
     for (const asset of assets) if (asset.kind === 'font') desired.set(fontFamilyForAsset(asset), asset);
+    for (const family of this.registrationErrors.keys()) if(!desired.has(family))this.registrationErrors.delete(family);
     let changed = false;
     for (const [family, font] of this.retained) {
       if (desired.get(family)?.dataUrl === font.source) continue;
       release(font);
       this.retained.delete(family);
+      this.registrationErrors.delete(family);
       changed = true;
     }
     for (const [family, asset] of desired) {
       if (this.retained.has(family)) continue;
-      try { this.retained.set(family, acquire(asset)); }
-      catch (error) { console.warn(`Hyde could not register font ${asset.name}:`, error); }
+      try { this.retained.set(family, acquire(asset));this.registrationErrors.delete(family); }
+      catch (error) { this.registrationErrors.set(family,`Font ${asset.name} could not be registered; fallback text is shown.`);console.warn(`Hyde could not register font ${asset.name}:`, error); }
       changed = true;
     }
     await Promise.all([...this.retained.values()].map(font => font.ready));

@@ -131,3 +131,39 @@ test('poster seeks only the initial image, and viewer volume and looping work',a
     await viewer.close();
   }finally{await rm(directory,{recursive:true,force:true});}
 });
+
+test('exported player controls remain reachable in a touch-sized mobile viewport',async({page,browser})=>{
+  await page.goto('/');
+  await page.getByRole('button',{name:'Open example'}).click();
+  await page.getByRole('button',{name:'Export',exact:true}).click();
+  const downloaded=page.waitForEvent('download');
+  await page.getByRole('button',{name:/Standalone web story/}).click();
+  const files=unzipSync(new Uint8Array(await readFile((await (await downloaded).path())!)));
+  const directory=await mkdtemp(join(tmpdir(),'hyde-mobile-player-'));
+  const mobile=await browser.newContext({viewport:{width:390,height:844},deviceScaleFactor:2,isMobile:true,hasTouch:true});
+  try{
+    const htmlPath=join(directory,'index.html');await writeFile(htmlPath,files['index.html']);
+    const viewer=await mobile.newPage();
+    const errors:string[]=[];viewer.on('pageerror',error=>errors.push(error.message));
+    await viewer.goto(pathToFileURL(htmlPath).href);
+    await expect(viewer.locator('.player-screen canvas')).toHaveCount(1);
+    const geometry=await viewer.evaluate(()=>({viewport:innerWidth,content:document.documentElement.scrollWidth,stage:document.querySelector('.player-frame')!.getBoundingClientRect().toJSON()}));
+    expect(geometry.content).toBeLessThanOrEqual(geometry.viewport+1);
+    expect(geometry.stage.left).toBeGreaterThanOrEqual(0);
+    expect(geometry.stage.right).toBeLessThanOrEqual(geometry.viewport+1);
+    for(const label of ['Start story','Mute','Loop story','Captions','Fullscreen']){
+      const button=viewer.getByRole('button',{name:label,exact:true});
+      await expect(button).toBeVisible();
+      const box=await button.boundingBox();expect(box).toBeTruthy();
+      expect(box!.width).toBeGreaterThanOrEqual(36);
+      expect(box!.x+box!.width).toBeLessThanOrEqual(geometry.viewport+1);
+    }
+    await viewer.getByRole('button',{name:'Start story'}).tap();
+    await expect(viewer.getByRole('button',{name:'Pause',exact:true})).toBeVisible();
+    await viewer.getByRole('slider',{name:'Playback position'}).fill('1');
+    await expect(viewer.locator('.player-time')).toContainText('1.0');
+    await viewer.getByRole('button',{name:'Loop story'}).tap();
+    await expect(viewer.getByRole('button',{name:'Loop story'})).toHaveAttribute('aria-pressed','true');
+    expect(errors).toEqual([]);
+  }finally{await mobile.close();await rm(directory,{recursive:true,force:true});}
+});

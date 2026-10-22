@@ -4,18 +4,29 @@ import { evaluateProject } from './engine';
 import { StageRenderer } from './render';
 import {sceneFrameMinimumScale,sceneFrameSvgTransform} from './sceneFrame';
 
-export function Stage({project,time,onError,editorOverscan=0}: {project:Project;time:number;onError?:(message:string)=>void;editorOverscan?:number}) {
+export function Stage({project,time,onError,onWarning,editorOverscan=0}: {project:Project;time:number;onError?:(message:string)=>void;onWarning?:(message:string)=>void;editorOverscan?:number}) {
   const host = useRef<HTMLDivElement>(null);
   const renderer = useRef<StageRenderer|null>(null);
   const latest = useRef({project,time}); latest.current={project,time};
   const last = useRef<{project:Project;time:number}|null>(null);
+  const reportedWarnings=useRef('');
   useEffect(()=>{
     let stopped=false, raf=0;
     async function loop() {
       if(stopped) return;
       const next=latest.current;
       if(renderer.current && (last.current?.project!==next.project || last.current.time!==next.time)) {
-        try { await renderer.current.render(next.project,evaluateProject(next.project,next.time),next.time); last.current=next; }
+        try {
+          await renderer.current.render(next.project,evaluateProject(next.project,next.time),next.time);
+          last.current=next;
+          const warnings=renderer.current.warnings;
+          const signature=warnings.length?`${next.project.id}:${warnings.join('|')}`:'';
+          if(signature!==reportedWarnings.current&&latest.current.project===next.project){
+            if(onWarning)onWarning(warnings.join(' '));
+            else if(signature)onError?.(warnings.join(' '));
+          }
+          reportedWarnings.current=signature;
+        }
         catch(e) {onError?.(e instanceof Error?e.message:'Stage render failed');}
       }
       if(!stopped) raf=requestAnimationFrame(()=>{void loop();});

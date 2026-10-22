@@ -19,7 +19,7 @@ function loadStory(): Promise<Project> {
 }
 
 function Player(){
-  const [project,setProject]=useState<Project|null>(null),[error,setError]=useState(''),[time,setTime]=useState(0),[playing,setPlaying]=useState(false),[captions,setCaptions]=useState(true),[loading,setLoading]=useState(false),[fullscreen,setFullscreen]=useState(false),[started,setStarted]=useState(false),[loop,setLoop]=useState(false),[volume,setVolume]=useState(1);
+  const [project,setProject]=useState<Project|null>(null),[error,setError]=useState(''),[warning,setWarning]=useState(''),[time,setTime]=useState(0),[playing,setPlaying]=useState(false),[captions,setCaptions]=useState(true),[loading,setLoading]=useState(false),[fullscreen,setFullscreen]=useState(false),[started,setStarted]=useState(false),[loop,setLoop]=useState(false),[volume,setVolume]=useState(1);
   const audio=useRef(new AudioTransport()),frame=useRef<HTMLDivElement>(null),operation=useRef(0),lastAudibleVolume=useRef(1);
   useEffect(()=>{loadStory().then(story=>{setProject(story);setLoop(webPlayerSettings(story).loop);}).catch(e=>setError(String(e)));return()=>{operation.current++;audio.current.destroy();};},[]);
   useEffect(()=>{audio.current.setOutputVolume(volume);},[volume]);
@@ -66,7 +66,7 @@ function Player(){
   return <main className="player">
     <div className="player-heading"><strong>{project.name}</strong></div>
     <div ref={frame} className="player-frame" style={{'--stage-aspect':String(project.width/project.height)} as React.CSSProperties}>
-      <div className="player-screen" style={{aspectRatio:`${project.width}/${project.height}`}}><Stage project={project} time={displayTime} onError={setError}/>{captions&&caption&&<div className="captions">{caption.text}</div>}
+      <div className="player-screen" style={{aspectRatio:`${project.width}/${project.height}`}}><Stage project={project} time={displayTime} onError={setError} onWarning={setWarning}/>{captions&&caption&&<div className="captions">{caption.text}</div>}
         {(!started||!settings.controlsVisible)&&<button className={`player-stage-toggle ${started?'player-stage-toggle-subtle':''}`} aria-label={!started?'Start story':playing?'Pause story':time>=project.duration?'Replay story':'Play story'} title={!started?'Start story':playing?'Pause story':'Play story'} onClick={()=>void play()} disabled={loading}><PlaybackIcon size={30} fill={playing||loading?'none':'currentColor'}/></button>}
       </div>
       {settings.showFullscreen&&<button className="player-icon-button player-fullscreen-exit" aria-label="Exit fullscreen" title="Exit fullscreen" onClick={()=>void toggleFullscreen()}><Minimize size={20}/></button>}
@@ -81,6 +81,7 @@ function Player(){
       {settings.showFullscreen&&<button className="player-icon-button" aria-label={fullscreen?'Exit fullscreen':'Fullscreen'} title={fullscreen?'Exit fullscreen':'Fullscreen'} onClick={()=>void toggleFullscreen()}>{fullscreen?<Minimize size={20}/>:<Maximize size={20}/>}</button>}
     </div>}
     {loading&&<p role="status" className="player-status">Preparing playback…</p>}
+    {warning&&<p role="alert">{warning}</p>}
     {error&&<p role="alert">{error}</p>}
   </main>;
 }

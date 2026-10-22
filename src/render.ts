@@ -160,6 +160,7 @@ export class StageRenderer {
   private readonly images = new Map<string, CachedResource>();
   private readonly videos = new Map<string, CachedResource>();
   private readonly fonts = new ProjectFontLoader();
+  private frameWarnings: string[] = [];
   private renderQueue: Promise<void> = Promise.resolve();
   private disposed = false;
   private projectId = '';
@@ -202,6 +203,7 @@ export class StageRenderer {
   }
 
   get canvas(): HTMLCanvasElement { return this.app.canvas as HTMLCanvasElement; }
+  get warnings(): readonly string[] { return this.frameWarnings; }
 
   resize(width: number, height: number): void {
     if (this.disposed) return;
@@ -633,6 +635,13 @@ export class StageRenderer {
       return resource;
     }));
     if (this.disposed) return;
+    this.frameWarnings=[...this.fonts.warnings];
+    active.forEach((element,index)=>{
+      if(!element.assetId)return;
+      const asset=assets.get(element.assetId);
+      if(!asset)this.frameWarnings.push(`Media for ${element.name} is missing; a placeholder is shown.`);
+      else if((asset.kind==='image'||asset.kind==='video')&&resources[index]?.failed)this.frameWarnings.push(`Media ${asset.name} could not be loaded; a placeholder is shown.`);
+    });
     for (const node of this.nodes.values()) node.root.visible = false;
     active.forEach((element, index) => {
       let node = this.nodes.get(element.id);
