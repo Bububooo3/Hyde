@@ -60,6 +60,7 @@ export function validateDecompositionDocument(document: unknown, sourceBytes?: M
       seen.add(parent); parent = document.parts.find(other => other.id === parent)?.parentId;
     }
     if (item.attachment && (!['fixed', 'hinge', 'slider'].includes(item.attachment.type) || !item.parentId || item.attachment.min !== undefined && !Number.isFinite(item.attachment.min) || item.attachment.max !== undefined && !Number.isFinite(item.attachment.max) || item.attachment.min !== undefined && item.attachment.max !== undefined && item.attachment.min > item.attachment.max)) throw new Error('INVALID_JOINT_LIMIT');
+    if (item.attachmentLocked !== undefined && typeof item.attachmentLocked !== 'boolean') throw new Error('Invalid attachment lock state.');
     if (item.attachmentProposal !== undefined) {
       const proposal = item.attachmentProposal;
       if (!record(proposal) || !partIds.has(String(proposal.parentId)) || proposal.parentId === item.id || !['fixed', 'hinge'].includes(String(proposal.type)) || !record(proposal.pivot)

@@ -1,9 +1,12 @@
 // @vitest-environment node
 import { expect, it } from 'vitest';
 import { runBrowserTask } from '../cliBrowserRunner';
+import { evaluateProject } from '../engine';
 import { makeSyntheticFixture } from '../../tests/decomposerSyntheticFixtures';
 import { DecompositionSession } from './session';
 import { compareNativeRender } from './quality';
+import { decodePng } from './image';
+import { poseNativeDecomposition } from './pose';
 
 it('proposes contact pivots and reviewable attachments without changing the primary pose or inventing motion', async () => {
   const fixture = makeSyntheticFixture('articulated-character');
@@ -32,12 +35,36 @@ it('proposes contact pivots and reviewable attachments without changing the prim
   expect(regenerated.parts.find(part => part.id === rejected.id)?.attachmentProposal).toBeUndefined();
   const reopened = await DecompositionSession.openDocument(await session.saveDocument());
   expect(reopened.snapshot().parts.find(part => part.id === chosen.id)?.pivot).toEqual(proposal.pivot);
+  expect((await reopened.execute({ expectedRevision: reopened.revision, edits: [{ op: 'annotation.lock', partId: chosen.id, target: 'attachment', locked: true }] })).ok).toBe(true);
+  const lockedRevision = reopened.revision;
+  expect((await reopened.execute({ expectedRevision: lockedRevision, edits: [{ op: 'part.setAttachment', partId: chosen.id, type: 'fixed', approved: true }] })).ok).toBe(false);
+  expect(reopened.revision).toBe(lockedRevision);
+  await reopened.analyze();
+  expect(reopened.snapshot().parts.find(part => part.id === chosen.id)).toMatchObject({ attachmentLocked: true, parentId: torso, attachment: { type: 'hinge' } });
   const native = await reopened.exportHyde({ format: 'hyde' });
   const nativeChild = native.project.elements.find(element => element.id === native.mapping.partIds[chosen.id])!;
   expect(nativeChild.attachment?.type).toBe('hinge');
   expect(native.project.elements.every(element => element.tracks.length === 0 && !element.assemblyClips?.length && !element.motionBehaviors?.length)).toBe(true);
+  const chosenRegion = reopened.snapshot().regions.find(region => region.partId === chosen.id && region.geometry.status === 'visible')!;
+  const nativeRegionId = native.mapping.regionIds[chosenRegion.id];
+  const neutralChild = evaluateProject(native.project, 0).find(element => element.id === nativeRegionId)!;
+  const posed = poseNativeDecomposition(native, chosen.id, 25);
+  const movedChild = evaluateProject(posed.project, 0).find(element => element.id === nativeRegionId)!;
+  expect(Math.hypot(movedChild.x - neutralChild.x, movedChild.y - neutralChild.y)).toBeGreaterThan(.1);
+  expect(nativeChild.rotation).toBe(0);
+  expect(posed.project.elements.every(element => element.tracks.length === 0 && !element.assemblyClips?.length)).toBe(true);
+  const sliderProject = structuredClone(native.project);
+  const sliderGroup = sliderProject.elements.find(element => element.id === nativeChild.id)!;
+  sliderGroup.attachment = { ...sliderGroup.attachment!, type: 'slider', min: -3, max: 4 };
+  const slide = poseNativeDecomposition({ project: sliderProject, mapping: native.mapping }, chosen.id, 20);
+  expect(slide.appliedValue).toBe(4);
+  expect(slide.project.elements.find(element => element.id === nativeChild.id)!.x).toBeCloseTo(sliderGroup.x + 4);
+  expect(sliderGroup.x).toBe(nativeChild.x);
   if (process.env.HYDE_TEST_BROWSER) {
     const frame = await runBrowserTask(native.project, { kind: 'preview', options: { timeSeconds: 0, width: fixture.image.width, height: fixture.image.height, format: 'png' } });
+    const posedFrame = await runBrowserTask(posed.project, { kind: 'preview', options: { timeSeconds: 0, width: fixture.image.width, height: fixture.image.height, format: 'png' } });
+    const neutralPixels = decodePng(frame.bytes).rgba, posedPixels = decodePng(posedFrame.bytes).rgba;
+    expect(posedPixels.some((channel, at) => channel !== neutralPixels[at])).toBe(true);
     const quality = compareNativeRender(fixture.image, frame.bytes, reopened.snapshot());
     expect(quality.silhouette.iou).toBeGreaterThan(.95);
     expect(quality.color.meanAbsoluteSrgbChannelError!).toBeLessThan(.05);

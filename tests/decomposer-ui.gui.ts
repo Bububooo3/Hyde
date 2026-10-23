@@ -101,6 +101,14 @@ test('animation-ready attachment proposal can be reviewed and accepted in the ed
   await expect(page.getByText('Suggested hinge attachment · unapproved')).toHaveCount(0);
   await expect(page.getByLabel('Attachment type')).toHaveValue('hinge');
   await expect(page.getByLabel('Parent part')).not.toHaveValue('');
+  await page.getByLabel('Lock attachment').click();
+  await expect(page.getByLabel('Lock attachment')).toBeChecked();
+  await expect(page.getByLabel('Parent part')).toBeDisabled();
+  await expect(page.getByLabel('Attachment type')).toBeDisabled();
+  await page.getByLabel('Temporary joint offset').fill('25');
+  await page.getByRole('button', { name: 'Preview temporary pose in Hyde' }).click();
+  await expect(page.getByAltText('Temporary Hyde joint pose')).toBeVisible();
+  await expect(page.getByRole('status')).toContainText('No motion or pose was saved.');
   const savePromise = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Save source' }).click();
   const saved = await savePromise;
@@ -108,6 +116,7 @@ test('animation-ready attachment proposal can be reviewed and accepted in the ed
   await expect(page.getByRole('status')).toContainText('Opened articulated.hydecomp');
   await page.locator('.left-pane .scroll-list').nth(1).locator('.row').filter({ hasText: partName! }).click();
   await expect(page.getByLabel('Attachment type')).toHaveValue('hinge');
+  await expect(page.getByLabel('Lock attachment')).toBeChecked();
 });
 
 test('guided seed and path controls preserve editable history', async ({ page }) => {

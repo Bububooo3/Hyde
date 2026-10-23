@@ -30,7 +30,7 @@ export type DecompositionEdit =
   | { op: 'reference.correspond'; correspondence: CorrespondenceRecord }
   | { op: 'reference.setTransform'; sourceId: string; transformToPrimary?: [number, number, number, number, number, number] }
   | { op: 'reference.alignFromLandmarks'; sourceId: string; landmarkIds: string[] }
-  | { op: 'annotation.lock'; regionId?: string; partId?: string; target: 'mask' | 'geometry' | 'part' | 'pivot' | 'transform'; locked: boolean }
+  | { op: 'annotation.lock'; regionId?: string; partId?: string; target: 'mask' | 'geometry' | 'part' | 'pivot' | 'transform' | 'attachment'; locked: boolean }
   | { op: 'regenerate.selected'; regionIds: string[]; settings?: Partial<ReconstructionSettings> };
 
 export interface DecompositionEditResult {
@@ -387,7 +387,7 @@ export class DecompositionSession {
     candidate.parts = [...nextParts.values()];
     refreshPartBounds(candidate);
     const attachments = proposePartAttachments(candidate, masks);
-    for (const part of candidate.parts) part.attachmentProposal = attachments.proposals.get(part.id);
+    for (const part of candidate.parts) if (!part.attachmentLocked) part.attachmentProposal = attachments.proposals.get(part.id);
     candidate.diagnostics.push(...attachments.diagnostics);
     const liveIds = new Set(candidate.regions.filter(active).map(region => region.id));
     const storedIds = new Set(candidate.regions.map(region => region.id));
@@ -571,15 +571,17 @@ export class DecompositionSession {
           target.partId = owner.id; if (target.geometry.status === 'inferred') target.generationStatus = 'manual'; if (!owner.regionIds.includes(target.id)) owner.regionIds.push(target.id); changed.add(target.id); changed.add(owner.id);
         } else if (edit.op === 'part.rename') { part(edit.partId).name = edit.name; changed.add(edit.partId); }
         else if (edit.op === 'part.setPivot') { const target = part(edit.partId); if (target.pivotLocked) fail('Pivot is locked.'); finite(edit.x); finite(edit.y); target.pivot = { x: edit.x, y: edit.y }; changed.add(target.id); }
-        else if (edit.op === 'part.reparent') { const target = part(edit.partId); target.parentId = edit.parentId ? part(edit.parentId).id : undefined; target.attachmentProposal = undefined; if (!target.parentId) { target.attachment = undefined; target.attachmentApproved = false; } changed.add(target.id); }
-        else if (edit.op === 'part.setAttachment') { const target = part(edit.partId); if (edit.type && !target.parentId) fail('Attachment needs a parent part.'); target.attachment = edit.type ? { type: edit.type, min: edit.min, max: edit.max } : undefined; target.attachmentApproved = Boolean(edit.approved); target.attachmentProposal = undefined; changed.add(target.id); }
+        else if (edit.op === 'part.reparent') { const target = part(edit.partId); if (target.attachmentLocked) fail('Attachment is locked.'); target.parentId = edit.parentId ? part(edit.parentId).id : undefined; target.attachmentProposal = undefined; if (!target.parentId) { target.attachment = undefined; target.attachmentApproved = false; } changed.add(target.id); }
+        else if (edit.op === 'part.setAttachment') { const target = part(edit.partId); if (target.attachmentLocked) fail('Attachment is locked.'); if (edit.type && !target.parentId) fail('Attachment needs a parent part.'); target.attachment = edit.type ? { type: edit.type, min: edit.min, max: edit.max } : undefined; target.attachmentApproved = Boolean(edit.approved); target.attachmentProposal = undefined; changed.add(target.id); }
         else if (edit.op === 'part.acceptAttachmentProposal') {
           const target = part(edit.partId), proposal = target.attachmentProposal ?? fail('No current attachment proposal exists for this part.');
+          if (target.attachmentLocked) fail('Attachment is locked.');
           target.parentId = part(proposal.parentId).id; target.attachment = { type: proposal.type }; target.attachmentApproved = true;
           if (!target.pivotLocked) target.pivot = structuredClone(proposal.pivot);
           target.attachmentProposal = undefined; target.attachmentProposalRejected = false; changed.add(target.id);
         } else if (edit.op === 'part.rejectAttachmentProposal') {
           const target = part(edit.partId);
+          if (target.attachmentLocked) fail('Attachment is locked.');
           if (!target.attachmentProposal) fail('No current attachment proposal exists for this part.');
           target.attachmentProposal = undefined; target.attachmentProposalRejected = true; changed.add(target.id);
         }
@@ -611,6 +613,7 @@ export class DecompositionSession {
             const target = part(edit.partId);
             if (edit.target === 'pivot') target.pivotLocked = edit.locked;
             else if (edit.target === 'transform') target.transformLocked = edit.locked;
+            else if (edit.target === 'attachment') target.attachmentLocked = edit.locked;
             else fail('Invalid part lock target.'); changed.add(target.id);
           } else fail('Lock needs a region or part.');
         } else if (edit.op === 'regenerate.selected') {
@@ -628,7 +631,7 @@ export class DecompositionSession {
         } else fail(`OPERATION_UNSUPPORTED: Unknown decomposition edit ${(edit as { op?: string }).op ?? '<missing>'}.`);
       }
       if (request.edits.some(edit => ['region.refineMask', 'region.seedMask', 'region.split', 'region.merge', 'part.create', 'part.assignRegion'].includes(edit.op)))
-        for (const item of candidate.parts) if (!item.attachmentApproved) item.attachmentProposal = undefined;
+        for (const item of candidate.parts) if (!item.attachmentApproved && !item.attachmentLocked) item.attachmentProposal = undefined;
       refreshPartBounds(candidate);
       candidate.updatedAt = new Date().toISOString();
       validateDecompositionDocument(candidate, this.sourceBytes, masks, new Map([...this.images].map(([id, image]) => [id, image.rgba])));

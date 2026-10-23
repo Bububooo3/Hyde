@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, PointerEvent as ReactPointerEvent } from 'react';
 import type { DecompositionDocumentV1, DecompositionEdit, PartRecord, RegionMask, RegionRecord } from '../decomposer';
+import { poseNativeDecomposition } from '../decomposer/pose';
 import type { ReconstructionQualityReport } from '../decomposer/quality';
 import type { Project, ShapePath } from '../model';
 import { removePathPoint, setPathHandle, splitPathSegment } from '../shapePath';
@@ -124,6 +125,7 @@ export default function App() {
   const [busy, setBusy] = useState(false), [status, setStatus] = useState('Import one or more illustrations to begin.');
   const [exportFormat, setExportFormat] = useState<'hyde' | 'hyproj'>('hyproj'), [allowHoleApproximation, setAllowHoleApproximation] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string>();
+  const [posePreview, setPosePreview] = useState(false), [poseOffset, setPoseOffset] = useState(0);
   const previewUrlRef = useRef<string | undefined>(undefined);
   const [residualUrl, setResidualUrl] = useState<string>();
   const residualUrlRef = useRef<string | undefined>(undefined);
@@ -140,7 +142,7 @@ export default function App() {
     if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
     if (residualUrlRef.current) URL.revokeObjectURL(residualUrlRef.current);
     previewUrlRef.current = undefined; residualUrlRef.current = undefined;
-    setPreviewUrl(undefined); setResidualUrl(undefined); setNativeQuality(undefined); setShowResidual(false);
+    setPreviewUrl(undefined); setResidualUrl(undefined); setNativeQuality(undefined); setShowResidual(false); setPosePreview(false);
   }, []);
   useEffect(() => () => {
     client.current.close();
@@ -155,6 +157,7 @@ export default function App() {
   const selectedRegion = documentModel?.regions.find(item => item.id === selectedRegionId && active(item));
   const selectedSuppressedRegion = documentModel?.regions.find(item => item.id === selectedRegionId && current(item) && item.suppressed);
   const selectedPart = documentModel?.parts.find(item => item.id === selectedPartId) ?? documentModel?.parts.find(item => item.id === selectedRegion?.partId);
+  useEffect(() => setPoseOffset(0), [selectedPart?.id]);
   const selectedPath = selectedRegion?.geometry.manualPath ?? selectedRegion?.geometry.generatedPath;
   const primarySourceId = documentModel?.sources.find(item => item.role === 'primary')?.id;
   const alignmentLandmarkIds = documentModel?.correspondences.filter(item => item.kind === 'landmark' && item.accepted && primarySourceId && source && item.sourceIds.includes(primarySourceId) && item.sourceIds.includes(source.id)).map(item => item.id) ?? [];
@@ -230,21 +233,25 @@ export default function App() {
     catch (error) { setStatus(error instanceof Error ? error.message : 'Save failed.'); }
     finally { setBusy(false); }
   }
-  async function nativeExport(preview = false) {
+  async function nativeExport(preview = false, pose?: { partId: string; value: number }) {
     if (!documentModel || busy) return;
     setBusy(true); setStatus(preview ? 'Rendering the native Hyde project…' : `Exporting editable .${exportFormat}…`);
     try {
-      const result = await client.current.call<{ bytes: Uint8Array; project: Project; warnings: { message: string }[] }>('export', { options: { format: preview ? 'hyde' : exportFormat, allowHoleApproximation } });
+      const result = await client.current.call<{ bytes: Uint8Array; project: Project; mapping: { partIds: Record<string, string>; regionIds: Record<string, string> }; warnings: { message: string }[] }>('export', { options: { format: preview ? 'hyde' : exportFormat, allowHoleApproximation } });
       if (preview) {
         clearNativePreview();
+        const posed = pose ? poseNativeDecomposition(result, pose.partId, pose.value) : undefined;
+        const renderProject = posed?.project ?? result.project;
         const { HydeRenderHost } = await import('../browserHost');
-        const host = await HydeRenderHost.connect(() => result.project);
+        const host = await HydeRenderHost.connect(() => renderProject);
         try {
-          const frame = await host.renderFrame({ timeSeconds: 0, width: result.project.width, height: result.project.height });
+          const frame = await host.renderFrame({ timeSeconds: 0, width: renderProject.width, height: renderProject.height });
           const url = URL.createObjectURL(new Blob([frame.bytes as BlobPart], { type: frame.mime }));
           previewUrlRef.current = url;
           setPreviewUrl(url);
-          try {
+          setPosePreview(Boolean(posed));
+          if (posed) setStatus(`Temporary Hyde joint pose ready at ${posed.appliedValue.toFixed(1)} ${renderProject.elements.find(item => item.id === result.mapping.partIds[pose!.partId])?.attachment?.type === 'hinge' ? 'degrees' : 'pixels'}. No motion or pose was saved.`);
+          else try {
             const comparison = await client.current.call<{ report: NativeQualityReport; overlayPng: Uint8Array }>('native.compare', { renderedPng: frame.bytes });
             const overlayUrl = URL.createObjectURL(new Blob([comparison.overlayPng as BlobPart], { type: 'image/png' }));
             residualUrlRef.current = overlayUrl;
@@ -522,8 +529,9 @@ export default function App() {
           {(view !== 'original') && <div className="canvas-card"><div className="canvas-label">{view === 'overlay' ? 'Overlay' : 'Reconstruction'} · source masks and geometry</div><canvas ref={reconstructionCanvas} style={canvasZoomStyle} className={`interactive-canvas${zoom !== 'fit' ? ' zoomed' : ''}`} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}/></div>}
         </> : <div className="empty-state"><div className="empty-art">◇</div><h1>Turn illustrations into editable Hyde art</h1><p>Import a stylized image to get an automatic first pass. Refine regions, inspect uncertainty, and export a native project or assembly.</p><label className="button accent">Choose images<input type="file" accept="image/png,image/jpeg,image/webp" multiple hidden onChange={importImages}/></label></div>}</div>
         {previewUrl && <div className="native-preview">
-          <div className="section-heading"><h3>Native Hyde render · primary reference</h3><button onClick={clearNativePreview}>Close</button></div>
-          <div className="native-preview-visual"><img alt="Native Hyde render of current export" src={previewUrl}/>{showResidual && residualUrl && <img className="residual-image" alt="Native residual overlay" src={residualUrl}/>}</div>
+          <div className="section-heading"><h3>{posePreview ? 'Temporary Hyde joint pose' : 'Native Hyde render · primary reference'}</h3><button onClick={clearNativePreview}>Close</button></div>
+          <div className="native-preview-visual"><img alt={posePreview ? 'Temporary Hyde joint pose' : 'Native Hyde render of current export'} src={previewUrl}/>{showResidual && residualUrl && <img className="residual-image" alt="Native residual overlay" src={residualUrl}/>}</div>
+          {posePreview && <p className="hint">This render uses a disposable copy of the native Hyde project. The saved decomposition, exported assembly and construction pose have not changed.</p>}
           {nativeQuality && <>
             <div className="native-metrics" aria-label="Native quality metrics">
               <div><strong>Silhouette IoU</strong><span>{percentage(nativeQuality.silhouette.iou)}</span><small>Boundary mean {nativeQuality.boundary.meanDistancePixels === null ? 'n/a' : `${nativeQuality.boundary.meanDistancePixels.toFixed(2)} px`}</small></div>
@@ -566,12 +574,14 @@ export default function App() {
           {alternateRegions.length > 0 && primaryRegions.some(item => item.id === selectedRegion.id) && <><label>Match alternate region<select aria-label="Alternate match" value={matchTarget ?? ''} onChange={event => setMatchTarget(event.target.value)}><option value="">Choose region</option>{alternateRegions.map(item => <option key={item.id} value={item.id}>{item.id}</option>)}</select></label><button disabled={!matchTarget || busy} onClick={() => { const other = alternateRegions.find(item => item.id === matchTarget); if (other) void perform([{ op: 'reference.correspond', correspondence: { id: `${selectedRegion.id}_manual_${other.id}`, sourceIds: [selectedRegion.sourceId, other.sourceId], regionIds: [selectedRegion.id, other.id], kind: 'same-part', origin: 'manual', evidence: ['user confirmed'], accepted: true } }]); }}>Confirm match</button></>}
         </div> : selectedSuppressedRegion ? <div className="inspector"><p className="identity">{selectedSuppressedRegion.id}</p><p className="hint">This inferred region is suppressed. Its original mask and path remain in the editable source document.</p><button disabled={busy} onClick={() => void perform([{ op: 'region.setSuppressed', regionId: selectedSuppressedRegion.id, suppressed: false }])}>Restore inferred region</button></div> : <p className="hint">Select a region on the canvas or in the outliner.</p>}
         <div className="divider"/><h2>Selected part</h2>{selectedPart ? <div className="inspector"><label>Name<input aria-label="Part name" key={`${selectedPart.id}-${selectedPart.name}`} defaultValue={selectedPart.name} onBlur={event => { if (event.target.value !== selectedPart.name) void perform([{ op: 'part.rename', partId: selectedPart.id, name: event.target.value }]); }}/></label>
-          {selectedPart.attachmentProposal && <div className="inferred-callout attachment-proposal"><strong>Suggested {selectedPart.attachmentProposal.type} attachment · unapproved</strong><span>Parent: {documentModel?.parts.find(part => part.id === selectedPart.attachmentProposal?.parentId)?.name ?? selectedPart.attachmentProposal.parentId}. Contact pivot: {selectedPart.attachmentProposal.pivot.x.toFixed(1)}, {selectedPart.attachmentProposal.pivot.y.toFixed(1)} px.</span><span>{selectedPart.attachmentProposal.evidence.join('; ')}{selectedPart.attachmentProposal.ambiguity ? ` ${selectedPart.attachmentProposal.ambiguity}` : ''}</span><div className="inline-actions"><button disabled={busy} onClick={() => void perform([{ op: 'part.acceptAttachmentProposal', partId: selectedPart.id }])}>Accept attachment proposal</button><button disabled={busy} onClick={() => void perform([{ op: 'part.rejectAttachmentProposal', partId: selectedPart.id }])}>Reject attachment proposal</button></div></div>}
+          {selectedPart.attachmentProposal && <div className="inferred-callout attachment-proposal"><strong>Suggested {selectedPart.attachmentProposal.type} attachment · unapproved</strong><span>Parent: {documentModel?.parts.find(part => part.id === selectedPart.attachmentProposal?.parentId)?.name ?? selectedPart.attachmentProposal.parentId}. Contact pivot: {selectedPart.attachmentProposal.pivot.x.toFixed(1)}, {selectedPart.attachmentProposal.pivot.y.toFixed(1)} px.</span><span>{selectedPart.attachmentProposal.evidence.join('; ')}{selectedPart.attachmentProposal.ambiguity ? ` ${selectedPart.attachmentProposal.ambiguity}` : ''}</span><div className="inline-actions"><button disabled={busy || selectedPart.attachmentLocked} onClick={() => void perform([{ op: 'part.acceptAttachmentProposal', partId: selectedPart.id }])}>Accept attachment proposal</button><button disabled={busy || selectedPart.attachmentLocked} onClick={() => void perform([{ op: 'part.rejectAttachmentProposal', partId: selectedPart.id }])}>Reject attachment proposal</button></div></div>}
           <div className="columns"><label>Pivot X<input aria-label="Pivot X" type="number" key={`${selectedPart.id}-x-${selectedPart.pivot.x}`} defaultValue={selectedPart.pivot.x} onBlur={event => void perform([{ op: 'part.setPivot', partId: selectedPart.id, x: Number(event.target.value), y: selectedPart.pivot.y }])}/></label><label>Pivot Y<input aria-label="Pivot Y" type="number" key={`${selectedPart.id}-y-${selectedPart.pivot.y}`} defaultValue={selectedPart.pivot.y} onBlur={event => void perform([{ op: 'part.setPivot', partId: selectedPart.id, x: selectedPart.pivot.x, y: Number(event.target.value) }])}/></label></div>
           <label><input type="checkbox" checked={selectedPart.pivotLocked} onChange={event => void perform([{ op: 'annotation.lock', partId: selectedPart.id, target: 'pivot', locked: event.target.checked }])}/> Lock pivot</label>
-          <label>Parent part<select aria-label="Parent part" value={selectedPart.parentId ?? ''} onChange={event => void perform([{ op: 'part.reparent', partId: selectedPart.id, parentId: event.target.value || undefined }])}><option value="">Assembly root</option>{documentModel?.parts.filter(item => item.id !== selectedPart.id).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-          <label>Attachment<select aria-label="Attachment type" value={selectedPart.attachment?.type ?? 'none'} onChange={event => void perform([{ op: 'part.setAttachment', partId: selectedPart.id, type: event.target.value === 'none' ? undefined : event.target.value as 'fixed' | 'hinge' | 'slider', approved: event.target.value !== 'none' }])}><option value="none">Unattached</option><option value="fixed">Fixed</option><option value="hinge">Hinge</option><option value="slider">Slider</option></select></label>
-          {selectedPart.attachment && selectedPart.attachment.type !== 'fixed' && <div className="columns"><label>Min<input aria-label="Joint minimum" type="number" defaultValue={selectedPart.attachment.min ?? ''} onBlur={event => void perform([{ op: 'part.setAttachment', partId: selectedPart.id, type: selectedPart.attachment!.type, min: event.target.value === '' ? undefined : Number(event.target.value), max: selectedPart.attachment!.max, approved: true }])}/></label><label>Max<input aria-label="Joint maximum" type="number" defaultValue={selectedPart.attachment.max ?? ''} onBlur={event => void perform([{ op: 'part.setAttachment', partId: selectedPart.id, type: selectedPart.attachment!.type, min: selectedPart.attachment!.min, max: event.target.value === '' ? undefined : Number(event.target.value), approved: true }])}/></label></div>}
+          <label><input aria-label="Lock attachment" type="checkbox" checked={Boolean(selectedPart.attachmentLocked)} onChange={event => void perform([{ op: 'annotation.lock', partId: selectedPart.id, target: 'attachment', locked: event.target.checked }])}/> Lock attachment</label>
+          <label>Parent part<select aria-label="Parent part" disabled={selectedPart.attachmentLocked} value={selectedPart.parentId ?? ''} onChange={event => void perform([{ op: 'part.reparent', partId: selectedPart.id, parentId: event.target.value || undefined }])}><option value="">Assembly root</option>{documentModel?.parts.filter(item => item.id !== selectedPart.id).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+          <label>Attachment<select aria-label="Attachment type" disabled={selectedPart.attachmentLocked} value={selectedPart.attachment?.type ?? 'none'} onChange={event => void perform([{ op: 'part.setAttachment', partId: selectedPart.id, type: event.target.value === 'none' ? undefined : event.target.value as 'fixed' | 'hinge' | 'slider', approved: event.target.value !== 'none' }])}><option value="none">Unattached</option><option value="fixed">Fixed</option><option value="hinge">Hinge</option><option value="slider">Slider</option></select></label>
+          {selectedPart.attachment && selectedPart.attachment.type !== 'fixed' && <div className="columns"><label>Min<input aria-label="Joint minimum" type="number" disabled={selectedPart.attachmentLocked} defaultValue={selectedPart.attachment.min ?? ''} onBlur={event => void perform([{ op: 'part.setAttachment', partId: selectedPart.id, type: selectedPart.attachment!.type, min: event.target.value === '' ? undefined : Number(event.target.value), max: selectedPart.attachment!.max, approved: true }])}/></label><label>Max<input aria-label="Joint maximum" type="number" disabled={selectedPart.attachmentLocked} defaultValue={selectedPart.attachment.max ?? ''} onBlur={event => void perform([{ op: 'part.setAttachment', partId: selectedPart.id, type: selectedPart.attachment!.type, min: selectedPart.attachment!.min, max: event.target.value === '' ? undefined : Number(event.target.value), approved: true }])}/></label></div>}
+          {selectedPart.attachmentApproved && selectedPart.attachment && selectedPart.attachment.type !== 'fixed' && <div className="inferred-callout"><strong>Inspect temporary joint pose</strong><span>Enter an offset from the construction pose. Hyde's joint limits are applied to this preview only.</span><label>{selectedPart.attachment.type === 'hinge' ? 'Angle offset (degrees)' : 'Slide offset (parent-local pixels)'}<input aria-label="Temporary joint offset" type="number" step="1" value={poseOffset} onChange={event => setPoseOffset(Number(event.target.value))}/></label><button disabled={busy || !Number.isFinite(poseOffset)} onClick={() => void nativeExport(true, { partId: selectedPart.id, value: poseOffset })}>Preview temporary pose in Hyde</button></div>}
           <label>Move region to<select aria-label="Move region to part" value={partTarget ?? ''} onChange={event => setPartTarget(event.target.value)}><option value="">Choose part</option>{documentModel?.parts.filter(item => item.id !== selectedPart.id).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
           <button disabled={!partTarget || !selectedRegion || busy} onClick={() => { if (partTarget && selectedRegion) void perform([{ op: 'part.assignRegion', regionId: selectedRegion.id, partId: partTarget }]); }}>Reassign region</button>
         </div> : <p className="hint">Parts keep stable IDs as regions are refined.</p>}

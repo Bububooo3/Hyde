@@ -56,7 +56,7 @@ export function proposePartAttachments(document: DecompositionDocumentV1, masks:
   const root = parts.map((part, at) => ({ part, label: at + 1, area: area[at + 1] })).sort((a, b) => b.area - a.area || a.part.id.localeCompare(b.part.id))[0];
   for (const [at, part] of parts.entries()) {
     const label = at + 1;
-    if (label === root.label || part.attachmentApproved || part.attachmentProposalRejected || part.parentId || part.attachment) continue;
+    if (label === root.label || part.attachmentLocked || part.attachmentApproved || part.attachmentProposalRejected || part.parentId || part.attachment) continue;
     const possible = [...contacts.values()].filter(contact => contact.pixels >= 2 && (contact.first === label || contact.second === label))
       .map(contact => ({ contact, parentLabel: contact.first === label ? contact.second : contact.first }))
       .filter(item => area[item.parentLabel] > area[label] || area[item.parentLabel] === area[label] && parts[item.parentLabel - 1].id < part.id)

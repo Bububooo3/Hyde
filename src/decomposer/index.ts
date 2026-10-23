@@ -5,6 +5,7 @@ export { encodeDecompositionDocument, decodeDecompositionDocument, validateDecom
 export { analyzeImage, fitMaskGeometry, proposeCorrespondences, ALGORITHM_VERSION } from './analysis';
 export { rankReferenceCorrespondences } from './correspondence';
 export { proposePartAttachments } from './articulation';
+export { poseNativeDecomposition } from './pose';
 export type { CorrespondenceOptions, CorrespondenceRanking } from './correspondence';
 export { exportNativeDecomposition } from './export';
 export { compareNativeRender } from './quality';
