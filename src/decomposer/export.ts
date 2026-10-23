@@ -37,11 +37,14 @@ function cropTexture(region: RegionRecord, mask: RegionMask, image: DecodedImage
   const flat = [1, 3, 5].map(at => parseInt(region.color.slice(at, at + 2), 16));
   for (let y = 0; y < bounds.height; y++) for (let x = 0; x < bounds.width; x++) {
     const source = ((bounds.y + y) * image.width + bounds.x + x) * 4, target = (y * bounds.width + x) * 4;
-    rgba[target] = sourceColor ? image.rgba[source] : flat[0];
-    rgba[target + 1] = sourceColor ? image.rgba[source + 1] : flat[1];
-    rgba[target + 2] = sourceColor ? image.rgba[source + 2] : flat[2];
+    const useSourceColor = sourceColor && image.rgba[source + 3] > 0;
+    rgba[target] = useSourceColor ? image.rgba[source] : flat[0];
+    rgba[target + 1] = useSourceColor ? image.rgba[source + 1] : flat[1];
+    rgba[target + 2] = useSourceColor ? image.rgba[source + 2] : flat[2];
     const pixel = y * bounds.width + x;
-    rgba[target + 3] = mask.bytes[pixel] ? Math.round(image.rgba[source + 3] * (mask.alpha?.[pixel] ?? 255) / 255) : 0;
+    const sourceAlpha = image.rgba[source + 3];
+    const baseAlpha = mask.alpha && sourceAlpha === 0 ? 255 : sourceAlpha;
+    rgba[target + 3] = mask.bytes[pixel] ? Math.round(baseAlpha * (mask.alpha?.[pixel] ?? 255) / 255) : 0;
   }
   return encodePng({ width: bounds.width, height: bounds.height, rgba });
 }

@@ -119,6 +119,25 @@ test('animation-ready attachment proposal can be reviewed and accepted in the ed
   await expect(page.getByLabel('Lock attachment')).toBeChecked();
 });
 
+test('outward feather correction persists in the editable source document', async ({ page }) => {
+  const art = makeSyntheticFixture('simple-icon');
+  await page.goto('/decomposer.html');
+  await page.getByLabel('Import images').setInputFiles({ name: 'simple-icon.png', mimeType: 'image/png', buffer: Buffer.from(art.bytes) });
+  await expect(page.getByRole('status')).toContainText('Automatic first pass');
+  await page.locator('.left-pane .scroll-list').first().locator('.row').first().click();
+  await page.getByLabel('Outward feather radius').fill('2');
+  await page.getByRole('button', { name: 'Apply outward feather' }).click();
+  await expect(page.getByRole('status')).toContainText('region.featherOutside saved');
+  await expect(page.getByText('user-authored outward soft feather')).toBeVisible();
+  const savePromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Save source' }).click();
+  const saved = await savePromise;
+  await page.getByLabel('Open .hydecomp').setInputFiles({ name: 'soft-outward.hydecomp', mimeType: 'application/zip', buffer: await readFile(await saved.path()) });
+  await expect(page.getByRole('status')).toContainText('Opened soft-outward.hydecomp');
+  await page.locator('.left-pane .scroll-list').first().locator('.row').first().click();
+  await expect(page.getByText('user-authored outward soft feather')).toBeVisible();
+});
+
 test('guided seed and path controls preserve editable history', async ({ page }) => {
   await page.goto('/decomposer.html');
   await page.getByLabel('Import images').setInputFiles({ name: 'two-piece-prop.png', mimeType: 'image/png', buffer: fixture() });

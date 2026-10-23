@@ -1,6 +1,7 @@
 import type { ShapePath } from '../model';
 import { analyzeImage, ALGORITHM_VERSION, fitMaskGeometry } from './analysis';
 import { proposePartAttachments } from './articulation';
+import { featherMaskOutward } from './feather';
 import { rankReferenceCorrespondences } from './correspondence';
 import { decodeDecompositionDocument, encodeDecompositionDocument, sha256, validateDecompositionDocument } from './codec';
 import { exportNativeDecomposition } from './export';
@@ -15,6 +16,7 @@ export type DecompositionEdit =
   | { op: 'region.setPath'; regionId: string; path: ShapePath }
   | { op: 'region.setSuppressed'; regionId: string; suppressed: boolean }
   | { op: 'region.refineMask'; regionId: string; handle: string }
+  | { op: 'region.featherOutside'; regionId: string; radius: number; strength: number }
   | { op: 'region.seedMask'; regionId: string; x: number; y: number; action: 'add' | 'subtract'; colorTolerance: number; radius: number; maxPixels?: number }
   | { op: 'region.split'; regionId: string; axis: 'x' | 'y'; coordinate: number }
   | { op: 'region.merge'; firstId: string; secondId: string }
@@ -484,6 +486,27 @@ export class DecompositionSession {
           const fitted = fitMaskGeometry(target.id, incoming, target.bounds, candidate.settings, target.geometry.texture);
           target.geometry.generatedPath = fitted.geometry.generatedPath; target.geometry.quality = fitted.geometry.quality; target.holeCount = fitted.holeCount;
           target.generationStatus = 'manual'; changed.add(target.id);
+        } else if (edit.op === 'region.featherOutside') {
+          const target = region(edit.regionId), original = masks.get(target.maskId)!;
+          if (target.locked.mask || target.locked.geometry || target.geometry.manualPath) fail('DOCUMENT_CONFLICT: Feathering needs an unlocked generated mask and contour.');
+          const image = this.images.get(target.sourceId)!;
+          const occupied = new Uint8Array(image.width * image.height);
+          for (const other of candidate.regions) {
+            if (!active(other) || other.id === target.id || other.sourceId !== target.sourceId) continue;
+            const otherMask = masks.get(other.maskId)!;
+            for (let row = 0; row < otherMask.height; row++) for (let column = 0; column < otherMask.width; column++)
+              if (otherMask.bytes[row * otherMask.width + column]) occupied[(other.bounds.y + row) * image.width + other.bounds.x + column] = 1;
+          }
+          const result = featherMaskOutward(target.bounds, original, image.width, image.height, edit.radius, edit.strength, occupied);
+          if (!target.originalMaskId) target.originalMaskId = target.maskId;
+          const id = `${target.id}_manual_mask_${this.revision + 1}_${editIndex}`;
+          target.maskId = id; masks.set(id, result.mask);
+          target.bounds = result.bounds; target.geometry.bounds = result.bounds; target.pixelCount = result.pixelCount;
+          const fitted = fitMaskGeometry(target.id, result.mask, result.bounds, candidate.settings, target.geometry.texture);
+          target.geometry.generatedPath = fitted.geometry.generatedPath; target.geometry.quality = fitted.geometry.quality; target.holeCount = fitted.holeCount;
+          target.generationStatus = 'manual';
+          if (!target.confidence.reasons.includes('user-authored outward soft feather')) target.confidence.reasons.push('user-authored outward soft feather');
+          changed.add(target.id);
         } else if (edit.op === 'region.seedMask') {
           const target = region(edit.regionId), original = masks.get(target.maskId)!;
           if (target.locked.mask) fail('DOCUMENT_CONFLICT: Mask is locked.');
@@ -630,7 +653,7 @@ export class DecompositionSession {
           candidate.settings = settings;
         } else fail(`OPERATION_UNSUPPORTED: Unknown decomposition edit ${(edit as { op?: string }).op ?? '<missing>'}.`);
       }
-      if (request.edits.some(edit => ['region.refineMask', 'region.seedMask', 'region.split', 'region.merge', 'part.create', 'part.assignRegion'].includes(edit.op)))
+      if (request.edits.some(edit => ['region.refineMask', 'region.featherOutside', 'region.seedMask', 'region.split', 'region.merge', 'part.create', 'part.assignRegion'].includes(edit.op)))
         for (const item of candidate.parts) if (!item.attachmentApproved && !item.attachmentLocked) item.attachmentProposal = undefined;
       refreshPartBounds(candidate);
       candidate.updatedAt = new Date().toISOString();

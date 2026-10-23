@@ -75,3 +75,35 @@ it('keeps a source antialias fringe outside the hard threshold as native editabl
   }
   await session.close();
 }, 30_000);
+
+it('expands a guided outward feather into transparent pixels without changing source evidence', async () => {
+  const width = 24, height = 24, rgba = new Uint8Array(width * height * 4);
+  for (let y = 6; y < 18; y++) for (let x = 6; x < 18; x++) rgba.set([194, 86, 51, 255], (y * width + x) * 4);
+  const bytes = encodePng({ width, height, rgba });
+  const session = await DecompositionSession.importSources([{ bytes, name: 'outward.png', mime: 'image/png' }]);
+  await session.analyze();
+  const before = session.snapshot().regions[0], sourceMask = session.maskFor(before.maskId);
+  const changed = await session.execute({ expectedRevision: session.revision, edits: [{ op: 'region.featherOutside', regionId: before.id, radius: 2, strength: .8 }] });
+  expect(changed.ok).toBe(true);
+  const after = session.snapshot().regions.find(item => item.id === before.id)!;
+  expect(after.bounds.x).toBe(4);
+  expect(after.originalMaskId).toBe(before.maskId);
+  const expanded = session.maskFor(after.maskId);
+  const local = (12 - after.bounds.y) * expanded.width + 4 - after.bounds.x;
+  expect(expanded.alpha?.[local]).toBeGreaterThan(50);
+  expect(session.maskFor(before.maskId)).toEqual(sourceMask);
+  const native = await session.exportHyde({ format: 'hyde' });
+  const shape = native.project.elements.find(item => item.id === native.mapping.regionIds[after.id])!;
+  const crop = decodePng(Uint8Array.from(Buffer.from(native.project.assets.find(item => item.id === shape.assetId)!.dataUrl.split(',')[1], 'base64')));
+  expect(crop.rgba[local * 4 + 3]).toBe(expanded.alpha?.[local]);
+  if (process.env.HYDE_TEST_BROWSER) {
+    const rendered = await runBrowserTask(native.project, { kind: 'preview', options: { timeSeconds: 0, width, height, format: 'png' } });
+    expect(decodePng(rendered.bytes).rgba[(12 * width + 4) * 4 + 3]).toBeGreaterThan(25);
+  }
+  const reopened = await DecompositionSession.openDocument(await session.saveDocument());
+  expect(reopened.maskFor(after.maskId).alpha).toEqual(expanded.alpha);
+  await reopened.close();
+  expect(session.undo(session.revision)).toBe(true);
+  expect(session.snapshot().regions[0].bounds).toEqual(before.bounds);
+  await session.close();
+}, 30_000);
