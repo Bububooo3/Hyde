@@ -47,3 +47,31 @@ it('preserves editable soft-mask coverage through undo, source-document reopen a
   expect(session.maskFor(reverted.maskId).alpha).toBeUndefined();
   await session.close();
 }, 30_000);
+
+it('keeps a source antialias fringe outside the hard threshold as native editable geometry', async () => {
+  const width = 24, height = 24, rgba = new Uint8Array(width * height * 4);
+  for (let y = 4; y < 20; y++) for (let x = 4; x < 20; x++) {
+    const edge = x === 4 || x === 19 || y === 4 || y === 19;
+    rgba.set([220, 74, 45, edge ? 96 : 255], (y * width + x) * 4);
+  }
+  const bytes = encodePng({ width, height, rgba });
+  const session = await DecompositionSession.importSources([{ bytes, name: 'antialias.png', mime: 'image/png' }], { settings: { alphaThreshold: 128, preserveTexture: false } });
+  await session.analyze();
+  const region = session.snapshot().regions.find(item => item.geometry.status === 'visible')!;
+  expect(region.bounds).toMatchObject({ x: 4, y: 4, width: 16, height: 16 });
+  expect(region.geometry.texture).toBe('source-crop');
+  expect(session.maskFor(region.maskId).bytes[0]).toBe(1);
+  const native = await session.exportHyde({ format: 'hyde' });
+  const polygon = native.project.elements.find(item => item.id === native.mapping.regionIds[region.id])!;
+  expect(polygon.shapePath?.points.length).toBeGreaterThanOrEqual(4);
+  const texture = native.project.assets.find(item => item.id === polygon.assetId)!;
+  const crop = decodePng(Uint8Array.from(Buffer.from(texture.dataUrl.split(',')[1], 'base64')));
+  expect(crop.rgba[3]).toBe(96);
+  if (process.env.HYDE_TEST_BROWSER) {
+    const rendered = await runBrowserTask(native.project, { kind: 'preview', options: { timeSeconds: 0, width, height, format: 'png' } });
+    const renderedAlpha = decodePng(rendered.bytes).rgba[(4 * width + 4) * 4 + 3];
+    expect(renderedAlpha).toBeGreaterThanOrEqual(75);
+    expect(renderedAlpha).toBeLessThanOrEqual(115);
+  }
+  await session.close();
+}, 30_000);

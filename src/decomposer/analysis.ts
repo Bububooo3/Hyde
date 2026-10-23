@@ -332,6 +332,31 @@ export function analyzeImage(image: DecodedImage, source: SourceReference, mode:
       previous.maxX = Math.max(previous.maxX, component.maxX); previous.maxY = Math.max(previous.maxY, component.maxY);
     }
   }
+  // Preserve source antialiasing outside the hard alpha threshold. Assign only
+  // one-pixel fringe samples touching an existing hard component; do not grow
+  // through transparency or turn an isolated low-alpha smudge into a part.
+  for (let index = 0; index < total; index++) {
+    if (labels[index] >= 0 || rgba[index * 4 + 3] === 0 || rgba[index * 4 + 3] >= settings.alphaThreshold) continue;
+    const x = index % width, y = (index / width) | 0;
+    let owner = -1, distance = Infinity, colorDistance = Infinity;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      if (!dx && !dy || x + dx < 0 || y + dy < 0 || x + dx >= width || y + dy >= height) continue;
+      const neighbor = (y + dy) * width + x + dx;
+      if (rgba[neighbor * 4 + 3] < settings.alphaThreshold || labels[neighbor] < 0) continue;
+      const candidate = labels[neighbor], component = grouped.get(candidate)!;
+      const d = dx * dx + dy * dy;
+      const c = Math.hypot(rgba[index * 4] - component.r, rgba[index * 4 + 1] - component.g, rgba[index * 4 + 2] - component.b);
+      if (d < distance || d === distance && (c < colorDistance || c === colorDistance && candidate < owner)) {
+        owner = candidate; distance = d; colorDistance = c;
+      }
+    }
+    if (owner < 0) continue;
+    labels[index] = owner;
+    const component = grouped.get(owner)!;
+    component.count++; component.partialAlpha++;
+    component.minX = Math.min(component.minX, x); component.maxX = Math.max(component.maxX, x);
+    component.minY = Math.min(component.minY, y); component.maxY = Math.max(component.maxY, y);
+  }
   const ordered = [...grouped.values()].sort((a, b) => a.minY - b.minY || a.minX - b.minX || b.count - a.count || a.id - b.id);
   const regions: RegionRecord[] = [], parts: PartRecord[] = [], masks = new Map<string, RegionMask>();
   const labelToRegion = new Map<number, RegionRecord>();
@@ -362,9 +387,9 @@ export function analyzeImage(image: DecodedImage, source: SourceReference, mode:
     const shapePath: ShapePath = { points: outer.map(point => ({ x: (point.x - bounds.x) / bounds.width, y: (point.y - bounds.y) / bounds.height })) };
     const holeCount = Math.max(0, loops.length - 1);
     if (holeCount) diagnostics.push({ code: 'HOLE_NOT_REPRESENTABLE', severity: 'warning', sourceId: source.id, regionId: id, bounds, message: 'The source mask has interior holes; a single Hyde path cannot preserve transparent cutouts.', suggestion: 'Keep a masked raster texture or manually split the geometry.' });
-    const variance = Math.sqrt(component.variance), texture = settings.preserveTexture && (variance > 8 || component.partialAlpha > 0) ? 'source-crop' : 'flat';
-    if (component.partialAlpha && !settings.preserveTexture) diagnostics.push({ code: 'TEXTURE_APPROXIMATION', severity: 'warning', sourceId: source.id, regionId: id, bounds,
-      message: 'This region has partially transparent source pixels, but texture preservation is disabled; a flat Hyde fill loses the alpha fringe.', suggestion: 'Enable texture preservation for this region.' });
+    const variance = Math.sqrt(component.variance), texture = component.partialAlpha > 0 || settings.preserveTexture && variance > 8 ? 'source-crop' : 'flat';
+    if (component.partialAlpha && !settings.preserveTexture) diagnostics.push({ code: 'TEXTURE_APPROXIMATION', severity: 'info', sourceId: source.id, regionId: id, bounds,
+      message: 'The region keeps its source alpha fringe in an editable textured path even with texture preservation disabled.' });
     const region: RegionRecord = {
       id, sourceId: source.id, maskId, bounds, pixelCount: component.count, classification: 'foreground', color: hex(component.r, component.g, component.b), colorVariance: variance,
       confidence: { kind: 'heuristic', reasons: ['connected 4-neighbor foreground pixels', 'original-pixel boundary contrast and 2×/4× color agreement', 'visible alpha or opaque-border contrast'] },
