@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { encodePng } from '../src/decomposer/image';
+import { makeSyntheticFixture } from './decomposerSyntheticFixtures';
 
 function fixture(): Buffer {
   const width = 40, height = 32, rgba = new Uint8Array(width * height * 4);
@@ -79,4 +80,126 @@ test('guided mask brush, path drag and pivot edits commit through worker revisio
   await page.mouse.click(pivot.x, pivot.y);
   await expect(page.getByRole('status')).toContainText('part.setPivot saved');
   expect(Number(await page.getByLabel('Pivot X').inputValue())).toBeCloseTo(26, 1);
+});
+
+test('guided seed and path controls preserve editable history', async ({ page }) => {
+  await page.goto('/decomposer.html');
+  await page.getByLabel('Import images').setInputFiles({ name: 'two-piece-prop.png', mimeType: 'image/png', buffer: fixture() });
+  await expect(page.getByRole('status')).toContainText('Automatic first pass found 2 editable regions.');
+  const region = page.locator('.left-pane .scroll-list').first().locator('.row').first();
+  await region.click();
+  const before = await region.locator('small').textContent();
+  const canvas = page.locator('canvas.interactive-canvas');
+  const imagePoint = async (x: number, y: number) => {
+    const box = await canvas.boundingBox();
+    if (!box) throw new Error('The reconstruction canvas is missing.');
+    return { x: box.x + x / 40 * box.width, y: box.y + y / 32 * box.height };
+  };
+  await page.getByLabel('Canvas tool').selectOption('seed-erase');
+  await page.getByLabel('Seed tolerance').fill('0');
+  await page.getByLabel('Seed reach').fill('3');
+  const seed = await imagePoint(25, 15);
+  await page.mouse.click(seed.x, seed.y);
+  await expect(page.getByRole('status')).toContainText('region.seedMask saved');
+  await expect(region.locator('small')).not.toHaveText(before ?? '');
+  await page.getByRole('button', { name: 'Undo' }).click();
+  await expect(page.getByRole('status')).toContainText('Undo applied.');
+  await expect(region.locator('small')).toHaveText(before ?? '');
+
+  await page.getByLabel('Canvas tool').selectOption('path');
+  await page.getByLabel('Snap path to source edges').check();
+  const anchor = await imagePoint(20, 4);
+  await page.mouse.click(anchor.x, anchor.y);
+  await expect(page.getByRole('button', { name: 'Add path anchor' })).toBeEnabled();
+  await page.getByRole('button', { name: 'Add path anchor' }).click();
+  await expect(page.getByRole('status')).toContainText('region.setPath saved');
+  await page.getByRole('button', { name: 'Add outgoing handle' }).click();
+  await expect(page.getByRole('button', { name: 'Remove outgoing handle' })).toBeVisible();
+  await page.getByRole('button', { name: 'Remove path anchor' }).click();
+  await expect(page.getByRole('status')).toContainText('region.setPath saved');
+});
+
+test('manual cross-reference landmarks and affine alignment survive source reopen', async ({ page }) => {
+  await page.goto('/decomposer.html');
+  await page.getByLabel('Import images').setInputFiles([
+    { name: 'primary.png', mimeType: 'image/png', buffer: fixture() },
+    { name: 'alternate.png', mimeType: 'image/png', buffer: fixture() },
+  ]);
+  await expect(page.getByRole('status')).toContainText('Automatic first pass');
+  await page.getByRole('button', { name: 'Original', exact: true }).click();
+  await page.getByLabel('Canvas zoom').selectOption('4');
+  await page.getByLabel('Canvas tool').selectOption('landmark');
+  await expect.poll(async () => (await page.locator('canvas.interactive-canvas').boundingBox())?.width).toBe(160);
+  const referenceRows = page.locator('.left-pane .stack .row');
+  const pointOnOriginal = async (x: number, y: number) => {
+    const box = await page.locator('canvas.interactive-canvas').boundingBox();
+    if (!box) throw new Error('The interactive source canvas is missing.');
+    return { x: box.x + x / 40 * box.width, y: box.y + y / 32 * box.height };
+  };
+  const first = await pointOnOriginal(10, 11);
+  await page.mouse.click(first.x, first.y);
+  await expect(page.getByText('Pending landmark')).toBeVisible();
+  await referenceRows.nth(1).click();
+  await expect(page.locator('.canvas-label')).toContainText('alternate.png');
+  const second = await pointOnOriginal(12, 11);
+  await page.mouse.click(second.x, second.y);
+  await expect(page.getByRole('status')).toContainText('reference.correspond saved');
+  await expect(page.getByText('Paired landmarks', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Align from paired landmarks' }).click();
+  await expect(page.getByRole('status')).toContainText('reference.alignFromLandmarks saved');
+  await expect(page.getByLabel('Alignment tx')).toHaveValue('-2');
+  const tx = page.getByLabel('Alignment tx');
+  await tx.fill('2'); await tx.blur();
+  await expect(page.getByRole('status')).toContainText('reference.setTransform saved');
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Save source' }).click();
+  const saved = await downloadPromise;
+  const bytes = await readFile(await saved.path());
+  await page.getByLabel('Open .hydecomp').setInputFiles({ name: 'landmarks.hydecomp', mimeType: 'application/zip', buffer: bytes });
+  await expect(page.getByRole('status')).toContainText('Opened landmarks.hydecomp');
+  await expect(page.getByText('Paired landmarks', { exact: true })).toBeVisible();
+  await referenceRows.nth(1).click();
+  await expect(page.getByLabel('Alignment tx')).toHaveValue('2');
+});
+
+test('hidden proposals can be inspected, disabled and pinned without losing the manual contour', async ({ page }) => {
+  const art = makeSyntheticFixture('occlusion');
+  await page.goto('/decomposer.html');
+  await page.getByLabel('Import images').setInputFiles({ name: 'occlusion.png', mimeType: 'image/png', buffer: Buffer.from(art.bytes) });
+  await expect(page.getByRole('status')).toContainText('Automatic first pass');
+  const inference = page.getByLabel('Infer hidden continuations');
+  await expect(inference).toBeDisabled();
+  await page.getByLabel('Reconstruction mode').selectOption('animation-ready');
+  await expect(page.getByRole('status')).toContainText('Switched to animation-ready');
+  await expect(inference).toBeChecked();
+  const inferredRow = page.locator('.left-pane .inferred-row');
+  await expect(inferredRow).toHaveCount(1);
+  await expect(inferredRow).toContainText('unseen and uncertain');
+  await inferredRow.click();
+  await expect(page.getByText('Unseen continuation · uncertain')).toBeVisible();
+  await expect(page.getByText('no source pixel reveals')).toBeVisible();
+  await expect(page.getByLabel('Show inferred overlay')).toBeChecked();
+  await page.getByLabel('Show inferred overlay').uncheck();
+  await expect(page.getByLabel('Show inferred overlay')).not.toBeChecked();
+
+  await inference.uncheck();
+  await expect(page.getByRole('status')).toContainText('proposals disabled: 0 inferred regions active');
+  await expect(inferredRow).toHaveCount(0);
+  await inference.check();
+  await expect(inferredRow).toHaveCount(1);
+  await inferredRow.click();
+  await page.getByRole('button', { name: 'Pin current hidden contour' }).click();
+  await expect(page.getByRole('status')).toContainText('region.setPath saved');
+  await expect(page.getByRole('button', { name: 'Contour pinned as manual edit' })).toBeDisabled();
+  await inference.uncheck();
+  await expect(page.getByRole('status')).toContainText('including 1 pinned by user edits');
+  await expect(inferredRow).toHaveCount(1);
+  await expect(page.getByText('Unseen continuation · uncertain')).toBeVisible();
+  await page.getByRole('button', { name: 'Suppress inferred region' }).click();
+  await expect(inferredRow).toHaveCount(0);
+  const suppressedRow = page.locator('.left-pane .suppressed-row');
+  await expect(suppressedRow).toHaveCount(1);
+  await suppressedRow.click();
+  await page.getByRole('button', { name: 'Restore inferred region' }).click();
+  await expect(inferredRow).toHaveCount(1);
 });

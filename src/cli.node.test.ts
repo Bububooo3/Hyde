@@ -75,4 +75,33 @@ describe('Hyde Node CLI workflow', () => {
     expect((await readdir(folder)).some(name => name.endsWith('.bak'))).toBe(true);
     expect(decodeProjectBytes(await readFile(project)).name).toBe('Replacement');
   });
+
+  it('preserves structured transaction diagnostics and distinct failure exit codes', async () => {
+    const folder = await fixtureDirectory();
+    const project = join(folder, 'story.hyde'), output = join(folder, 'should-not-exist.hyde');
+    const commands = join(folder, 'commands.json'), invalidArchive = join(folder, 'invalid.hyde');
+    expect((await call('project', 'new', '--output', project)).code).toBe(0);
+    const before = await readFile(project);
+
+    await writeFile(commands, JSON.stringify({ expectedRevision: 3, commands: [{ op: 'element.create', args: { kind: 'rectangle' } }] }));
+    const stale = await call('project', 'apply', project, '--commands', commands, '--output', output);
+    expect(stale.code).toBe(4);
+    expect(stale.stderr).toMatchObject({ ok: false, revision: 0, warnings: [], errors: [{ code: 'REVISION_CONFLICT', field: 'expectedRevision', details: { expectedRevision: 3, currentRevision: 0 } }] });
+
+    await writeFile(commands, JSON.stringify([{ op: 'element.setTransform', args: { id: 'missing-part', transform: { x: 10 } } }]));
+    const missing = await call('project', 'apply', project, '--commands', commands, '--output', output);
+    expect(missing.code).toBe(2);
+    expect(missing.stderr).toMatchObject({ revision: 0, errors: [{ code: 'TARGET_NOT_FOUND', commandIndex: 0, targetId: 'missing-part' }] });
+
+    await writeFile(commands, JSON.stringify({ protocolVersion: 2, commands: [{ op: 'element.create', args: { kind: 'rectangle' } }] }));
+    const schema = await call('project', 'apply', project, '--commands', commands, '--output', output);
+    expect(schema.code).toBe(3);
+    expect(schema.stderr.errors[0].code).toBe('SCHEMA_UNSUPPORTED');
+    await writeFile(invalidArchive, 'not a Hyde archive');
+    const invalid = await call('project', 'validate', invalidArchive);
+    expect(invalid.code).toBe(3);
+    expect(invalid.stderr.errors[0].code).toBe('INVALID_PROJECT');
+    expect(await readFile(project)).toEqual(before);
+    expect(await readdir(folder)).not.toContain('should-not-exist.hyde');
+  });
 });

@@ -3,14 +3,16 @@ import type { ChangeEvent, PointerEvent as ReactPointerEvent } from 'react';
 import type { DecompositionDocumentV1, DecompositionEdit, PartRecord, RegionMask, RegionRecord } from '../decomposer';
 import type { ReconstructionQualityReport } from '../decomposer/quality';
 import type { Project, ShapePath } from '../model';
+import { removePathPoint, setPathHandle, splitPathSegment } from '../shapePath';
 import { DecomposerWorkerClient } from './client';
 
 type View = 'original' | 'reconstruction' | 'overlay' | 'side-by-side';
-type Tool = 'select' | 'path' | 'paint-add' | 'paint-erase' | 'pivot';
+type Tool = 'select' | 'path' | 'paint-add' | 'paint-erase' | 'seed-add' | 'seed-erase' | 'landmark' | 'pivot';
 type WorkerState = { revision: number; document: DecompositionDocumentV1 };
 type NativeQualityReport = Omit<ReconstructionQualityReport, 'residualOverlayPng'>;
 const color = (hex: string): [number, number, number] => [1, 3, 5].map(at => parseInt(hex.slice(at, at + 2), 16)) as [number, number, number];
-const active = (region: RegionRecord) => region.generationStatus !== 'historical';
+const current = (region: RegionRecord) => region.generationStatus !== 'historical';
+const active = (region: RegionRecord) => current(region) && !region.suppressed;
 const percentage = (value: number | null) => value === null ? 'n/a' : `${(value * 100).toFixed(1)}%`;
 const download = (bytes: Uint8Array, name: string, mime: string) => {
   const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: mime }));
@@ -36,6 +38,16 @@ function drawPath(ctx: CanvasRenderingContext2D, region: RegionRecord, path: Sha
     ctx.beginPath(); ctx.arc(bounds.x + point.x * bounds.width, bounds.y + point.y * bounds.height, index === selectedIndex ? 1.35 : .85, 0, Math.PI * 2);
     ctx.fillStyle = index === selectedIndex ? '#ffdd78' : '#f8ffff'; ctx.fill();
   });
+  const selected = selectedIndex === undefined ? undefined : points[selectedIndex];
+  if (selected) for (const side of ['in', 'out'] as const) {
+    const handle = selected[side]; if (!handle) continue;
+    const x = bounds.x + selected.x * bounds.width, y = bounds.y + selected.y * bounds.height;
+    const hx = bounds.x + handle.x * bounds.width, hy = bounds.y + handle.y * bounds.height;
+    ctx.strokeStyle = '#ffce74'; ctx.lineWidth = .55;
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(hx, hy); ctx.stroke();
+    ctx.fillStyle = side === 'in' ? '#ff8b86' : '#ffce74';
+    ctx.beginPath(); ctx.arc(hx, hy, 1.1, 0, Math.PI * 2); ctx.fill();
+  }
   ctx.restore();
 }
 
@@ -56,6 +68,27 @@ function paintDisc(mask: RegionMask, bounds: RegionRecord['bounds'], x: number, 
   }
 }
 
+/** Snap only to a measured local alpha/color transition. Avoid moving a point on flat artwork. */
+function snapToSourceEdge(point: { x: number; y: number }, pixels: Uint8ClampedArray, width: number, height: number, radius: number): { x: number; y: number } {
+  const difference = (x: number, y: number, nx: number, ny: number): number => {
+    const a = (y * width + x) * 4, b = (ny * width + nx) * 4;
+    const alpha = Math.abs(pixels[a + 3] - pixels[b + 3]);
+    const rgb = (Math.abs(pixels[a] - pixels[b]) + Math.abs(pixels[a + 1] - pixels[b + 1]) + Math.abs(pixels[a + 2] - pixels[b + 2])) / 3;
+    return Math.max(alpha, rgb * Math.min(pixels[a + 3], pixels[b + 3]) / 255);
+  };
+  let best = { ...point }, score = 20;
+  const cx = Math.floor(point.x), cy = Math.floor(point.y);
+  for (let y = Math.max(1, cy - radius); y <= Math.min(height - 2, cy + radius); y++)
+    for (let x = Math.max(1, cx - radius); x <= Math.min(width - 2, cx + radius); x++) {
+      const distance = Math.hypot(x + .5 - point.x, y + .5 - point.y);
+      if (distance > radius) continue;
+      const edge = Math.max(difference(x, y, x - 1, y), difference(x, y, x + 1, y), difference(x, y, x, y - 1), difference(x, y, x, y + 1));
+      const candidate = edge - distance * 5;
+      if (candidate > score) { score = candidate; best = { x: x + .5, y: y + .5 }; }
+    }
+  return best;
+}
+
 export default function App() {
   const client = useRef<DecomposerWorkerClient>(null!);
   if (!client.current) client.current = new DecomposerWorkerClient();
@@ -69,9 +102,16 @@ export default function App() {
   const [selectedRegionId, setSelectedRegionId] = useState<string>();
   const [selectedPartId, setSelectedPartId] = useState<string>();
   const [view, setView] = useState<View>('side-by-side'), [tool, setTool] = useState<Tool>('select');
+  const [zoom, setZoom] = useState<'fit' | number>('fit');
   const [brushRadius, setBrushRadius] = useState(3), [overlayAlpha, setOverlayAlpha] = useState(.5);
   const [selectedPoint, setSelectedPoint] = useState<number>(), [draftPoint, setDraftPoint] = useState<{ x: number; y: number }>();
+  const [draftHandle, setDraftHandle] = useState<{ side: 'in' | 'out'; x: number; y: number }>();
+  const [edgeSnap, setEdgeSnap] = useState(false), [edgeSnapRadius, setEdgeSnapRadius] = useState(4);
+  const [seedTolerance, setSeedTolerance] = useState(36), [seedRadius, setSeedRadius] = useState(24);
+  const [pendingLandmark, setPendingLandmark] = useState<{ sourceId: string; x: number; y: number }>();
   const [renderVersion, setRenderVersion] = useState(0), [isolate, setIsolate] = useState(false);
+  const [showInferred, setShowInferred] = useState(true);
+  const [requestedInference, setRequestedInference] = useState<boolean>();
   const [busy, setBusy] = useState(false), [status, setStatus] = useState('Import one or more illustrations to begin.');
   const [exportFormat, setExportFormat] = useState<'hyde' | 'hyproj'>('hyproj'), [allowHoleApproximation, setAllowHoleApproximation] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string>();
@@ -83,7 +123,7 @@ export default function App() {
   const [mergeTarget, setMergeTarget] = useState<string>(), [partTarget, setPartTarget] = useState<string>();
   const [relationTarget, setRelationTarget] = useState<string>(), [matchTarget, setMatchTarget] = useState<string>();
   const [quality, setQuality] = useState<{ meanSampledMaskIoU: number; pointCount: number }>();
-  const pointer = useRef<{ tool: Tool; points: { x: number; y: number }[]; anchor?: number } | undefined>(undefined);
+  const pointer = useRef<{ tool: Tool; points: { x: number; y: number }[]; anchor?: number; side?: 'in' | 'out' } | undefined>(undefined);
   const checkpoint = useRef<Uint8Array | undefined>(undefined);
   const canceling = useRef(false);
 
@@ -101,8 +141,15 @@ export default function App() {
   }, []);
   const source = documentModel?.sources.find(item => item.id === selectedSourceId) ?? documentModel?.sources[0];
   const visibleRegions = useMemo(() => documentModel?.regions.filter(region => active(region) && region.sourceId === source?.id) ?? [], [documentModel, source?.id]);
+  const suppressedRegions = useMemo(() => documentModel?.regions.filter(region => current(region) && region.suppressed && region.sourceId === source?.id) ?? [], [documentModel, source?.id]);
+  const inferredRegions = useMemo(() => visibleRegions.filter(region => region.geometry.status === 'inferred'), [visibleRegions]);
   const selectedRegion = documentModel?.regions.find(item => item.id === selectedRegionId && active(item));
+  const selectedSuppressedRegion = documentModel?.regions.find(item => item.id === selectedRegionId && current(item) && item.suppressed);
   const selectedPart = documentModel?.parts.find(item => item.id === selectedPartId) ?? documentModel?.parts.find(item => item.id === selectedRegion?.partId);
+  const selectedPath = selectedRegion?.geometry.manualPath ?? selectedRegion?.geometry.generatedPath;
+  const primarySourceId = documentModel?.sources.find(item => item.role === 'primary')?.id;
+  const alignmentLandmarkIds = documentModel?.correspondences.filter(item => item.kind === 'landmark' && item.accepted && primarySourceId && source && item.sourceIds.includes(primarySourceId) && item.sourceIds.includes(source.id)).map(item => item.id) ?? [];
+  const canvasZoomStyle = source && zoom !== 'fit' ? { width: source.width * zoom, height: source.height * zoom } : undefined;
 
   const readSource = useCallback(async (sourceId: string, doc: DecompositionDocumentV1) => {
     const metadata = doc.sources.find(item => item.id === sourceId); if (!metadata) return;
@@ -148,7 +195,7 @@ export default function App() {
       if (documentModel) checkpoint.current = (await client.current.call<{ bytes: Uint8Array }>('save')).bytes;
       const inputs = await Promise.all(files.map(async (file, index) => ({ name: file.name, mime: file.type, role: index === 0 ? 'primary' : 'alternate-view', bytes: new Uint8Array(await file.arrayBuffer()) })));
       const imported = await client.current.call<WorkerState>('import', { inputs, options: { name: files[0].name.replace(/\.[^.]+$/, '') } });
-      await refresh(imported, true); setSelectedRegionId(undefined); setSelectedPartId(undefined);
+      await refresh(imported, true); setSelectedRegionId(undefined); setSelectedPartId(undefined); setPendingLandmark(undefined);
       checkpoint.current = (await client.current.call<{ bytes: Uint8Array }>('save')).bytes;
       setStatus(`Imported ${files.length} reference${files.length === 1 ? '' : 's'}. Analyzing…`);
       await new Promise(resolve => window.setTimeout(resolve, 0));
@@ -163,7 +210,7 @@ export default function App() {
     setBusy(true);
     try {
       const opened = await client.current.call<WorkerState>('open', { bytes: new Uint8Array(await file.arrayBuffer()) });
-      await refresh(opened, true); setSelectedRegionId(undefined); setSelectedPartId(undefined); setStatus(`Opened ${file.name}; original references and edits are available.`);
+      await refresh(opened, true); setSelectedRegionId(undefined); setSelectedPartId(undefined); setPendingLandmark(undefined); setStatus(`Opened ${file.name}; original references and edits are available.`);
     } catch (error) { setStatus(error instanceof Error ? error.message : 'Open failed.'); }
     finally { setBusy(false); }
   }
@@ -217,6 +264,20 @@ export default function App() {
     } catch (error) { if (!canceling.current) setStatus(error instanceof Error ? error.message : 'Regeneration failed.'); }
     finally { setBusy(false); }
   }
+  async function setHiddenContinuations(enabled: boolean) {
+    if (!documentModel || busy || documentModel.mode !== 'animation-ready') return;
+    setRequestedInference(enabled);
+    setBusy(true); setStatus(enabled ? 'Analyzing conservative hidden-continuation proposals…' : 'Disabling automatic hidden-continuation proposals…');
+    try {
+      checkpoint.current = (await client.current.call<{ bytes: Uint8Array }>('save')).bytes;
+      const response = await client.current.call<WorkerState>('analyze', { settings: { ...documentModel.settings, inferHiddenGeometry: enabled } });
+      await refresh(response);
+      const hidden = response.document.regions.filter(region => active(region) && region.geometry.status === 'inferred');
+      const pinned = hidden.filter(region => Boolean(region.geometry.manualPath) || region.locked.mask || region.locked.geometry || region.locked.part).length;
+      setStatus(`${enabled ? 'Automatic hidden-continuation analysis finished' : 'Automatic hidden-continuation proposals disabled'}: ${hidden.length} inferred region${hidden.length === 1 ? '' : 's'} active${pinned ? `, including ${pinned} pinned by user edits` : ''}. Unseen appearance remains uncertain.`);
+    } catch (error) { setStatus(error instanceof Error ? error.message : 'Hidden-continuation analysis failed.'); }
+    finally { setRequestedInference(undefined); setBusy(false); }
+  }
   async function cancelWork() {
     if (!busy) return;
     canceling.current = true;
@@ -243,6 +304,19 @@ export default function App() {
       if (!canvas) return; canvas.width = source.width; canvas.height = source.height;
       const ctx = canvas.getContext('2d'); if (!ctx) return;
       ctx.clearRect(0, 0, source.width, source.height); ctx.drawImage(image, 0, 0, source.width, source.height);
+      const landmarks = documentModel?.correspondences.filter(item => item.kind === 'landmark' && item.landmarkPoints);
+      for (const item of landmarks ?? []) {
+        const index = item.sourceIds.indexOf(source.id);
+        if (index < 0) continue;
+        const point = item.landmarkPoints![index];
+        ctx.strokeStyle = '#ffcd70'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(point.x - 3, point.y); ctx.lineTo(point.x + 3, point.y);
+        ctx.moveTo(point.x, point.y - 3); ctx.lineTo(point.x, point.y + 3); ctx.stroke();
+      }
+      if (pendingLandmark?.sourceId === source.id) {
+        ctx.strokeStyle = '#20ead1'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.arc(pendingLandmark.x, pendingLandmark.y, 3, 0, Math.PI * 2); ctx.stroke();
+      }
     };
     drawOriginal(originalCanvas.current);
     const canvas = reconstructionCanvas.current; if (!canvas) return;
@@ -251,6 +325,7 @@ export default function App() {
     const imageData = context.createImageData(source.width, source.height);
     const ordered = [...visibleRegions].sort((a, b) => (documentModel?.parts.find(part => part.id === a.partId)?.zOrder ?? 0) - (documentModel?.parts.find(part => part.id === b.partId)?.zOrder ?? 0));
     for (const region of ordered) {
+      if (region.geometry.status === 'inferred') continue;
       if (isolate && selectedRegionId && region.id !== selectedRegionId) continue;
       const mask = masks.get(region.id); if (!mask) continue;
       const rgb = color(region.color);
@@ -263,9 +338,33 @@ export default function App() {
     }
     context.putImageData(imageData, 0, 0);
     if (view === 'overlay') { context.globalAlpha = overlayAlpha; context.drawImage(image, 0, 0, source.width, source.height); context.globalAlpha = 1; }
+    if (showInferred) for (const region of inferredRegions) {
+      if (isolate && selectedRegionId && region.id !== selectedRegionId) continue;
+      const path = region.geometry.manualPath ?? region.geometry.generatedPath;
+      if (path.points.length < 3) continue;
+      context.save(); context.beginPath();
+      context.moveTo(region.bounds.x + path.points[0].x * region.bounds.width, region.bounds.y + path.points[0].y * region.bounds.height);
+      for (let index = 0; index < path.points.length; index++) {
+        const from = path.points[index], to = path.points[(index + 1) % path.points.length];
+        const x = region.bounds.x + to.x * region.bounds.width, y = region.bounds.y + to.y * region.bounds.height;
+        if (from.out || to.in) {
+          const a = from.out ?? from, b = to.in ?? to;
+          context.bezierCurveTo(region.bounds.x + a.x * region.bounds.width, region.bounds.y + a.y * region.bounds.height,
+            region.bounds.x + b.x * region.bounds.width, region.bounds.y + b.y * region.bounds.height, x, y);
+        } else context.lineTo(x, y);
+      }
+      context.closePath(); context.fillStyle = '#ffcb7044'; context.fill();
+      context.lineWidth = .75; context.strokeStyle = '#ffcb70'; context.setLineDash([2, 2]); context.stroke(); context.restore();
+    }
     if (selectedRegion?.sourceId === source.id) {
       const path = structuredClone(selectedRegion.geometry.manualPath ?? selectedRegion.geometry.generatedPath);
-      if (draftPoint && selectedPoint !== undefined && path.points[selectedPoint]) path.points[selectedPoint] = { ...path.points[selectedPoint], x: draftPoint.x, y: draftPoint.y };
+      if (draftPoint && selectedPoint !== undefined && path.points[selectedPoint]) {
+        const anchor = path.points[selectedPoint], dx = draftPoint.x - anchor.x, dy = draftPoint.y - anchor.y;
+        anchor.x = draftPoint.x; anchor.y = draftPoint.y;
+        if (anchor.in) { anchor.in.x += dx; anchor.in.y += dy; }
+        if (anchor.out) { anchor.out.x += dx; anchor.out.y += dy; }
+      }
+      if (draftHandle && selectedPoint !== undefined && path.points[selectedPoint]) path.points[selectedPoint][draftHandle.side] = { x: draftHandle.x, y: draftHandle.y };
       drawPath(context, selectedRegion, path, selectedPoint);
     }
     if (selectedPart && tool === 'pivot') {
@@ -277,7 +376,7 @@ export default function App() {
       context.save(); context.strokeStyle = pointer.current.tool === 'paint-add' ? '#06f0aa' : '#ff6378'; context.lineWidth = Math.max(1, brushRadius * 2); context.lineCap = 'round';
       context.beginPath(); pointer.current.points.forEach((point, index) => index ? context.lineTo(point.x, point.y) : context.moveTo(point.x, point.y)); context.stroke(); context.restore();
     }
-  }, [source?.id, source?.width, source?.height, visibleRegions, documentModel?.parts, masks, selectedRegion, selectedRegionId, selectedPart, view, overlayAlpha, isolate, selectedPoint, draftPoint, tool, brushRadius, renderVersion]);
+  }, [source?.id, source?.width, source?.height, visibleRegions, inferredRegions, documentModel?.parts, documentModel?.correspondences, masks, selectedRegion, selectedRegionId, selectedPart, view, overlayAlpha, isolate, showInferred, selectedPoint, draftPoint, draftHandle, pendingLandmark, tool, brushRadius, renderVersion]);
 
   const pointFromEvent = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     if (!source) return { x: 0, y: 0 };
@@ -288,7 +387,20 @@ export default function App() {
     if (!documentModel || busy || !source) return;
     event.currentTarget.setPointerCapture(event.pointerId);
     const point = pointFromEvent(event);
-    if (tool === 'select') {
+    if (tool === 'landmark') {
+      const picked = { sourceId: source.id, x: Math.round(point.x * 100) / 100, y: Math.round(point.y * 100) / 100 };
+      if (!pendingLandmark || pendingLandmark.sourceId === source.id) {
+        setPendingLandmark(picked);
+        setStatus('Landmark selected. Choose the matching point in another reference.');
+      } else {
+        setPendingLandmark(undefined);
+        void perform([{ op: 'reference.correspond', correspondence: {
+          id: `manual_landmark_${revision + 1}`, sourceIds: [pendingLandmark.sourceId, source.id],
+          landmarkPoints: [{ x: pendingLandmark.x, y: pendingLandmark.y }, { x: picked.x, y: picked.y }],
+          kind: 'landmark', origin: 'manual', evidence: ['user-selected source pixels'], accepted: true,
+        } }]);
+      }
+    } else if (tool === 'select') {
       const hit = [...visibleRegions].reverse().find(region => {
         const mask = masks.get(region.id), x = Math.floor(point.x - region.bounds.x), y = Math.floor(point.y - region.bounds.y);
         return mask && x >= 0 && y >= 0 && x < mask.width && y < mask.height && mask.bytes[y * mask.width + x];
@@ -298,11 +410,20 @@ export default function App() {
       void perform([{ op: 'part.setPivot', partId: selectedPart.id, x: Math.round(point.x * 100) / 100, y: Math.round(point.y * 100) / 100 }]);
     } else if (tool === 'path' && selectedRegion) {
       const path = selectedRegion.geometry.manualPath ?? selectedRegion.geometry.generatedPath;
+      const selected = selectedPoint === undefined ? undefined : path.points[selectedPoint];
+      if (selected) {
+        const handle = (['in', 'out'] as const).map(side => ({ side, position: selected[side] })).filter(item => item.position)
+          .map(item => ({ side: item.side, distance: Math.hypot(selectedRegion.bounds.x + item.position!.x * selectedRegion.bounds.width - point.x, selectedRegion.bounds.y + item.position!.y * selectedRegion.bounds.height - point.y) }))
+          .sort((a, b) => a.distance - b.distance)[0];
+        if (handle && handle.distance < Math.max(2, source.width / 150)) { pointer.current = { tool, points: [point], anchor: selectedPoint, side: handle.side }; return; }
+      }
       const nearest = path.points.map((anchor, index) => ({ index, distance: Math.hypot(selectedRegion.bounds.x + anchor.x * selectedRegion.bounds.width - point.x, selectedRegion.bounds.y + anchor.y * selectedRegion.bounds.height - point.y) }))
         .sort((a, b) => a.distance - b.distance)[0];
       if (nearest && nearest.distance < Math.max(5, source.width / 100)) { setSelectedPoint(nearest.index); pointer.current = { tool, points: [point], anchor: nearest.index }; }
     } else if ((tool === 'paint-add' || tool === 'paint-erase') && selectedRegion) {
       pointer.current = { tool, points: [point] }; setRenderVersion(value => value + 1);
+    } else if ((tool === 'seed-add' || tool === 'seed-erase') && selectedRegion) {
+      void perform([{ op: 'region.seedMask', regionId: selectedRegion.id, x: Math.floor(point.x), y: Math.floor(point.y), action: tool === 'seed-add' ? 'add' : 'subtract', colorTolerance: seedTolerance, radius: seedRadius }]);
     }
   }
   function onPointerMove(event: ReactPointerEvent<HTMLCanvasElement>) {
@@ -310,7 +431,11 @@ export default function App() {
     const point = pointFromEvent(event);
     pointer.current.points.push(point);
     if (pointer.current.tool === 'path' && selectedRegion) {
-      setDraftPoint({ x: (point.x - selectedRegion.bounds.x) / selectedRegion.bounds.width, y: (point.y - selectedRegion.bounds.y) / selectedRegion.bounds.height });
+      const candidate = edgeSnap && !pointer.current.side && sourcePixelsRef.current
+        ? snapToSourceEdge(point, sourcePixelsRef.current, source.width, source.height, edgeSnapRadius) : point;
+      const normalized = { x: (candidate.x - selectedRegion.bounds.x) / selectedRegion.bounds.width, y: (candidate.y - selectedRegion.bounds.y) / selectedRegion.bounds.height };
+      if (pointer.current.side) setDraftHandle({ side: pointer.current.side, ...normalized });
+      else setDraftPoint(normalized);
     } else setRenderVersion(value => value + 1);
   }
   function onPointerUp(event: ReactPointerEvent<HTMLCanvasElement>) {
@@ -321,14 +446,19 @@ export default function App() {
       const path = structuredClone(selectedRegion.geometry.manualPath ?? selectedRegion.geometry.generatedPath);
       const anchor = path.points[stroke.anchor];
       if (anchor) {
-        const x = (point.x - selectedRegion.bounds.x) / selectedRegion.bounds.width, y = (point.y - selectedRegion.bounds.y) / selectedRegion.bounds.height;
-        const dx = x - anchor.x, dy = y - anchor.y;
-        anchor.x = x; anchor.y = y;
-        if (anchor.in) { anchor.in.x += dx; anchor.in.y += dy; }
-        if (anchor.out) { anchor.out.x += dx; anchor.out.y += dy; }
+        const snapped = edgeSnap && !stroke.side && sourcePixelsRef.current && source
+          ? snapToSourceEdge(point, sourcePixelsRef.current, source.width, source.height, edgeSnapRadius) : point;
+        const x = (snapped.x - selectedRegion.bounds.x) / selectedRegion.bounds.width, y = (snapped.y - selectedRegion.bounds.y) / selectedRegion.bounds.height;
+        if (stroke.side) anchor[stroke.side] = { x, y };
+        else {
+          const dx = x - anchor.x, dy = y - anchor.y;
+          anchor.x = x; anchor.y = y;
+          if (anchor.in) { anchor.in.x += dx; anchor.in.y += dy; }
+          if (anchor.out) { anchor.out.x += dx; anchor.out.y += dy; }
+        }
         void perform([{ op: 'region.setPath', regionId: selectedRegion.id, path }]);
       }
-      setDraftPoint(undefined);
+      setDraftPoint(undefined); setDraftHandle(undefined);
     } else if (stroke.tool === 'paint-add' || stroke.tool === 'paint-erase') {
       const old = masks.get(selectedRegion.id); if (!old) return;
       const mask: RegionMask = { width: old.width, height: old.height, bytes: Uint8Array.from(old.bytes) };
@@ -360,17 +490,26 @@ export default function App() {
       <aside className="left-pane pane">
         <h2>References</h2>
         {documentModel ? <div className="stack">{documentModel.sources.map(item => <button key={item.id} className={source?.id === item.id ? 'row selected' : 'row'} onClick={async () => { setSelectedSourceId(item.id); setSelectedRegionId(undefined); setSelectedPartId(undefined); await readSource(item.id, documentModel); const response = await client.current.call<{ id: string; mask: RegionMask }[]>('masks', { sourceId: item.id }); setMasks(new Map(response.map(entry => [entry.id, entry.mask]))); }}><span>{item.name}</span><small>{item.role} · {item.width} × {item.height}</small></button>)}</div> : <p className="hint">PNG, JPEG and WebP. Select multiple files to compare views.</p>}
+        {pendingLandmark && <div className="reference-guide"><span>Pending landmark on {documentModel?.sources.find(item => item.id === pendingLandmark.sourceId)?.name} at {pendingLandmark.x}, {pendingLandmark.y}</span><button onClick={() => setPendingLandmark(undefined)}>Cancel point</button></div>}
+        {documentModel?.correspondences.some(item => item.kind === 'landmark') && <div className="reference-guide"><strong>Paired landmarks</strong>{documentModel.correspondences.filter(item => item.kind === 'landmark' && item.landmarkPoints).map(item => <small key={item.id}>{item.sourceIds.map((id, index) => `${documentModel.sources.find(source => source.id === id)?.name ?? id} (${item.landmarkPoints![index].x.toFixed(1)}, ${item.landmarkPoints![index].y.toFixed(1)})`).join(' ↔ ')}</small>)}</div>}
+        {source && source.role !== 'primary' && <div className="reference-guide"><strong>Alignment to primary</strong><small>Optional affine mapping of this source into primary pixels. Use only where one transform describes both images.</small><button disabled={!alignmentLandmarkIds.length || busy} onClick={() => void perform([{ op: 'reference.alignFromLandmarks', sourceId: source.id, landmarkIds: alignmentLandmarkIds }])}>Align from paired landmarks</button><div className="affine-grid">{(['a', 'b', 'c', 'd', 'tx', 'ty'] as const).map((name, index) => <label key={`${source.id}-${name}`}>{name}<input aria-label={`Alignment ${name}`} type="number" step="0.01" key={`${source.id}-${name}-${source.transformToPrimary?.[index] ?? ''}`} defaultValue={(source.transformToPrimary ?? [1, 0, 0, 1, 0, 0])[index]} onBlur={event => { const value = Number(event.target.value); if (!Number.isFinite(value)) return; const next = [...(source.transformToPrimary ?? [1, 0, 0, 1, 0, 0])] as [number, number, number, number, number, number]; if (next[index] === value) return; next[index] = value; void perform([{ op: 'reference.setTransform', sourceId: source.id, transformToPrimary: next }]); }}/></label>)}</div><small>x′ = ax + cy + tx; y′ = bx + dy + ty</small><button disabled={!source.transformToPrimary || busy} onClick={() => void perform([{ op: 'reference.setTransform', sourceId: source.id }])}>Clear alignment</button></div>}
         <div className="divider"/><h2>Regions</h2>
-        <div className="scroll-list">{visibleRegions.map(region => <button key={region.id} className={selectedRegionId === region.id ? 'row selected' : 'row'} onClick={() => { setSelectedRegionId(region.id); setSelectedPartId(region.partId); setSelectedPoint(undefined); }}><span><i className="swatch" style={{ background: region.color }}/> {region.id.split('_').slice(-2).join(' ')}</span><small>{region.pixelCount} px · {region.geometry.texture === 'source-crop' ? 'texture' : 'vector'} {region.holeCount ? `· ${region.holeCount} hole` : ''}</small></button>)}</div>
+        <div className="scroll-list">{visibleRegions.map(region => <button key={region.id} className={`row${selectedRegionId === region.id ? ' selected' : ''}${region.geometry.status === 'inferred' ? ' inferred-row' : ''}`} onClick={() => { setSelectedRegionId(region.id); setSelectedPartId(region.partId); setSelectedPoint(undefined); }}><span><i className="swatch" style={{ background: region.geometry.status === 'inferred' ? '#ffcb70' : region.color }}/> {region.id.split('_').slice(-2).join(' ')}</span><small>{region.geometry.status === 'inferred' ? 'Inferred · unseen and uncertain · ' : ''}{region.pixelCount} px · {region.geometry.texture === 'source-crop' ? 'texture' : 'vector'} {region.holeCount ? `· ${region.holeCount} hole` : ''}</small></button>)}{suppressedRegions.map(region => <button key={region.id} className={`row suppressed-row${selectedRegionId === region.id ? ' selected' : ''}`} onClick={() => { setSelectedRegionId(region.id); setSelectedPartId(region.partId); setSelectedPoint(undefined); }}><span><i className="swatch" style={{ background: '#876c45' }}/> {region.id.split('_').slice(-2).join(' ')}</span><small>Suppressed inferred region · source evidence retained</small></button>)}</div>
         <div className="divider"/><h2>Parts</h2>
-        <div className="scroll-list">{documentModel?.parts.filter(part => part.regionIds.some(id => documentModel.regions.some(region => region.id === id && active(region) && region.sourceId === source?.id))).map(part => <button key={part.id} className={selectedPart?.id === part.id ? 'row selected' : 'row'} onClick={() => { setSelectedPartId(part.id); setSelectedRegionId(part.regionIds.find(id => visibleRegions.some(region => region.id === id))); }}><span>{part.name}</span><small>{part.regionIds.length} region{part.regionIds.length === 1 ? '' : 's'} · pivot {part.pivot.x.toFixed(1)}, {part.pivot.y.toFixed(1)}</small></button>)}</div>
+        <div className="scroll-list">{documentModel?.parts.filter(part => part.regionIds.some(id => documentModel.regions.some(region => region.id === id && active(region) && region.sourceId === source?.id))).map(part => <button key={part.id} className={selectedPart?.id === part.id ? 'row selected' : 'row'} onClick={() => { setSelectedPartId(part.id); setSelectedRegionId(part.regionIds.find(id => visibleRegions.some(region => region.id === id))); }}><span>{part.name}</span><small>{part.regionIds.length} region{part.regionIds.length === 1 ? '' : 's'} · pivot {part.pivot.x.toFixed(1)}, {part.pivot.y.toFixed(1)}{part.hiddenGeometry !== 'none' ? ` · ${part.hiddenGeometry} hidden area` : ''}</small></button>)}</div>
       </aside>
       <main className="center-pane">
-        <div className="canvas-toolbar"><div className="segmented">{(['original', 'reconstruction', 'overlay', 'side-by-side'] as View[]).map(item => <button key={item} aria-pressed={view === item} onClick={() => setView(item)}>{item === 'side-by-side' ? 'Side by side' : item[0].toUpperCase() + item.slice(1)}</button>)}</div><label>Tool <select aria-label="Canvas tool" value={tool} onChange={event => setTool(event.target.value as Tool)}><option value="select">Select</option><option value="path">Move path anchor</option><option value="paint-add">Add mask</option><option value="paint-erase">Subtract mask</option><option value="pivot">Set pivot</option></select></label><label><input type="checkbox" checked={isolate} onChange={event => setIsolate(event.target.checked)}/> Isolate</label></div>
-        {(tool === 'paint-add' || tool === 'paint-erase' || view === 'overlay') && <div className="canvas-subbar">{tool.startsWith('paint') && <label>Hard brush radius <input aria-label="Brush radius" type="range" min="1" max="40" value={brushRadius} onChange={event => setBrushRadius(Number(event.target.value))}/>{brushRadius}px</label>}{view === 'overlay' && <label>Overlay opacity <input aria-label="Overlay opacity" type="range" min="0" max="1" step="0.05" value={overlayAlpha} onChange={event => setOverlayAlpha(Number(event.target.value))}/></label>}</div>}
+        <div className="canvas-toolbar"><div className="segmented">{(['original', 'reconstruction', 'overlay', 'side-by-side'] as View[]).map(item => <button key={item} aria-pressed={view === item} onClick={() => setView(item)}>{item === 'side-by-side' ? 'Side by side' : item[0].toUpperCase() + item.slice(1)}</button>)}</div><label>Zoom<select aria-label="Canvas zoom" value={String(zoom)} onChange={event => setZoom(event.target.value === 'fit' ? 'fit' : Number(event.target.value))}><option value="fit">Fit</option><option value="1">1× pixels</option><option value="2">2× pixels</option><option value="4">4× pixels</option><option value="8">8× pixels</option></select></label><label>Tool <select aria-label="Canvas tool" value={tool} onChange={event => setTool(event.target.value as Tool)}><option value="select">Select</option><option value="path">Edit path and handles</option><option value="paint-add">Add mask brush</option><option value="paint-erase">Subtract mask brush</option><option value="seed-add">Foreground seed</option><option value="seed-erase">Background seed</option><option value="landmark">Pair reference landmark</option><option value="pivot">Set pivot</option></select></label><label><input type="checkbox" checked={isolate} onChange={event => setIsolate(event.target.checked)}/> Isolate</label></div>
+        {(tool === 'path' || tool.startsWith('paint') || tool.startsWith('seed') || view === 'overlay' || inferredRegions.length > 0) && <div className="canvas-subbar">
+          {tool.startsWith('paint') && <label>Hard brush radius <input aria-label="Brush radius" type="range" min="1" max="40" value={brushRadius} onChange={event => setBrushRadius(Number(event.target.value))}/>{brushRadius}px</label>}
+          {tool.startsWith('seed') && <><label>Seed tolerance <input aria-label="Seed tolerance" type="range" min="0" max="255" value={seedTolerance} onChange={event => setSeedTolerance(Number(event.target.value))}/>{seedTolerance}</label><label>Seed reach <input aria-label="Seed reach" type="range" min="1" max="256" value={seedRadius} onChange={event => setSeedRadius(Number(event.target.value))}/>{seedRadius}px</label></>}
+          {tool === 'path' && <><label><input aria-label="Snap path to source edges" type="checkbox" checked={edgeSnap} onChange={event => setEdgeSnap(event.target.checked)}/> Snap anchors to source edges</label>{edgeSnap && <label>Snap reach <input aria-label="Snap reach" type="range" min="1" max="12" value={edgeSnapRadius} onChange={event => setEdgeSnapRadius(Number(event.target.value))}/>{edgeSnapRadius}px</label>}</>}
+          {view === 'overlay' && <label>Overlay opacity <input aria-label="Overlay opacity" type="range" min="0" max="1" step="0.05" value={overlayAlpha} onChange={event => setOverlayAlpha(Number(event.target.value))}/></label>}
+          {inferredRegions.length > 0 && <label><input aria-label="Show inferred overlay" type="checkbox" checked={showInferred} onChange={event => setShowInferred(event.target.checked)}/> Show {inferredRegions.length} uncertain hidden contour{inferredRegions.length === 1 ? '' : 's'} in amber</label>}
+        </div>}
         <div className={`canvas-grid ${view === 'side-by-side' ? 'two' : ''}`}>{source ? <>
-          {(view === 'original' || view === 'side-by-side') && <div className="canvas-card"><div className="canvas-label">Original · {source.name}</div><canvas ref={originalCanvas}/></div>}
-          {(view !== 'original') && <div className="canvas-card"><div className="canvas-label">{view === 'overlay' ? 'Overlay' : 'Reconstruction'} · source masks and geometry</div><canvas ref={reconstructionCanvas} className="interactive-canvas" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}/></div>}
+          {(view === 'original' || view === 'side-by-side') && <div className="canvas-card"><div className="canvas-label">Original · {source.name}</div><canvas ref={originalCanvas} style={canvasZoomStyle} className={`${zoom !== 'fit' ? 'zoomed ' : ''}${tool === 'landmark' ? 'interactive-canvas' : ''}`} onPointerDown={tool === 'landmark' ? onPointerDown : undefined}/></div>}
+          {(view !== 'original') && <div className="canvas-card"><div className="canvas-label">{view === 'overlay' ? 'Overlay' : 'Reconstruction'} · source masks and geometry</div><canvas ref={reconstructionCanvas} style={canvasZoomStyle} className={`interactive-canvas${zoom !== 'fit' ? ' zoomed' : ''}`} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}/></div>}
         </> : <div className="empty-state"><div className="empty-art">◇</div><h1>Turn illustrations into editable Hyde art</h1><p>Import a stylized image to get an automatic first pass. Refine regions, inspect uncertainty, and export a native project or assembly.</p><label className="button accent">Choose images<input type="file" accept="image/png,image/jpeg,image/webp" multiple hidden onChange={importImages}/></label></div>}</div>
         {previewUrl && <div className="native-preview">
           <div className="section-heading"><h3>Native Hyde render · primary reference</h3><button onClick={clearNativePreview}>Close</button></div>
@@ -390,25 +529,32 @@ export default function App() {
         <div className="status-panel"><div className="section-heading"><h3>{busy ? 'Processing' : 'Status'}</h3>{busy && <button onClick={() => void cancelWork()}>Cancel and restore</button>}</div><p role="status">{status}</p>{quality && <p className="metric">Sampled path to mask IoU: {(quality.meanSampledMaskIoU * 100).toFixed(1)}% · {quality.pointCount} path anchors. Color and texture fidelity require the native render preview.</p>}</div>
       </main>
       <aside className="right-pane pane"><h2>Reconstruction</h2>
-        {documentModel && <><label>Mode<select aria-label="Reconstruction mode" value={documentModel.mode} onChange={async event => { if (busy) return; setBusy(true); try { checkpoint.current = (await client.current.call<{ bytes: Uint8Array }>('save')).bytes; const state = await client.current.call<WorkerState>('analyze', { mode: event.target.value }); await refresh(state); setStatus(`Switched to ${event.target.value}. Locks and manual edits retained.`); } catch (error) { setStatus(error instanceof Error ? error.message : 'Mode change failed.'); } finally { setBusy(false); } }}><option value="appearance">Appearance first</option><option value="animation-ready">Animation ready</option></select></label>
+        {documentModel && <><label>Mode<select aria-label="Reconstruction mode" value={documentModel.mode} onChange={async event => { if (busy) return; const mode = event.target.value; setBusy(true); try { checkpoint.current = (await client.current.call<{ bytes: Uint8Array }>('save')).bytes; const state = await client.current.call<WorkerState>('analyze', { mode }); await refresh(state); setStatus(`Switched to ${mode}. Locks and manual edits retained.`); } catch (error) { setStatus(error instanceof Error ? error.message : 'Mode change failed.'); } finally { setBusy(false); } }}><option value="appearance">Appearance first</option><option value="animation-ready">Animation ready</option></select></label>
+          <label><input aria-label="Infer hidden continuations" type="checkbox" checked={requestedInference ?? documentModel.settings.inferHiddenGeometry} disabled={busy || documentModel.mode !== 'animation-ready'} onChange={event => void setHiddenContinuations(event.target.checked)}/> Propose hidden continuations</label>
+          <p className="hint">Animation ready only. Enclosed opaque overlaps may support a conservative unseen piece beneath a front region. The inferred shape and color remain uncertain; pinned edits survive when automatic proposals are turned off.</p>
           <label>Color granularity <input aria-label="Color granularity" type="range" min="8" max="96" value={documentModel.settings.colorStep} onChange={event => setDocumentModel({ ...documentModel, settings: { ...documentModel.settings, colorStep: Number(event.target.value) } })}/><span>{documentModel.settings.colorStep}</span></label>
           <label>Path tolerance <input aria-label="Path tolerance" type="range" min="0" max="8" step="0.25" value={documentModel.settings.pathTolerance} onChange={event => setDocumentModel({ ...documentModel, settings: { ...documentModel.settings, pathTolerance: Number(event.target.value) } })}/><span>{documentModel.settings.pathTolerance}</span></label>
           <button disabled={busy} onClick={async () => { if (!documentModel) return; setBusy(true); try { checkpoint.current = (await client.current.call<{ bytes: Uint8Array }>('save')).bytes; const state = await client.current.call<WorkerState>('analyze', { settings: documentModel.settings }); await refresh(state); setStatus('Reconstruction settings applied; locked edits retained.'); } catch (error) { setStatus(error instanceof Error ? error.message : 'Reanalysis failed.'); } finally { setBusy(false); } }}>Apply settings</button>
           <button disabled={busy} onClick={() => void analyzeAgain()}>Regenerate first pass</button>
         </>}
         <div className="divider"/>
-        <h2>Selected region</h2>{selectedRegion ? <div className="inspector"><p className="identity">{selectedRegion.id}</p><p>{selectedRegion.bounds.width} × {selectedRegion.bounds.height} at {selectedRegion.bounds.x}, {selectedRegion.bounds.y} · {selectedRegion.geometry.quality.pathPointCount} anchors</p><p className="hint">Evidence: {selectedRegion.confidence.reasons.join('; ')}</p>
+        <h2>Selected region</h2>{selectedRegion ? <div className="inspector"><p className="identity">{selectedRegion.id}</p><p>{selectedRegion.bounds.width} × {selectedRegion.bounds.height} at {selectedRegion.bounds.x}, {selectedRegion.bounds.y} · {selectedRegion.geometry.quality.pathPointCount} anchors</p>{selectedRegion.geometry.status === 'inferred' && <div className="inferred-callout"><strong>Unseen continuation · uncertain</strong><span>This amber contour is estimated beneath the foreground. Its hidden appearance is not visible in the source. Isolate and edit it before articulating the part.</span><button disabled={busy || Boolean(selectedRegion.geometry.manualPath)} onClick={() => void perform([{ op: 'region.setPath', regionId: selectedRegion.id, path: selectedRegion.geometry.generatedPath }])}>{selectedRegion.geometry.manualPath ? 'Contour pinned as manual edit' : 'Pin current hidden contour'}</button></div>}<p className="hint">Evidence: {selectedRegion.confidence.reasons.join('; ')}</p>
+          {selectedRegion.geometry.status === 'inferred' && <button disabled={busy} onClick={() => void perform([{ op: 'region.setSuppressed', regionId: selectedRegion.id, suppressed: true }])}>Suppress inferred region</button>}
           <label>Assign to part<select aria-label="Assign to part" value={selectedRegion.partId ?? ''} onChange={event => { if (event.target.value) void perform([{ op: 'part.assignRegion', regionId: selectedRegion.id, partId: event.target.value }]); }}><option value="">Unassigned</option>{documentModel?.parts.map(part => <option key={part.id} value={part.id}>{part.name}</option>)}</select></label>
-          <p className="hint">Hard mask brush edits within this region’s current bounds. Split or merge regions to change topology.</p>
+          <p className="hint">Brush and seed edits stay within this region’s current bounds. Masks are binary; antialiasing remains in the retained source texture. Split or merge to change topology.</p>
           <label><input type="checkbox" checked={selectedRegion.locked.mask} onChange={event => void perform([{ op: 'annotation.lock', regionId: selectedRegion.id, target: 'mask', locked: event.target.checked }])}/> Lock mask</label>
           <label><input type="checkbox" checked={selectedRegion.locked.geometry} onChange={event => void perform([{ op: 'annotation.lock', regionId: selectedRegion.id, target: 'geometry', locked: event.target.checked }])}/> Lock path</label>
           <label><input type="checkbox" checked={selectedRegion.locked.part} onChange={event => void perform([{ op: 'annotation.lock', regionId: selectedRegion.id, target: 'part', locked: event.target.checked }])}/> Lock part assignment</label>
+          {selectedPath && <div className="path-controls"><strong>Editable contour</strong><p className="hint">Click an anchor to select it. Drag its colored handle to adjust the Bézier curve.</p><span>{selectedPoint === undefined ? 'Select an anchor on the canvas' : `Anchor ${selectedPoint + 1} of ${selectedPath.points.length}`}</span>
+            <div className="inline-actions"><button aria-label="Add path anchor" disabled={busy || selectedPoint === undefined || selectedPath.points.length >= 4096} onClick={() => { if (selectedPoint === undefined) return; const path = splitPathSegment(selectedPath, selectedPoint); setSelectedPoint(selectedPoint + 1); void perform([{ op: 'region.setPath', regionId: selectedRegion.id, path }]); }}>Add after</button><button aria-label="Remove path anchor" disabled={busy || selectedPoint === undefined || selectedPath.points.length <= 3} onClick={() => { if (selectedPoint === undefined) return; const path = removePathPoint(selectedPath, selectedPoint); setSelectedPoint(Math.min(selectedPoint, path.points.length - 1)); void perform([{ op: 'region.setPath', regionId: selectedRegion.id, path }]); }}>Remove</button></div>
+            {selectedPoint !== undefined && selectedPath.points[selectedPoint] && <div className="inline-actions">{(['in', 'out'] as const).map(side => <button key={side} aria-label={`${selectedPath.points[selectedPoint]?.[side] ? 'Remove' : 'Add'} ${side === 'in' ? 'incoming' : 'outgoing'} handle`} disabled={busy} onClick={() => { const point = selectedPath.points[selectedPoint]; const position = point[side] ? undefined : { x: point.x + (side === 'in' ? -.08 : .08), y: point.y }; void perform([{ op: 'region.setPath', regionId: selectedRegion.id, path: setPathHandle(selectedPath, selectedPoint, side, position) }]); }}>{selectedPath.points[selectedPoint][side] ? 'Remove' : 'Add'} {side} handle</button>)}</div>}
+          </div>}
           <div className="inline-actions"><button disabled={busy} onClick={() => void perform([{ op: 'region.split', regionId: selectedRegion.id, axis: 'x', coordinate: selectedRegion.bounds.x + selectedRegion.bounds.width / 2 }])}>Split vertical</button><button disabled={busy} onClick={() => void perform([{ op: 'region.split', regionId: selectedRegion.id, axis: 'y', coordinate: selectedRegion.bounds.y + selectedRegion.bounds.height / 2 }])}>Split horizontal</button></div>
           <label>Merge with<select aria-label="Merge target" value={mergeTarget ?? ''} onChange={event => setMergeTarget(event.target.value)}><option value="">Choose region</option>{visibleRegions.filter(item => item.id !== selectedRegion.id).map(item => <option key={item.id} value={item.id}>{item.id}</option>)}</select></label><button disabled={!mergeTarget || busy} onClick={() => { if (mergeTarget) void perform([{ op: 'region.merge', firstId: selectedRegion.id, secondId: mergeTarget }]); }}>Merge selected</button>
           <button disabled={busy} onClick={() => void perform([{ op: 'regenerate.selected', regionIds: [selectedRegion.id] }])}>Regenerate selected path</button>
           <label>Front of<select aria-label="Layer target" value={relationTarget ?? ''} onChange={event => setRelationTarget(event.target.value)}><option value="">Choose region</option>{visibleRegions.filter(item => item.id !== selectedRegion.id).map(item => <option key={item.id} value={item.id}>{item.id}</option>)}</select></label><button disabled={!relationTarget || busy} onClick={() => { if (relationTarget) void perform([{ op: 'layer.setRelation', frontRegionId: selectedRegion.id, backRegionId: relationTarget, approved: true }]); }}>Approve front relation</button>
           {alternateRegions.length > 0 && primaryRegions.some(item => item.id === selectedRegion.id) && <><label>Match alternate region<select aria-label="Alternate match" value={matchTarget ?? ''} onChange={event => setMatchTarget(event.target.value)}><option value="">Choose region</option>{alternateRegions.map(item => <option key={item.id} value={item.id}>{item.id}</option>)}</select></label><button disabled={!matchTarget || busy} onClick={() => { const other = alternateRegions.find(item => item.id === matchTarget); if (other) void perform([{ op: 'reference.correspond', correspondence: { id: `${selectedRegion.id}_manual_${other.id}`, sourceIds: [selectedRegion.sourceId, other.sourceId], regionIds: [selectedRegion.id, other.id], kind: 'same-part', origin: 'manual', evidence: ['user confirmed'], accepted: true } }]); }}>Confirm match</button></>}
-        </div> : <p className="hint">Select a region on the canvas or in the outliner.</p>}
+        </div> : selectedSuppressedRegion ? <div className="inspector"><p className="identity">{selectedSuppressedRegion.id}</p><p className="hint">This inferred region is suppressed. Its original mask and path remain in the editable source document.</p><button disabled={busy} onClick={() => void perform([{ op: 'region.setSuppressed', regionId: selectedSuppressedRegion.id, suppressed: false }])}>Restore inferred region</button></div> : <p className="hint">Select a region on the canvas or in the outliner.</p>}
         <div className="divider"/><h2>Selected part</h2>{selectedPart ? <div className="inspector"><label>Name<input aria-label="Part name" key={`${selectedPart.id}-${selectedPart.name}`} defaultValue={selectedPart.name} onBlur={event => { if (event.target.value !== selectedPart.name) void perform([{ op: 'part.rename', partId: selectedPart.id, name: event.target.value }]); }}/></label>
           <div className="columns"><label>Pivot X<input aria-label="Pivot X" type="number" key={`${selectedPart.id}-x-${selectedPart.pivot.x}`} defaultValue={selectedPart.pivot.x} onBlur={event => void perform([{ op: 'part.setPivot', partId: selectedPart.id, x: Number(event.target.value), y: selectedPart.pivot.y }])}/></label><label>Pivot Y<input aria-label="Pivot Y" type="number" key={`${selectedPart.id}-y-${selectedPart.pivot.y}`} defaultValue={selectedPart.pivot.y} onBlur={event => void perform([{ op: 'part.setPivot', partId: selectedPart.id, x: selectedPart.pivot.x, y: Number(event.target.value) }])}/></label></div>
           <label><input type="checkbox" checked={selectedPart.pivotLocked} onChange={event => void perform([{ op: 'annotation.lock', partId: selectedPart.id, target: 'pivot', locked: event.target.checked }])}/> Lock pivot</label>

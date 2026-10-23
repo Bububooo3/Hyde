@@ -12,6 +12,7 @@ import { applyTimelineCommand, timelineCommandKeys, timelineOperations } from '.
 import type { TimelineCommand } from './authoringTimeline';
 import { applyCatalogCommand, CATALOG_COMMAND_KEYS, CATALOG_OPERATIONS, CatalogError } from './authoringCatalog';
 import type { CatalogCommand } from './authoringCatalog';
+import { validateStagedAsset } from './assetSniff';
 
 export interface HydeDiagnostic {
   code: string;
@@ -117,6 +118,27 @@ function assertKeys(value: unknown, allowed: readonly string[], label: string): 
 function diagnostic(code: string, message: string, commandIndex?: number): HydeDiagnostic {
   return { code, severity: 'error', message, commandIndex };
 }
+function commandDiagnostic(cause: unknown, command: HydeCommand, commandIndex: number, aliases: Map<string, string>): HydeDiagnostic {
+  const message = cause instanceof Error ? cause.message : 'Command failed.';
+  const input = command && typeof command === 'object' ? command as Record<string, unknown> : {};
+  const args = input.args && typeof input.args === 'object' && !Array.isArray(input.args) ? input.args as Record<string, unknown> : {};
+  const op = typeof input.op === 'string' ? input.op : '';
+  const requested = /scene does not exist/i.test(message) && typeof args.sceneId === 'string' ? args.sceneId
+    : /parent.*does not exist/i.test(message) && typeof args.parentId === 'string' ? args.parentId
+      : /^keyframe\.|^track\.|^motion\./.test(op) && typeof args.elementId === 'string' ? args.elementId
+        : ['id', 'elementId', 'sceneId', 'assetId', 'sourceId', 'parentId', 'targetId', 'clipId', 'instanceId']
+          .map(key => args[key]).find(value => typeof value === 'string') as string | undefined;
+  const unsupported = /\bdoes not support ([A-Za-z][A-Za-z0-9_]*)\b/.exec(message);
+  const patch = op === 'element.updateAppearance' ? args.appearance
+    : op === 'element.setTransform' ? args.transform
+      : op === 'project.updateMetadata' ? args : undefined;
+  const patchKeys = patch && typeof patch === 'object' && !Array.isArray(patch) ? Object.keys(patch) : [];
+  return {
+    ...diagnostic(failureCode(cause), message, commandIndex),
+    ...(requested ? { targetId: aliases.get(requested) ?? requested } : {}),
+    ...(unsupported ? { field: unsupported[1] } : patchKeys.length === 1 ? { field: patchKeys[0] } : {}),
+  };
+}
 function failureCode(cause: unknown): string {
   if (cause instanceof MediaAuthoringError || cause instanceof CatalogError) return cause.code;
   const message = cause instanceof Error ? cause.message : String(cause);
@@ -154,34 +176,6 @@ function bytesDataUrl(bytes: Uint8Array, mime: string): string {
   let binary = '';
   for (let offset = 0; offset < bytes.length; offset += 0x8000) binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
   return `data:${mime};base64,${btoa(binary)}`;
-}
-function sniffAsset(bytes: Uint8Array): string | undefined {
-  const ascii = (start: number, end: number) => String.fromCharCode(...bytes.subarray(start, end));
-  if (bytes.length >= 8 && bytes.subarray(0, 8).every((byte, index) => byte === [137, 80, 78, 71, 13, 10, 26, 10][index])) return 'image/png';
-  if (bytes.length >= 3 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255) return 'image/jpeg';
-  if (ascii(0, 6) === 'GIF87a' || ascii(0, 6) === 'GIF89a') return 'image/gif';
-  if (ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WEBP') return 'image/webp';
-  if (ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WAVE') return 'audio/wav';
-  if (ascii(0, 4) === 'OggS') return 'audio/ogg';
-  if (ascii(0, 3) === 'ID3' || bytes.length >= 2 && bytes[0] === 255 && (bytes[1] & 0xe0) === 0xe0) return 'audio/mpeg';
-  if (ascii(4, 8) === 'ftyp') return 'video/mp4';
-  if (bytes.length >= 4 && bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3) return 'video/webm';
-  if (ascii(0, 4) === 'wOFF') return 'font/woff';
-  if (ascii(0, 4) === 'wOF2') return 'font/woff2';
-  if (ascii(0, 4) === 'OTTO') return 'font/otf';
-  if (bytes.length >= 4 && bytes[0] === 0 && bytes[1] === 1 && bytes[2] === 0 && bytes[3] === 0) return 'font/ttf';
-  const prefix = new TextDecoder().decode(bytes.subarray(0, Math.min(bytes.length, 4096))).trimStart();
-  if (/^(?:<\?xml[^>]*>\s*)?<svg(?:\s|>)/i.test(prefix)) return 'image/svg+xml';
-  return undefined;
-}
-function validateStagedAsset(bytes: Uint8Array, mime: string, kind: Asset['kind']): void {
-  const detected = sniffAsset(bytes);
-  const expectedKind = mime.startsWith('image/') ? 'image' : mime.startsWith('video/') ? 'video' : mime.startsWith('audio/') ? 'audio' : mime.startsWith('font/') ? 'font' : undefined;
-  if (!detected || detected !== mime || expectedKind !== kind) throw new Error(`Asset MIME/kind mismatch: declared ${kind} ${mime}, detected ${detected ?? 'unknown'}.`);
-  if (mime === 'image/svg+xml') {
-    const xml = new TextDecoder().decode(bytes);
-    if (/<!DOCTYPE|<!ENTITY|<script\b|<foreignObject\b|\b(?:href|src)\s*=\s*['"](?:https?:|data:|\/\/)|url\s*\(\s*['"]?(?:https?:|data:|\/\/)|@import/i.test(xml)) throw new Error('SVG contains scripts, external resources or unsupported declarations.');
-  }
 }
 function summarize(before: Project, after: Project): ChangeSummary {
   const collect = (model: Project) => new Map<string, unknown>([
@@ -262,20 +256,26 @@ export class HydeAuthoringSession {
       if (from < 0 || from > this.revision || [...Array(this.revision - from)].some((_, i) => !this.changes.has(from + i + 1))) return { revision: this.revision, error: diagnostic('DIFF_UNAVAILABLE', 'Revision changes are no longer available; inspect the current project.') };
       return { revision: this.revision, changes: [...this.changes.entries()].filter(([revision]) => revision > from).map(([revision, changes]) => ({ revision, changes })) };
     }
-    if (query.target === 'element') return { revision: this.revision, element: projectFields(structuredClone(requiredElement(this.project, query.id ?? '')) as unknown as Record<string, unknown>, query.fields) };
+    if (query.target === 'element') {
+      const element = this.project.elements.find(item => item.id === query.id);
+      if (!element) return { revision: this.revision, error: { ...diagnostic('TARGET_NOT_FOUND', 'Element does not exist.'), targetId: query.id } };
+      return { revision: this.revision, element: projectFields(structuredClone(element) as unknown as Record<string, unknown>, query.fields) };
+    }
     if (query.target === 'asset') {
       const asset = this.project.assets.find(item => item.id === query.id);
-      if (!asset) return { revision: this.revision, error: diagnostic('TARGET_NOT_FOUND', 'Asset does not exist.') };
+      if (!asset) return { revision: this.revision, error: { ...diagnostic('TARGET_NOT_FOUND', 'Asset does not exist.'), targetId: query.id } };
       const { dataUrl: _data, ...metadata } = asset;
       return { revision: this.revision, asset: projectFields(structuredClone(metadata), query.fields) };
     }
     if (query.target === 'scene') {
       const scene = this.project.sequences.find(item => item.id === query.id);
-      if (!scene) return { revision: this.revision, error: diagnostic('TARGET_NOT_FOUND', 'Scene does not exist.') };
+      if (!scene) return { revision: this.revision, error: { ...diagnostic('TARGET_NOT_FOUND', 'Scene does not exist.'), targetId: query.id } };
       return { revision: this.revision, scene: structuredClone(scene), elements: this.project.elements.filter(item => item.sceneId === scene.id).slice(cursor, cursor + limit).map(item => structuredClone(item)), nextCursor: cursor + limit < this.project.elements.filter(item => item.sceneId === scene.id).length ? cursor + limit : undefined };
     }
     if (query.target === 'tree' || query.target === 'assembly') {
-      const roots = query.target === 'assembly' ? [requiredElement(this.project, query.id ?? '')] : this.project.elements.filter(item => (query.sceneId === undefined || item.sceneId === query.sceneId) && !item.parentId);
+      const assemblyRoot = query.target === 'assembly' ? this.project.elements.find(item => item.id === query.id) : undefined;
+      if (query.target === 'assembly' && !assemblyRoot) return { revision: this.revision, error: { ...diagnostic('TARGET_NOT_FOUND', 'Assembly root does not exist.'), targetId: query.id } };
+      const roots = assemblyRoot ? [assemblyRoot] : this.project.elements.filter(item => (query.sceneId === undefined || item.sceneId === query.sceneId) && !item.parentId);
       const maxDepth = Math.min(8, Math.max(0, Math.floor(query.depth ?? 3)));
       const visit = (item: StoryElement, depth: number): Record<string, unknown> => ({ id: item.id, name: item.name, kind: item.kind, sceneId: item.sceneId, parentId: item.parentId, attachment: item.attachment, childCount: this.project.elements.filter(child => child.parentId === item.id).length, ...(depth < maxDepth ? { children: this.project.elements.filter(child => child.parentId === item.id).sort((a, b) => a.id.localeCompare(b.id)).slice(0, 100).map(child => visit(child, depth + 1)) } : {}) });
       const ordered = [...roots].sort((a, b) => a.id.localeCompare(b.id));
@@ -295,6 +295,7 @@ export class HydeAuthoringSession {
   }
   async execute(request: ExecuteRequest): Promise<ExecuteResult> {
     if (request.protocolVersion !== 1) return { ok: false, revision: this.revision, errors: [diagnostic('SCHEMA_UNSUPPORTED', 'Command protocol version is unsupported.')], warnings: [] };
+    if (!Number.isSafeInteger(request.expectedRevision) || request.expectedRevision < 0) return { ok: false, revision: this.revision, errors: [{ ...diagnostic('INVALID_ARGUMENT', 'expectedRevision must be a nonnegative integer.'), field: 'expectedRevision' }], warnings: [] };
     if (request.correlationId !== undefined && (typeof request.correlationId !== 'string' || request.correlationId.length < 1 || request.correlationId.length > 128)) return { ok: false, revision: this.revision, errors: [diagnostic('INVALID_ARGUMENT', 'correlationId must contain 1 to 128 characters.')], warnings: [] };
     let signature = '';
     if (request.correlationId) {
@@ -304,8 +305,10 @@ export class HydeAuthoringSession {
     const replayed = request.correlationId ? this.replay.get(request.correlationId) : undefined;
     if (replayed) return replayed.signature === signature ? structuredClone(replayed.result) : { ok: false, revision: this.revision, errors: [diagnostic('INVALID_ARGUMENT', 'correlationId was reused for a different batch.')], warnings: [] };
     if (request.expectedRevision !== this.revision) {
-      const changes = [...this.changes.entries()].filter(([revision]) => revision > request.expectedRevision).slice(0, 25).map(([revision, change]) => ({ revision, ...change }));
-      return { ok: false, revision: this.revision, errors: [{ ...diagnostic('REVISION_CONFLICT', `Expected revision ${request.expectedRevision}; current revision is ${this.revision}.`), details: { changes, truncated: this.revision - request.expectedRevision > changes.length }, suggestions: ['Inspect changed IDs, then retry with the current revision.'] }], warnings: [] };
+      const changed = [...this.changes.entries()].filter(([revision]) => revision > request.expectedRevision);
+      const changes = changed.slice(0, 25).map(([revision, change]) => ({ revision, added: change.added.slice(0, 50), changed: change.changed.slice(0, 50), removed: change.removed.slice(0, 50) }));
+      const truncated = changed.length > changes.length || changed.slice(0, 25).some(([, change]) => change.added.length > 50 || change.changed.length > 50 || change.removed.length > 50);
+      return { ok: false, revision: this.revision, errors: [{ ...diagnostic('REVISION_CONFLICT', `Expected revision ${request.expectedRevision}; current revision is ${this.revision}.`), field: 'expectedRevision', details: { expectedRevision: request.expectedRevision, currentRevision: this.revision, changes, truncated }, suggestions: ['Inspect changed IDs, then retry with the current revision.'] }], warnings: [] };
     }
     if (!Array.isArray(request.commands) || request.commands.length < 1 || request.commands.length > 1000) return { ok: false, revision: this.revision, errors: [diagnostic('RESOURCE_LIMIT', 'A batch must contain between 1 and 1000 commands.')], warnings: [] };
     let candidate = structuredClone(this.project);
@@ -321,13 +324,17 @@ export class HydeAuthoringSession {
         }
         candidate = this.apply(candidate, command, aliases, usedHandles, usedAssemblyHandles);
       } catch (error) {
-        const code = failureCode(error);
-        return { ok: false, revision: this.revision, errors: [diagnostic(code, error instanceof Error ? error.message : 'Command failed.', index)], warnings: [] };
+        return { ok: false, revision: this.revision, errors: [commandDiagnostic(error, command, index, aliases)], warnings: [] };
       }
     }
     candidate.updatedAt = new Date().toISOString();
     try { validateDocument(candidate, false); }
-    catch (error) { return { ok: false, revision: this.revision, errors: [diagnostic(failureCode(error) === 'INVALID_ARGUMENT' ? 'INVALID_REFERENCE' : failureCode(error), error instanceof Error ? error.message : 'Project validation failed.')], warnings: [] }; }
+    catch (error) {
+      const cause = request.commands.length === 1
+        ? commandDiagnostic(error, request.commands[0], 0, aliases)
+        : diagnostic(failureCode(error), error instanceof Error ? error.message : 'Project validation failed.');
+      return { ok: false, revision: this.revision, errors: [cause], warnings: [] };
+    }
     const changes = summarize(this.project, candidate);
     const result = { ok: true as const, revision: this.revision + (request.dryRun ? 0 : 1), applied: request.commands.length, idMap: Object.fromEntries(aliases), changes, warnings: [] };
     if (!request.dryRun) {

@@ -30,7 +30,11 @@ interface ExportJob {
   controller: AbortController;
   artifact?: Uint8Array;
   mime?: string;
+  timedOut?: boolean;
 }
+
+const EXPORT_TIMEOUT_MS = 5 * 60_000;
+const MAX_ARTIFACT_BYTES = 512 * 1024 * 1024;
 
 function error(code: string, message: string): HydeDiagnostic { return { code, severity: 'error', message }; }
 function object(value: unknown): Record<string, unknown> {
@@ -46,15 +50,26 @@ export class EditorBridge {
   private readonly stagedAssemblies = new Map<string, Uint8Array>();
   private readonly jobs = new Map<string, ExportJob>();
   private renderHost?: HydeRenderHost;
+  private hostOpening?: Promise<HydeRenderHost>;
   private mutating = false;
+  private rendering = false;
   constructor(readonly scopes: ReadonlySet<BridgeScope>, private readonly editor: EditorBridgeCallbacks) {}
 
-  private success(requestId: string, result: unknown): BridgeResponse { return { requestId, ok: true, revision: this.editor.revision(), result }; }
+  private success(requestId: string, result: unknown, allowRevoked = false): BridgeResponse {
+    if (!this.active && !allowRevoked) return this.failure(requestId, 'PERMISSION_DENIED', 'Automation was revoked before the request completed.');
+    return { requestId, ok: true, revision: this.editor.revision(), result };
+  }
   private failure(requestId: string, code: string, message: string): BridgeResponse { return { requestId, ok: false, revision: this.editor.revision(), errors: [error(code, message)] }; }
   private require(scope: BridgeScope): void { if (!this.scopes.has(scope)) throw Object.assign(new Error(`${scope} permission is required.`), { code: 'PERMISSION_DENIED' }); }
   private async host(): Promise<HydeRenderHost> {
-    this.renderHost ??= await HydeRenderHost.connect(() => this.editor.project());
-    return this.renderHost;
+    if (!this.active) throw Object.assign(new Error('Automation was revoked.'), { code: 'PERMISSION_DENIED' });
+    if (this.renderHost) return this.renderHost;
+    this.hostOpening ??= HydeRenderHost.connect(() => this.editor.project()).then(host => {
+      if (!this.active) { host.close(); throw Object.assign(new Error('Automation was revoked while preparing the renderer.'), { code: 'PERMISSION_DENIED' }); }
+      this.renderHost = host;
+      return host;
+    }).finally(() => { this.hostOpening = undefined; });
+    return this.hostOpening;
   }
   revoke(): void {
     if (!this.active) return;
@@ -62,13 +77,14 @@ export class EditorBridge {
     for (const job of this.jobs.values()) if (job.state !== 'completed' && job.state !== 'failed') { job.controller.abort(); job.state = 'canceled'; }
     this.staged.clear();
     this.stagedAssemblies.clear();
+    this.jobs.clear();
     this.renderHost?.close();
     this.renderHost = undefined;
   }
   async request(request: BridgeRequest): Promise<BridgeResponse> {
     const requestId = typeof request?.requestId === 'string' ? request.requestId.slice(0, 128) : '';
     if (!this.active) return this.failure(requestId, 'PERMISSION_DENIED', 'Automation is disabled for this editor session.');
-    if (request?.protocolVersion !== 1 || request.sessionId !== this.sessionId || !requestId) return this.failure(requestId, 'INVALID_ARGUMENT', 'Invalid bridge version, session or request ID.');
+    if (request?.protocolVersion !== 1 || request.sessionId !== this.sessionId || !requestId || request.requestId.length > 128) return this.failure(requestId, 'INVALID_ARGUMENT', 'Invalid bridge version, session or request ID.');
     try {
       switch (request.operation) {
         case 'capabilities': {
@@ -150,30 +166,45 @@ export class EditorBridge {
         }
         case 'renderFrame': {
           this.require('preview');
-          return this.success(requestId, await (await this.host()).renderFrame(object(request.payload) as unknown as Parameters<HydeRenderHost['renderFrame']>[0]));
+          if (this.rendering || [...this.jobs.values()].some(job => ['queued', 'preparing', 'running'].includes(job.state))) return this.failure(requestId, 'RESOURCE_LIMIT', 'A render or export is already running.');
+          this.rendering = true;
+          try {
+            const frame = await (await this.host()).renderFrame(object(request.payload) as unknown as Parameters<HydeRenderHost['renderFrame']>[0]);
+            if (!this.active) return this.failure(requestId, 'PERMISSION_DENIED', 'Automation was revoked before the frame completed.');
+            return this.success(requestId, frame);
+          } finally { this.rendering = false; }
         }
         case 'startExport': {
           this.require('export');
-          if ([...this.jobs.values()].some(job => ['queued', 'preparing', 'running'].includes(job.state))) return this.failure(requestId, 'RESOURCE_LIMIT', 'An export is already running.');
+          if (this.rendering || [...this.jobs.values()].some(job => ['queued', 'preparing', 'running'].includes(job.state))) return this.failure(requestId, 'RESOURCE_LIMIT', 'A render or export is already running.');
           const settings = object(request.payload) as unknown as MediaExportSettings;
           const job: ExportJob = { id: crypto.randomUUID(), state: 'queued', progress: 0, controller: new AbortController() };
           const project = structuredClone(this.editor.project());
           for (const [id, old] of this.jobs) if (old.state === 'completed' || old.state === 'failed' || old.state === 'canceled') this.jobs.delete(id);
           this.jobs.set(job.id, job);
           void (async () => {
+            const timeout = setTimeout(() => {
+              job.timedOut = true; job.controller.abort(); job.state = 'failed';
+              job.message = 'Export exceeded the five minute bridge timeout.'; job.artifact = undefined;
+            }, EXPORT_TIMEOUT_MS);
             try {
               job.state = 'preparing';
               if (job.controller.signal.aborted) return;
               job.state = 'running';
               const result = await exportMedia(project, settings, { signal: job.controller.signal, onProgress: progress => { job.progress = progress.total ? progress.completed / progress.total : 0; } });
               if (job.controller.signal.aborted) return;
+              if (result.blob.size > MAX_ARTIFACT_BYTES) throw new Error('Export artifact exceeds the 512 MiB bridge limit.');
               job.artifact = new Uint8Array(await result.blob.arrayBuffer());
+              if (job.controller.signal.aborted) return;
               job.mime = result.blob.type;
               job.progress = 1;
               job.state = 'completed';
             } catch (cause) {
-              job.state = job.controller.signal.aborted ? 'canceled' : 'failed';
-              job.message = cause instanceof Error ? cause.message : 'Export failed.';
+              job.state = job.timedOut ? 'failed' : job.controller.signal.aborted ? 'canceled' : 'failed';
+              job.message = job.timedOut ? 'Export exceeded the five minute bridge timeout.' : cause instanceof Error ? cause.message : 'Export failed.';
+            } finally {
+              clearTimeout(timeout);
+              if (job.timedOut && job.state !== 'completed') { job.state = 'failed'; job.message = 'Export exceeded the five minute bridge timeout.'; job.artifact = undefined; }
             }
           })();
           return this.success(requestId, { jobId: job.id });
@@ -212,7 +243,7 @@ export class EditorBridge {
           return this.success(requestId, { timeSeconds });
         }
         case 'diagnostics': this.require('read'); return this.success(requestId, []);
-        case 'revoke': this.revoke(); return this.success(requestId, { revoked: true });
+        case 'revoke': this.revoke(); return this.success(requestId, { revoked: true }, true);
         default: return this.failure(requestId, 'OPERATION_UNSUPPORTED', `Unsupported bridge operation ${String(request.operation)}.`);
       }
     } catch (cause) {

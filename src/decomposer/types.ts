@@ -85,6 +85,8 @@ export interface RegionRecord {
   adjacency: { regionId: string; sharedBoundary: number; colorDistance: number }[];
   /** An immutable source mask remains available after a manual mask edit. */
   originalMaskId?: string;
+  /** A reversible user decision; suppressed inferred geometry remains in .hydecomp. */
+  suppressed?: boolean;
 }
 
 export interface PartRecord {
@@ -108,6 +110,8 @@ export interface CorrespondenceRecord {
   regionIds?: [string, string];
   partIds?: [string, string];
   kind: 'same-part' | 'possible-match' | 'front-back-evidence' | 'source-alignment' | 'landmark';
+  /** Source-space pixel locations in the same order as sourceIds. */
+  landmarkPoints?: [Point, Point];
   origin: 'automatic' | 'manual';
   evidence: string[];
   ambiguity?: string;
@@ -162,7 +166,7 @@ export function defaultSettings(mode: DecompositionMode): ReconstructionSettings
     pathTolerance: mode === 'appearance' ? 0.65 : 1.25,
     maxPathPoints: 512,
     preserveTexture: true,
-    inferHiddenGeometry: false,
+    inferHiddenGeometry: mode === 'animation-ready',
     groupingStrength: mode === 'appearance' ? 0.35 : 0.65,
   };
 }

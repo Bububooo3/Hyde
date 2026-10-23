@@ -26,7 +26,7 @@ export interface HydeDecompositionExport {
 function activeRegions(document: DecompositionDocumentV1): RegionRecord[] {
   const primary = document.sources.find(source => source.role === 'primary');
   if (!primary) throw new Error('Primary source is missing.');
-  return document.regions.filter(region => region.sourceId === primary.id && region.generationStatus !== 'historical');
+  return document.regions.filter(region => region.sourceId === primary.id && region.generationStatus !== 'historical' && !region.suppressed);
 }
 function regionPath(region: RegionRecord): ShapePath { return region.geometry.manualPath ?? region.geometry.generatedPath; }
 

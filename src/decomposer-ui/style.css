@@ -30,8 +30,16 @@ h3 { font-size: 13px; margin: 0; }
 .scroll-list { max-height: 24vh; overflow: auto; }
 .row { display: grid; width: 100%; text-align: left; gap: 4px; padding: 9px; background: #1d343c; }
 .row.selected { border-color: #39d3bb; background: #254a4c; }
+.row.inferred-row { border-left: 3px solid #ffcb70; }
+.row.suppressed-row { opacity: .72; border-left: 3px solid #876c45; }
 .row span { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row small { font-size: 10px; color: #aac1c0; }
+.reference-guide { display: grid; gap: 6px; margin-top: 10px; padding: 9px; border: 1px solid #3d5d65; border-radius: 7px; color: #d1e5e0; font-size: 11px; background: #1b343b; overflow-wrap: anywhere; }
+.reference-guide small { color: #a9c5c1; font-size: 10px; line-height: 1.4; }
+.reference-guide button { font-size: 10px; }
+.affine-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+.affine-grid label { display: grid; gap: 2px; color: #a9c5c1; font-size: 10px; }
+.affine-grid input { width: 100%; min-width: 0; background: #102129; color: #eaf5f2; border: 1px solid #3e616a; border-radius: 5px; padding: 4px; font-size: 10px; }
 .swatch { display: inline-block; width: 11px; height: 11px; border: 1px solid #88a2a0; border-radius: 2px; vertical-align: middle; margin-right: 3px; }
 .center-pane { min-width: 0; display: flex; flex-direction: column; overflow: auto; background: #112129; }
 .canvas-toolbar, .canvas-subbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid #314b55; background: #1a3039; }
@@ -43,9 +51,10 @@ h3 { font-size: 13px; margin: 0; }
 .segmented button[aria-pressed="true"] { background: #33615e; }
 .canvas-grid { flex: 1; display: grid; grid-template-columns: 1fr; gap: 12px; padding: 14px; min-height: 330px; }
 .canvas-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.canvas-card { display: flex; flex-direction: column; min-width: 0; align-items: center; justify-content: center; border: 1px solid #39545d; border-radius: 9px; background: radial-gradient(circle at 50% 40%, #29434a, #192c33 70%); overflow: hidden; position: relative; }
+.canvas-card { display: flex; flex-direction: column; min-width: 0; align-items: safe center; justify-content: safe center; border: 1px solid #39545d; border-radius: 9px; background: radial-gradient(circle at 50% 40%, #29434a, #192c33 70%); overflow: auto; position: relative; }
 .canvas-label { position: absolute; top: 8px; left: 8px; z-index: 1; padding: 5px 7px; color: #eaf7f3; background: #0d242bbb; border-radius: 5px; font-size: 10px; }
 .canvas-card canvas { max-width: 95%; max-height: 75vh; width: min(95%, 640px); height: auto; object-fit: contain; image-rendering: pixelated; background: conic-gradient(#f4f6f1 25%, #d6dfdb 0 50%, #f4f6f1 0 75%, #d6dfdb 0) 0 0/16px 16px; box-shadow: 0 16px 36px #07151c8a; }
+.canvas-card canvas.zoomed { max-width: none; max-height: none; min-width: auto; min-height: auto; object-fit: none; flex: none; }
 .canvas-card .interactive-canvas { touch-action: none; cursor: crosshair; }
 .empty-state { justify-self: center; align-self: center; text-align: center; max-width: 430px; padding: 25px; }
 .empty-state h1 { font-size: 26px; line-height: 1.15; }
@@ -73,6 +82,14 @@ h3 { font-size: 13px; margin: 0; }
 .inspector { margin: 4px 0 15px; }
 .inspector p { font-size: 11px; color: #bdcecc; line-height: 1.45; margin: 8px 0; }
 .inspector .identity { color: #74dcca; font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
+.inferred-callout { display: grid; gap: 7px; margin: 10px 0; padding: 10px; border: 1px solid #ad8456; border-radius: 7px; background: #3e332d; color: #ffe3b1; font-size: 11px; line-height: 1.45; }
+.inferred-callout button { font-size: 11px; }
+.path-controls { margin: 12px 0; padding: 9px; border: 1px solid #416268; border-radius: 7px; background: #132b32; }
+.path-controls strong { display: block; font-size: 11px; margin-bottom: 4px; }
+.path-controls span { display: block; color: #a9c8c4; font-size: 11px; margin-bottom: 7px; }
+.path-controls .hint { margin: 5px 0 9px; }
+.path-controls .inline-actions + .inline-actions { margin-top: 6px; }
+.path-controls button { font-size: 10px; }
 .columns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .inline-actions button { flex: 1; }
 .diagnostics { background: #14262e; border-top: 1px solid #34505a; display: flex; align-items: flex-start; gap: 16px; min-height: 83px; padding: 13px 18px; }

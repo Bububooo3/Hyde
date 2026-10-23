@@ -25,8 +25,35 @@ describe('public Node SDK', () => {
     const bytes = await session.exportProject();
     const reopened = await sdk.openProject(bytes);
     expect(reopened.snapshot()).toEqual(session.snapshot());
+    const savedDigest = await session.contentDigest();
+    expect(savedDigest).toMatchObject({ algorithm: 'SHA-256', digestVersion: 1, archiveType: 'hyde', archiveVersion: 1 });
+    expect(savedDigest.hex).toMatch(/^[0-9a-f]{64}$/);
+    expect(await reopened.contentDigest()).toEqual(savedDigest);
+    const renamed = await reopened.execute({ protocolVersion: 1, expectedRevision: 0, commands: [
+      { op: 'scene.rename', args: { id: scene, name: 'Changed after reopen' } },
+    ] });
+    expect(renamed.ok).toBe(true);
+    expect((await reopened.contentDigest()).hex).not.toBe(savedDigest.hex);
+    expect(reopened.undo(1)).toBe(true);
+    expect(await reopened.contentDigest()).toEqual(savedDigest);
     expect(await reopened.diagnostics()).toEqual([]);
     await session.close();
     expect(() => session.snapshot()).toThrow('closed');
+  });
+
+  it('reports the same assembly content digest after a native assembly round trip', async () => {
+    const sdk = new HydeSDK();
+    const session = await sdk.createProject();
+    const result = await session.execute({ protocolVersion: 1, expectedRevision: 0, commands: [
+      { op: 'element.create', args: { alias: '$root', kind: 'group' } },
+      { op: 'element.create', args: { kind: 'ellipse', properties: { parentId: '$root' } } },
+    ] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const bytes = await session.exportAssembly(result.idMap.$root);
+    const first = await sdk.openAssembly(bytes);
+    const second = await sdk.openAssembly(first.exportBytes());
+    expect(await first.contentDigest()).toMatchObject({ algorithm: 'SHA-256', digestVersion: 1, archiveType: 'hyde-assembly', archiveVersion: 1 });
+    expect(await second.contentDigest()).toEqual(await first.contentDigest());
   });
 });

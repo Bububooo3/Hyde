@@ -150,7 +150,7 @@ function distanceToBoundary(boundary: Uint8Array, width: number, height: number)
 
 function complexity(document: DecompositionDocumentV1, foregroundPixels: number): ReconstructionQualityReport['complexity'] {
   const primaryId = document.sources.find(source => source.role === 'primary')?.id;
-  const regions = document.regions.filter(region => region.sourceId === primaryId && region.classification === 'foreground' && region.generationStatus !== 'historical');
+  const regions = document.regions.filter(region => region.sourceId === primaryId && region.classification === 'foreground' && region.generationStatus !== 'historical' && !region.suppressed);
   const partIds = new Set(regions.map(region => region.partId).filter((id): id is string => Boolean(id)));
   const pathPointCount = regions.reduce((sum, region) => sum + (region.geometry.manualPath ?? region.geometry.generatedPath).points.length, 0);
   const largest = regions.reduce((size, region) => Math.max(size, region.pixelCount), 0);

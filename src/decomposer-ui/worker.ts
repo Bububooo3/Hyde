@@ -46,7 +46,7 @@ self.onmessage = async (event: MessageEvent<Request>) => {
     } else if (type === 'source') result = { bytes: requireSession().sourceBytesFor(payload.id) };
     else if (type === 'masks') {
       const running = requireSession(), doc = running.snapshot();
-      result = doc.regions.filter(region => region.sourceId === payload.sourceId && region.generationStatus !== 'historical')
+      result = doc.regions.filter(region => region.sourceId === payload.sourceId && region.generationStatus !== 'historical' && !region.suppressed)
         .map(region => ({ id: region.id, mask: running.maskFor(region.maskId) }));
     } else if (type === 'mask') result = { mask: requireSession().maskFor(payload.id) };
     else if (type === 'compare') result = requireSession().compare();

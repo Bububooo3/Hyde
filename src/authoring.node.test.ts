@@ -133,7 +133,50 @@ describe('authoring transactions in Node', () => {
     expect(await session.execute(first)).toEqual(applied);
     expect(session.snapshot().elements).toHaveLength(1);
     const stale = await session.execute({ protocolVersion: 1, expectedRevision: 0, commands: [{ op: 'element.create', args: { kind: 'rectangle' } }] });
-    expect(stale).toMatchObject({ ok: false, revision: 1, errors: [{ code: 'REVISION_CONFLICT', details: { changes: [{ revision: 1 }] } }] });
+    expect(stale).toMatchObject({ ok: false, revision: 1, errors: [{ code: 'REVISION_CONFLICT', field: 'expectedRevision', details: { expectedRevision: 0, currentRevision: 1, changes: [{ revision: 1 }] } }] });
     expect((await session.execute({ ...first, commands: [{ op: 'element.create', args: { kind: 'rectangle' } }] })).ok).toBe(false);
+  });
+
+  it('reports command targets and unsupported fields without changing the project', async () => {
+    const session = HydeAuthoringSession.create();
+    const id = 'missing-element';
+    const invalid = await session.execute({ protocolVersion: 1, expectedRevision: 0, commands: [
+      { op: 'element.setTransform', args: { id, transform: { x: 10, invented: 1 } as never } },
+    ] });
+    expect(invalid).toMatchObject({ ok: false, revision: 0, errors: [{ code: 'INVALID_ARGUMENT', commandIndex: 0, targetId: id, field: 'invented' }] });
+    const missing = await session.execute({ protocolVersion: 1, expectedRevision: 0, commands: [
+      { op: 'element.setTransform', args: { id, transform: { x: 10 } } },
+    ] });
+    expect(missing).toMatchObject({ ok: false, revision: 0, errors: [{ code: 'TARGET_NOT_FOUND', commandIndex: 0, targetId: id }] });
+    const created = await session.execute({ protocolVersion: 1, expectedRevision: 0, commands: [
+      { op: 'element.create', args: { id: 'visible-piece', kind: 'rectangle' } },
+    ] });
+    expect(created.ok).toBe(true);
+    const opacity = await session.execute({ protocolVersion: 1, expectedRevision: 1, commands: [
+      { op: 'element.updateAppearance', args: { id: 'visible-piece', appearance: { opacity: 2 } } },
+    ] });
+    expect(opacity).toMatchObject({ ok: false, revision: 1, errors: [{ code: 'INVALID_ARGUMENT', commandIndex: 0, targetId: 'visible-piece', field: 'opacity' }] });
+    expect(session.inspect({ target: 'element', id })).toMatchObject({ revision: 1, error: { code: 'TARGET_NOT_FOUND', targetId: id } });
+    expect(session.inspect({ target: 'assembly', id })).toMatchObject({ revision: 1, error: { code: 'TARGET_NOT_FOUND', targetId: id } });
+    expect(await session.execute({ protocolVersion: 1, expectedRevision: Number.NaN, commands: [] })).toMatchObject({ ok: false, errors: [{ field: 'expectedRevision', code: 'INVALID_ARGUMENT' }] });
+    expect(await session.execute({ protocolVersion: 1, expectedRevision: 1, commands: [null as never] })).toMatchObject({ ok: false, errors: [{ code: 'INVALID_ARGUMENT', commandIndex: 0 }] });
+    expect(session.snapshot().elements).toHaveLength(1);
+    expect(session.snapshot().elements[0].opacity).toBe(1);
+  });
+
+  it('bounds IDs in a stale-revision conflict while retaining the current revision', async () => {
+    const session = HydeAuthoringSession.create();
+    const commands = Array.from({ length: 51 }, (_, index) => ({
+      op: 'element.create' as const, args: { id: `piece-${index}`, kind: 'rectangle' as const },
+    }));
+    expect((await session.execute({ protocolVersion: 1, expectedRevision: 0, commands })).ok).toBe(true);
+    const stale = await session.execute({ protocolVersion: 1, expectedRevision: 0, commands: [
+      { op: 'scene.rename', args: { id: session.snapshot().sequences[0].id, name: 'stale' } },
+    ] });
+    expect(stale).toMatchObject({ ok: false, revision: 1, errors: [{ code: 'REVISION_CONFLICT', details: { currentRevision: 1, truncated: true } }] });
+    if (stale.ok) return;
+    const changes = stale.errors[0].details?.changes as Array<{ added: string[] }>;
+    expect(changes[0].added).toHaveLength(50);
+    expect(session.snapshot().elements).toHaveLength(51);
   });
 });

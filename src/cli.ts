@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { decodeAssemblyBytes, decodeProjectBytes, encodeProjectBytes, validateDocument } from './archive';
 import { HydeAuthoringSession } from './authoring';
 import { BrowserHostError, probeBrowserHost, runBrowserTask } from './cliBrowserRunner';
-import type { ExecuteRequest, HydeCommand } from './authoring';
+import type { ExecuteRequest, HydeCommand, HydeDiagnostic } from './authoring';
 import { insertAssemblyAt } from './editing';
 import { sceneIdAt } from './model';
 import type { Assembly, Project } from './model';
@@ -18,7 +18,8 @@ type Parsed = { positionals: string[]; flags: Flags };
 type ExitCode = 0 | 2 | 3 | 4 | 5 | 6 | 7;
 
 export class CliFailure extends Error {
-  constructor(readonly code: string, message: string, readonly exitCode: ExitCode) { super(message); }
+  constructor(readonly code: string, message: string, readonly exitCode: ExitCode,
+    readonly transaction?: { revision: number; errors: HydeDiagnostic[]; warnings: HydeDiagnostic[] }) { super(message); }
 }
 
 function parse(args: string[]): Parsed {
@@ -133,7 +134,8 @@ function failExecution(result: Awaited<ReturnType<HydeAuthoringSession['execute'
   if (result.ok) throw new Error('Expected a failed transaction.');
   const first = result.errors[0];
   const exit: ExitCode = first?.code === 'REVISION_CONFLICT' ? 4 : first?.code === 'SCHEMA_UNSUPPORTED' ? 3 : 2;
-  throw new CliFailure(first?.code ?? 'INVALID_ARGUMENT', first?.message ?? 'Command batch failed.', exit);
+  throw new CliFailure(first?.code ?? 'INVALID_ARGUMENT', first?.message ?? 'Command batch failed.', exit,
+    { revision: result.revision, errors: result.errors, warnings: result.warnings });
 }
 async function commandsFrom(path: string, session: HydeAuthoringSession): Promise<ExecuteRequest> {
   let document: unknown;
@@ -321,8 +323,8 @@ async function dispatch(args: string[], io: Output): Promise<{ command: string; 
   }
 }
 
-function cleanError(error: unknown): { code: string; message: string; exitCode: ExitCode } {
-  if (error instanceof CliFailure) return { code: error.code, message: error.message, exitCode: error.exitCode };
+function cleanError(error: unknown): { code: string; message: string; exitCode: ExitCode; transaction?: CliFailure['transaction'] } {
+  if (error instanceof CliFailure) return { code: error.code, message: error.message, exitCode: error.exitCode, transaction: error.transaction };
   if (error instanceof BrowserHostError) return { code: error.code, message: error.message, exitCode: error.code === 'CANCELED' ? 7 : error.code === 'CAPABILITY_UNAVAILABLE' ? 5 : error.code === 'INVALID_ARGUMENT' ? 2 : 6 };
   if (error instanceof Error && (error as NodeJS.ErrnoException).code) return { code: 'INVALID_ARGUMENT', message: `Filesystem operation failed (${(error as NodeJS.ErrnoException).code}).`, exitCode: 2 };
   return { code: 'INTERNAL_ERROR', message: 'Unexpected CLI failure.', exitCode: 6 };
@@ -336,7 +338,11 @@ export async function runCli(args: string[], io: Output = { stdout: text => proc
     return 0;
   } catch (error) {
     const failure = cleanError(error);
-    const text = json ? JSON.stringify({ ok: false, errors: [{ code: failure.code, severity: 'error', message: failure.message }] }) : `${failure.code}: ${failure.message}`;
+    const text = json ? JSON.stringify({ ok: false,
+      ...(failure.transaction ? { revision: failure.transaction.revision } : {}),
+      errors: failure.transaction?.errors ?? [{ code: failure.code, severity: 'error', message: failure.message }],
+      warnings: failure.transaction?.warnings ?? [],
+    }) : `${failure.code}: ${failure.message}`;
     io.stderr(`${text}\n`);
     return failure.exitCode;
   }

@@ -1,8 +1,10 @@
 import type { ShapePath } from '../model';
-import { analyzeImage, ALGORITHM_VERSION, fitMaskGeometry, proposeCorrespondences } from './analysis';
+import { analyzeImage, ALGORITHM_VERSION, fitMaskGeometry } from './analysis';
+import { rankReferenceCorrespondences } from './correspondence';
 import { decodeDecompositionDocument, encodeDecompositionDocument, sha256, validateDecompositionDocument } from './codec';
 import { exportNativeDecomposition } from './export';
 import type { HydeDecompositionExport, HydeDecompositionExportOptions } from './export';
+import { proposeHiddenContinuations } from './hidden';
 import { decodeSource } from './image';
 import type { DecodedImage } from './image';
 import { defaultSettings } from './types';
@@ -10,7 +12,9 @@ import type { CorrespondenceRecord, DecompositionDocumentV1, DecompositionMode, 
 
 export type DecompositionEdit =
   | { op: 'region.setPath'; regionId: string; path: ShapePath }
+  | { op: 'region.setSuppressed'; regionId: string; suppressed: boolean }
   | { op: 'region.refineMask'; regionId: string; handle: string }
+  | { op: 'region.seedMask'; regionId: string; x: number; y: number; action: 'add' | 'subtract'; colorTolerance: number; radius: number; maxPixels?: number }
   | { op: 'region.split'; regionId: string; axis: 'x' | 'y'; coordinate: number }
   | { op: 'region.merge'; firstId: string; secondId: string }
   | { op: 'part.create'; id: string; name: string; regionIds?: string[] }
@@ -21,6 +25,8 @@ export type DecompositionEdit =
   | { op: 'part.setAttachment'; partId: string; type?: 'fixed' | 'hinge' | 'slider'; min?: number; max?: number; approved?: boolean }
   | { op: 'layer.setRelation'; frontRegionId: string; backRegionId: string; approved: boolean }
   | { op: 'reference.correspond'; correspondence: CorrespondenceRecord }
+  | { op: 'reference.setTransform'; sourceId: string; transformToPrimary?: [number, number, number, number, number, number] }
+  | { op: 'reference.alignFromLandmarks'; sourceId: string; landmarkIds: string[] }
   | { op: 'annotation.lock'; regionId?: string; partId?: string; target: 'mask' | 'geometry' | 'part' | 'pivot' | 'transform'; locked: boolean }
   | { op: 'regenerate.selected'; regionIds: string[]; settings?: Partial<ReconstructionSettings> };
 
@@ -32,7 +38,7 @@ export interface DecompositionEditResult {
 }
 interface Snapshot { document: DecompositionDocumentV1; masks: Map<string, RegionMask> }
 const cloneMaskMap = (masks: Map<string, RegionMask>): Map<string, RegionMask> => new Map([...masks].map(([id, mask]) => [id, { width: mask.width, height: mask.height, bytes: Uint8Array.from(mask.bytes) }]));
-const active = (region: RegionRecord) => region.generationStatus !== 'historical';
+const active = (region: RegionRecord) => region.generationStatus !== 'historical' && !region.suppressed;
 const fail = (message: string): never => { throw new Error(message); };
 const finite = (value: number) => Number.isFinite(value) || fail('Coordinate must be finite.');
 
@@ -40,6 +46,9 @@ function refreshPartBounds(document: DecompositionDocumentV1): void {
   for (const part of document.parts) {
     const owned = document.regions.filter(region => active(region) && region.partId === part.id);
     part.regionIds = owned.map(region => region.id);
+    const inferred = owned.filter(region => region.geometry.status === 'inferred');
+    if (inferred.some(region => region.generationStatus === 'manual' || region.locked.geometry || region.locked.mask || region.locked.part)) part.hiddenGeometry = 'user-authored';
+    else if (part.hiddenGeometry !== 'user-authored') part.hiddenGeometry = inferred.length ? 'inferred' : 'none';
     if (!owned.length) continue;
     const x = Math.min(...owned.map(region => region.bounds.x)), y = Math.min(...owned.map(region => region.bounds.y));
     const right = Math.max(...owned.map(region => region.bounds.x + region.bounds.width));
@@ -58,6 +67,115 @@ function maskOverlap(a: RegionRecord, am: RegionMask, b: RegionRecord, bm: Regio
     if (am.bytes[ai] && bm.bytes[bi]) intersection++;
   }
   return intersection / Math.max(1, a.pixelCount + b.pixelCount - intersection);
+}
+
+function remapPath(path: ShapePath, before: RegionRecord['bounds'], after: RegionRecord['bounds']): ShapePath {
+  const point = (value: { x: number; y: number }) => ({
+    x: (before.x + value.x * before.width - after.x) / after.width,
+    y: (before.y + value.y * before.height - after.y) / after.height,
+  });
+  return { points: path.points.map(value => ({ ...point(value), ...(value.in ? { in: point(value.in) } : {}), ...(value.out ? { out: point(value.out) } : {}) })) };
+}
+
+function landmarkAlignment(document: DecompositionDocumentV1, sourceId: string, landmarkIds: string[]): [number, number, number, number, number, number] {
+  const primaryId = (document.sources.find(source => source.role === 'primary') ?? fail('INVALID_ARGUMENT: A primary source is required.')).id;
+  if (sourceId === primaryId || !document.sources.some(source => source.id === sourceId)) fail('INVALID_ARGUMENT: Alignment needs a non-primary source.');
+  if (!Array.isArray(landmarkIds) || !landmarkIds.length || landmarkIds.length > 64 || new Set(landmarkIds).size !== landmarkIds.length)
+    fail('INVALID_ARGUMENT: Choose 1 to 64 distinct landmark pairs.');
+  const pairs = landmarkIds.map(id => {
+    const landmark = document.correspondences.find(item => item.id === id) ?? fail('INVALID_ARGUMENT: An alignment landmark is missing.');
+    if (landmark.kind !== 'landmark' || landmark.accepted === false) fail('INVALID_ARGUMENT: An alignment landmark is rejected or not a point pair.');
+    const points = landmark.landmarkPoints ?? fail('INVALID_ARGUMENT: An alignment landmark has no point pair.');
+    const sourceIndex = landmark.sourceIds.indexOf(sourceId), primaryIndex = landmark.sourceIds.indexOf(primaryId);
+    if (sourceIndex < 0 || primaryIndex < 0) fail('INVALID_ARGUMENT: Landmarks must pair this source with the primary source.');
+    return { from: points[sourceIndex], to: points[primaryIndex] };
+  });
+  const mean = (side: 'from' | 'to', axis: 'x' | 'y') => pairs.reduce((sum, pair) => sum + pair[side][axis], 0) / pairs.length;
+  const fx = mean('from', 'x'), fy = mean('from', 'y'), tx = mean('to', 'x'), ty = mean('to', 'y');
+  let dot = 0, cross = 0, spread = 0;
+  for (const pair of pairs) {
+    const x = pair.from.x - fx, y = pair.from.y - fy, u = pair.to.x - tx, v = pair.to.y - ty;
+    dot += x * u + y * v; cross += x * v - y * u; spread += x * x + y * y;
+  }
+  if (pairs.length > 1 && spread < 1e-8) fail('INVALID_ARGUMENT: Landmark source points need distinct positions.');
+  const a = pairs.length === 1 ? 1 : dot / spread, b = pairs.length === 1 ? 0 : cross / spread;
+  if (a * a + b * b < 1e-8) fail('INVALID_ARGUMENT: Landmark pairs imply a collapsed alignment.');
+  return [a, b, -b, a, tx - a * fx + b * fy, ty - b * fx - a * fy];
+}
+
+/** A bounded, deterministic flood constrained by both color and local edges. */
+function seededMask(
+  image: DecodedImage, target: RegionRecord, original: RegionMask, occupied: Uint8Array,
+  edit: Extract<DecompositionEdit, { op: 'region.seedMask' }>, alphaThreshold: number,
+): { bounds: RegionRecord['bounds']; mask: RegionMask; count: number } {
+  if (!Number.isInteger(edit.x) || !Number.isInteger(edit.y) || edit.x < 0 || edit.y < 0 || edit.x >= image.width || edit.y >= image.height)
+    fail('INVALID_ARGUMENT: Seed must be an integer pixel inside the source.');
+  if (!Number.isFinite(edit.colorTolerance) || edit.colorTolerance < 0 || edit.colorTolerance > 255 || !Number.isInteger(edit.radius) || edit.radius < 1 || edit.radius > 256)
+    fail('INVALID_ARGUMENT: Color tolerance or seed radius is outside safe bounds.');
+  const maxPixels = edit.maxPixels ?? 65_536;
+  if (!Number.isInteger(maxPixels) || maxPixels < 1 || maxPixels > 262_144) fail('RESOURCE_LIMIT: Seed pixel budget is outside safe bounds.');
+  if (edit.action !== 'add' && edit.action !== 'subtract') fail('INVALID_ARGUMENT: Seed action must be add or subtract.');
+  const { width, height, rgba } = image, { x, y, radius } = edit;
+  const left = Math.max(0, x - radius), top = Math.max(0, y - radius);
+  const right = Math.min(width - 1, x + radius), bottom = Math.min(height - 1, y + radius);
+  const windowWidth = right - left + 1, windowHeight = bottom - top + 1;
+  const visited = new Uint8Array(windowWidth * windowHeight), queue = new Int32Array(windowWidth * windowHeight);
+  const current = (px: number, py: number) => px >= target.bounds.x && py >= target.bounds.y && px < target.bounds.x + target.bounds.width && py < target.bounds.y + target.bounds.height
+    && original.bytes[(py - target.bounds.y) * original.width + px - target.bounds.x] !== 0;
+  const sourceIndex = (px: number, py: number) => (py * width + px) * 4;
+  const seedIndex = sourceIndex(x, y), toleranceSquared = 3 * edit.colorTolerance ** 2;
+  const edgeSquared = 3 * Math.max(12, edit.colorTolerance * .55) ** 2;
+  const difference = (a: number, b: number) => {
+    const dr = rgba[a] - rgba[b], dg = rgba[a + 1] - rgba[b + 1], db = rgba[a + 2] - rgba[b + 2];
+    return dr * dr + dg * dg + db * db;
+  };
+  if (edit.action === 'subtract' && !current(x, y)) fail('INVALID_ARGUMENT: A background seed must start inside the selected region.');
+  if (edit.action === 'add' && (rgba[seedIndex + 3] < alphaThreshold || occupied[y * width + x]))
+    fail('INVALID_ARGUMENT: A foreground seed must start on unassigned visible source pixels.');
+  const within = (px: number, py: number) => px >= left && px <= right && py >= top && py <= bottom && (px - x) ** 2 + (py - y) ** 2 <= radius ** 2;
+  const accept = (px: number, py: number, from: number) => {
+    if (!within(px, py)) return false;
+    if (edit.action === 'subtract' ? !current(px, py) : rgba[sourceIndex(px, py) + 3] < alphaThreshold || occupied[py * width + px]) return false;
+    const pixel = sourceIndex(px, py);
+    return difference(pixel, seedIndex) <= toleranceSquared && difference(pixel, from) <= edgeSquared;
+  };
+  let head = 0, tail = 0;
+  const start = (y - top) * windowWidth + x - left;
+  visited[start] = 1; queue[tail++] = start;
+  let minX = target.bounds.x, minY = target.bounds.y;
+  let maxX = target.bounds.x + target.bounds.width - 1, maxY = target.bounds.y + target.bounds.height - 1;
+  let changed = 0, touchesCurrent = false;
+  while (head < tail) {
+    const index = queue[head++], px = left + index % windowWidth, py = top + Math.floor(index / windowWidth);
+    if (current(px, py)) touchesCurrent = true;
+    if (current(px, py) !== (edit.action === 'add')) changed++;
+    minX = Math.min(minX, px); minY = Math.min(minY, py); maxX = Math.max(maxX, px); maxY = Math.max(maxY, py);
+    const from = sourceIndex(px, py);
+    for (const [nx, ny] of [[px - 1, py], [px + 1, py], [px, py - 1], [px, py + 1]]) {
+      if (!within(nx, ny)) continue;
+      const next = (ny - top) * windowWidth + nx - left;
+      if (visited[next] || !accept(nx, ny, from)) continue;
+      visited[next] = 1;
+      if (tail >= maxPixels) fail('RESOURCE_LIMIT: Seed reaches the pixel budget; reduce radius or tolerance.');
+      queue[tail++] = next;
+    }
+  }
+  if (!changed) fail('INVALID_ARGUMENT: Seed did not change this region mask.');
+  if (edit.action === 'add' && !touchesCurrent) {
+    for (let index = 0; index < tail && !touchesCurrent; index++) {
+      const px = left + queue[index] % windowWidth, py = top + Math.floor(queue[index] / windowWidth);
+      touchesCurrent = current(px - 1, py) || current(px + 1, py) || current(px, py - 1) || current(px, py + 1);
+    }
+    if (!touchesCurrent) fail('AMBIGUOUS_REGION: Seed does not connect to the selected region; create a separate region.');
+  }
+  const bounds = edit.action === 'add' ? { x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1 } : target.bounds;
+  const bytes = new Uint8Array(bounds.width * bounds.height);
+  for (let row = 0; row < original.height; row++) bytes.set(original.bytes.subarray(row * original.width, (row + 1) * original.width), (row + target.bounds.y - bounds.y) * bounds.width + target.bounds.x - bounds.x);
+  for (let index = 0; index < tail; index++) {
+    const px = left + queue[index] % windowWidth, py = top + Math.floor(queue[index] / windowWidth);
+    bytes[(py - bounds.y) * bounds.width + px - bounds.x] = edit.action === 'add' ? 1 : 0;
+  }
+  return { bounds, mask: { width: bounds.width, height: bounds.height, bytes }, count: bytes.reduce((sum, value) => sum + value, 0) };
 }
 
 export class DecompositionSession {
@@ -136,12 +254,13 @@ export class DecompositionSession {
     const fingerprint = await sha256(new TextEncoder().encode(JSON.stringify(settings)));
     const previous = this.document, priorMasks = this.masks;
     const candidate = structuredClone(previous), masks = cloneMaskMap(priorMasks);
+    candidate.algorithmVersion = ALGORITHM_VERSION;
     candidate.mode = mode; candidate.settings = settings; candidate.regions = []; candidate.parts = []; candidate.layers = []; candidate.diagnostics = [];
     const remapped: Record<string, string> = {}, matched = new Set<string>();
     for (const source of candidate.sources) {
       if (options.signal?.aborted) throw new Error('CANCELED');
       const result = analyzeImage(this.images.get(source.id)!, source, mode, settings, fingerprint, options.signal);
-      const old = previous.regions.filter(region => region.sourceId === source.id && active(region));
+      const old = previous.regions.filter(region => region.sourceId === source.id && active(region) && region.geometry.status === 'visible');
       const localIds = new Map<string, string>();
       for (const region of result.regions) {
         const generatedId = region.id;
@@ -185,6 +304,63 @@ export class DecompositionSession {
       })));
       candidate.diagnostics.push(...result.diagnostics);
     }
+    for (const region of previous.regions) if (region.geometry.status === 'inferred' && region.suppressed && !candidate.regions.some(item => item.id === region.id)) {
+      candidate.regions.push(structuredClone(region));
+      matched.add(region.id);
+    }
+    const primary = candidate.sources.find(source => source.role === 'primary')!;
+    if (mode === 'animation-ready' && settings.inferHiddenGeometry) {
+      const proposed = proposeHiddenContinuations(candidate, masks, this.images.get(primary.id)!.rgba);
+      const previousById = new Map(previous.regions.map(region => [region.id, region]));
+      const hasEditedDescendant = (root: RegionRecord): boolean => {
+        const pending = [...root.lineage.children], visited = new Set<string>();
+        while (pending.length) {
+          const id = pending.pop()!;
+          if (visited.has(id)) continue;
+          visited.add(id);
+          const child = previousById.get(id);
+          if (!child) continue;
+          if (child.generationStatus !== 'historical') return true;
+          pending.push(...child.lineage.children);
+        }
+        return false;
+      };
+      const added = new Set<string>();
+      for (const region of proposed.regions) {
+        const historical = previousById.get(region.id);
+        if (historical?.geometry.status === 'inferred' && historical.generationStatus === 'historical' && hasEditedDescendant(historical)) continue;
+        const earlier = previous.regions.find(item => item.id === region.id && active(item) && item.geometry.status === 'inferred');
+        if (earlier) {
+          matched.add(earlier.id); remapped[earlier.id] = earlier.id;
+          region.partId = earlier.partId;
+          region.locked = structuredClone(earlier.locked);
+          region.lineage = structuredClone(earlier.lineage);
+          region.geometry.manualPath = structuredClone(earlier.geometry.manualPath);
+          region.geometry.locked = earlier.geometry.locked;
+          if (earlier.locked.mask || earlier.generationStatus === 'manual' || earlier.originalMaskId) {
+            Object.assign(region, { maskId: earlier.maskId, originalMaskId: earlier.originalMaskId, bounds: earlier.bounds, pixelCount: earlier.pixelCount, holeCount: earlier.holeCount, geometry: structuredClone(earlier.geometry), generationStatus: earlier.generationStatus });
+            masks.set(earlier.maskId, priorMasks.get(earlier.maskId)!);
+          } else {
+            masks.set(region.maskId, proposed.masks.get(region.maskId)!);
+            if (earlier.locked.geometry) region.geometry = structuredClone(earlier.geometry);
+          }
+        } else masks.set(region.maskId, proposed.masks.get(region.maskId)!);
+        candidate.regions.push(region);
+        added.add(region.id);
+      }
+      candidate.layers.push(...proposed.layers.filter(layer => added.has(layer.backRegionId)));
+      candidate.diagnostics.push(...proposed.diagnostics.filter(item => !item.regionId || added.has(item.regionId)));
+    }
+    const retainedHidden = new Set<string>();
+    if (mode === 'animation-ready') for (const region of previous.regions) {
+      if (!active(region) || region.geometry.status !== 'inferred' || matched.has(region.id) || candidate.regions.some(item => item.id === region.id)) continue;
+      if (region.generationStatus !== 'manual' && !region.locked.mask && !region.locked.geometry && !region.locked.part) continue;
+      candidate.regions.push(structuredClone(region));
+      retainedHidden.add(region.id);
+      matched.add(region.id);
+      candidate.diagnostics.push({ code: 'OCCLUSION_UNDERCONSTRAINED', severity: 'warning', sourceId: region.sourceId, regionId: region.id,
+        message: 'A user-edited hidden region was retained after its automatic overlap evidence changed.', suggestion: 'Review its mask, path and front/back relation before export.' });
+    }
     // Keep unmatched old regions as historical evidence and keep their exact masks.
     for (const region of previous.regions) if (!matched.has(region.id) && !candidate.regions.some(item => item.id === region.id)) candidate.regions.push({ ...structuredClone(region), generationStatus: 'historical' });
     const priorParts = new Map(previous.parts.map(part => [part.id, part]));
@@ -202,14 +378,25 @@ export class DecompositionSession {
     candidate.parts = [...nextParts.values()];
     refreshPartBounds(candidate);
     const liveIds = new Set(candidate.regions.filter(active).map(region => region.id));
+    const storedIds = new Set(candidate.regions.map(region => region.id));
+    const suppressedIds = new Set(candidate.regions.filter(region => region.suppressed).map(region => region.id));
     candidate.layers = [
       ...candidate.layers.filter(layer => !previous.layers.some(old => old.origin === 'manual' && old.id === layer.id)),
       ...previous.layers.filter(layer => layer.origin === 'manual' && liveIds.has(layer.frontRegionId) && liveIds.has(layer.backRegionId)),
+      ...previous.layers.filter(layer => (retainedHidden.has(layer.frontRegionId) || retainedHidden.has(layer.backRegionId)) && layer.origin === 'automatic' && liveIds.has(layer.frontRegionId) && liveIds.has(layer.backRegionId) && !candidate.layers.some(current => current.id === layer.id)),
+      ...previous.layers.filter(layer => (suppressedIds.has(layer.frontRegionId) || suppressedIds.has(layer.backRegionId)) && storedIds.has(layer.frontRegionId) && storedIds.has(layer.backRegionId) && !candidate.layers.some(current => current.id === layer.id)),
     ];
-    const primary = candidate.sources.find(source => source.role === 'primary')!;
     candidate.correspondences = previous.correspondences.filter(item => item.origin === 'manual');
     const manualCorrespondenceIds = new Set(candidate.correspondences.map(item => item.id));
-    for (const source of candidate.sources.filter(item => item.id !== primary.id)) candidate.correspondences.push(...proposeCorrespondences(candidate.regions.filter(region => region.sourceId === primary.id && active(region)), candidate.regions.filter(region => region.sourceId === source.id && active(region))).filter(item => !manualCorrespondenceIds.has(item.id)));
+    for (const source of candidate.sources.filter(item => item.id !== primary.id)) {
+      const ranked = rankReferenceCorrespondences(
+        candidate.regions.filter(region => region.sourceId === primary.id && active(region) && region.geometry.status === 'visible'),
+        candidate.regions.filter(region => region.sourceId === source.id && active(region) && region.geometry.status === 'visible'),
+        { primarySource: primary, alternateSource: source, manual: candidate.correspondences },
+      );
+      candidate.correspondences.push(...ranked.candidates.filter(item => !manualCorrespondenceIds.has(item.id)));
+      candidate.diagnostics.push(...ranked.diagnostics);
+    }
     candidate.updatedAt = new Date().toISOString();
     validateDecompositionDocument(candidate, this.sourceBytes, masks, new Map([...this.images].map(([id, image]) => [id, image.rgba])));
     if (options.signal?.aborted) throw new Error('CANCELED');
@@ -268,17 +455,43 @@ export class DecompositionSession {
     const region = (id: string) => candidate.regions.find(item => item.id === id && active(item)) ?? fail(`Region ${id} does not exist.`);
     const part = (id: string) => candidate.parts.find(item => item.id === id) ?? fail(`Part ${id} does not exist.`);
     try {
-      for (const edit of request.edits) {
+      for (const [editIndex, edit] of request.edits.entries()) {
         if (edit.op === 'region.setPath') { const target = region(edit.regionId); target.geometry.manualPath = structuredClone(edit.path); target.geometry.locked = true; target.locked.geometry = true; changed.add(target.id); }
+        else if (edit.op === 'region.setSuppressed') {
+          const target = candidate.regions.find(item => item.id === edit.regionId && item.generationStatus !== 'historical' && item.geometry.status === 'inferred') ?? fail('Only a current inferred region can be suppressed or restored.');
+          target.suppressed = edit.suppressed; changed.add(target.id);
+        }
         else if (edit.op === 'region.refineMask') {
           const target = region(edit.regionId), incoming = this.stagedMasks.get(edit.handle) ?? fail('Mask handle is unavailable.');
           if (target.locked.mask) fail('Mask is locked.');
           if (incoming.width !== target.bounds.width || incoming.height !== target.bounds.height) fail('Mask dimensions must match the region bounds.');
           if (!target.originalMaskId) target.originalMaskId = target.maskId;
-          const id = `${target.id}_manual_mask_${this.revision + 1}`;
+          const id = `${target.id}_manual_mask_${this.revision + 1}_${editIndex}`;
           target.maskId = id; masks.set(id, { ...incoming, bytes: Uint8Array.from(incoming.bytes) });
           target.pixelCount = incoming.bytes.reduce((sum, value) => sum + value, 0);
           const fitted = fitMaskGeometry(target.id, incoming, target.bounds, candidate.settings, target.geometry.texture);
+          target.geometry.generatedPath = fitted.geometry.generatedPath; target.geometry.quality = fitted.geometry.quality; target.holeCount = fitted.holeCount;
+          target.generationStatus = 'manual'; changed.add(target.id);
+        } else if (edit.op === 'region.seedMask') {
+          const target = region(edit.regionId), original = masks.get(target.maskId)!;
+          if (target.locked.mask) fail('DOCUMENT_CONFLICT: Mask is locked.');
+          const image = this.images.get(target.sourceId)!;
+          const occupied = new Uint8Array(image.width * image.height);
+          for (const other of candidate.regions) {
+            if (!active(other) || other.id === target.id || other.sourceId !== target.sourceId) continue;
+            const otherMask = masks.get(other.maskId)!;
+            for (let row = 0; row < otherMask.height; row++) for (let column = 0; column < otherMask.width; column++)
+              if (otherMask.bytes[row * otherMask.width + column]) occupied[(other.bounds.y + row) * image.width + other.bounds.x + column] = 1;
+          }
+          const result = seededMask(image, target, original, occupied, edit, candidate.settings.alphaThreshold);
+          if (!target.originalMaskId) target.originalMaskId = target.maskId;
+          const id = `${target.id}_manual_mask_${this.revision + 1}_${editIndex}`;
+          target.maskId = id; masks.set(id, result.mask);
+          const before = target.bounds;
+          if (target.geometry.manualPath && (before.x !== result.bounds.x || before.y !== result.bounds.y || before.width !== result.bounds.width || before.height !== result.bounds.height))
+            target.geometry.manualPath = remapPath(target.geometry.manualPath, before, result.bounds);
+          target.bounds = result.bounds; target.geometry.bounds = result.bounds; target.pixelCount = result.count;
+          const fitted = fitMaskGeometry(target.id, result.mask, result.bounds, candidate.settings, target.geometry.texture);
           target.geometry.generatedPath = fitted.geometry.generatedPath; target.geometry.quality = fitted.geometry.quality; target.holeCount = fitted.holeCount;
           target.generationStatus = 'manual'; changed.add(target.id);
         } else if (edit.op === 'region.split') {
@@ -298,11 +511,17 @@ export class DecompositionSession {
             const maskId = `${id}_mask`, mask = { width: original.width, height: original.height, bytes };
             masks.set(maskId, mask);
             const fitted = fitMaskGeometry(id, mask, target.bounds, candidate.settings, target.geometry.texture);
-            const child: RegionRecord = { ...structuredClone(target), id, maskId, pixelCount: bytes.reduce((sum, value) => sum + value, 0), geometry: fitted.geometry, holeCount: fitted.holeCount, generationStatus: 'manual', lineage: { parents: [target.id], children: [] }, originalMaskId: undefined };
+            const child: RegionRecord = { ...structuredClone(target), id, maskId, pixelCount: bytes.reduce((sum, value) => sum + value, 0), geometry: { ...fitted.geometry, status: target.geometry.status }, holeCount: fitted.holeCount, generationStatus: 'manual', lineage: { parents: [target.id], children: [] }, originalMaskId: undefined };
             return child;
           });
           target.generationStatus = 'historical'; target.lineage.children.push(...children.map(item => item.id));
           candidate.regions.push(...children);
+          for (const relation of candidate.layers.filter(item => item.frontRegionId === target.id || item.backRegionId === target.id)) for (const child of children) {
+            const frontRegionId = relation.frontRegionId === target.id ? child.id : relation.frontRegionId;
+            const backRegionId = relation.backRegionId === target.id ? child.id : relation.backRegionId;
+            candidate.layers.push({ ...structuredClone(relation), id: `${frontRegionId}_front_${backRegionId}`, frontRegionId, backRegionId,
+              evidence: [...relation.evidence, `region ${target.id} was split into editable children`] });
+          }
           if (target.partId) { const owned = part(target.partId).regionIds; owned.splice(owned.indexOf(target.id), 1, ...children.map(item => item.id)); }
           changed.add(target.id); children.forEach(item => changed.add(item.id));
         } else if (edit.op === 'region.merge') {
@@ -315,7 +534,7 @@ export class DecompositionSession {
           const id = `${first.id}_m${this.revision + 1}`; if (candidate.regions.some(item => item.id === id)) fail('Merge ID already exists.');
           const maskId = `${id}_mask`, mask = { width, height, bytes }, bounds = { x, y, width, height };
           masks.set(maskId, mask); const fitted = fitMaskGeometry(id, mask, bounds, candidate.settings, first.geometry.texture === 'source-crop' || second.geometry.texture === 'source-crop' || first.color !== second.color ? 'source-crop' : 'flat');
-          const merged: RegionRecord = { ...structuredClone(first), id, maskId, bounds, pixelCount: bytes.reduce((sum, value) => sum + value, 0), geometry: fitted.geometry, holeCount: fitted.holeCount, generationStatus: 'manual', lineage: { parents: [first.id, second.id], children: [] }, originalMaskId: undefined };
+          const merged: RegionRecord = { ...structuredClone(first), id, maskId, bounds, pixelCount: bytes.reduce((sum, value) => sum + value, 0), geometry: { ...fitted.geometry, status: first.geometry.status === 'inferred' || second.geometry.status === 'inferred' ? 'inferred' : 'visible' }, holeCount: fitted.holeCount, generationStatus: 'manual', lineage: { parents: [first.id, second.id], children: [] }, originalMaskId: undefined };
           first.generationStatus = second.generationStatus = 'historical'; first.lineage.children.push(id); second.lineage.children.push(id);
           candidate.regions.push(merged);
           if (merged.partId) { const owned = part(merged.partId).regionIds; const at = owned.indexOf(first.id); owned.splice(at, 1, id); owned.splice(owned.indexOf(second.id), 1); }
@@ -326,12 +545,12 @@ export class DecompositionSession {
           if (owned.some(item => item.locked.part)) fail('A selected region has a locked part assignment.');
           const bounds = owned[0]?.bounds ?? { x: 0, y: 0, width: 1, height: 1 };
           candidate.parts.push({ id: edit.id, name: edit.name, regionIds: owned.map(item => item.id), bounds, pivot: { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 }, pivotLocked: false, attachmentApproved: false, hiddenGeometry: 'none', zOrder: candidate.parts.length, transformLocked: false });
-          for (const item of owned) { if (item.partId) part(item.partId).regionIds = part(item.partId).regionIds.filter(id => id !== item.id); item.partId = edit.id; changed.add(item.id); }
+          for (const item of owned) { if (item.partId) part(item.partId).regionIds = part(item.partId).regionIds.filter(id => id !== item.id); item.partId = edit.id; if (item.geometry.status === 'inferred') item.generationStatus = 'manual'; changed.add(item.id); }
           changed.add(edit.id);
         } else if (edit.op === 'part.assignRegion') {
           const target = region(edit.regionId), owner = part(edit.partId); if (target.locked.part) fail('Part assignment is locked.');
           if (target.partId) part(target.partId).regionIds = part(target.partId).regionIds.filter(id => id !== target.id);
-          target.partId = owner.id; if (!owner.regionIds.includes(target.id)) owner.regionIds.push(target.id); changed.add(target.id); changed.add(owner.id);
+          target.partId = owner.id; if (target.geometry.status === 'inferred') target.generationStatus = 'manual'; if (!owner.regionIds.includes(target.id)) owner.regionIds.push(target.id); changed.add(target.id); changed.add(owner.id);
         } else if (edit.op === 'part.rename') { part(edit.partId).name = edit.name; changed.add(edit.partId); }
         else if (edit.op === 'part.setPivot') { const target = part(edit.partId); if (target.pivotLocked) fail('Pivot is locked.'); finite(edit.x); finite(edit.y); target.pivot = { x: edit.x, y: edit.y }; changed.add(target.id); }
         else if (edit.op === 'part.reparent') { const target = part(edit.partId); target.parentId = edit.parentId ? part(edit.parentId).id : undefined; if (!target.parentId) { target.attachment = undefined; target.attachmentApproved = false; } changed.add(target.id); }
@@ -344,6 +563,15 @@ export class DecompositionSession {
         } else if (edit.op === 'reference.correspond') {
           candidate.correspondences = candidate.correspondences.filter(item => item.id !== edit.correspondence.id);
           candidate.correspondences.push({ ...structuredClone(edit.correspondence), origin: 'manual' }); changed.add(edit.correspondence.id);
+        } else if (edit.op === 'reference.setTransform') {
+          const source = candidate.sources.find(item => item.id === edit.sourceId) ?? fail('INVALID_ARGUMENT: Source does not exist.');
+          if (source.role === 'primary') fail('INVALID_ARGUMENT: The primary source defines canonical coordinates.');
+          source.transformToPrimary = edit.transformToPrimary ? [...edit.transformToPrimary] as typeof edit.transformToPrimary : undefined;
+          changed.add(source.id);
+        } else if (edit.op === 'reference.alignFromLandmarks') {
+          const source = candidate.sources.find(item => item.id === edit.sourceId) ?? fail('INVALID_ARGUMENT: Source does not exist.');
+          source.transformToPrimary = landmarkAlignment(candidate, edit.sourceId, edit.landmarkIds);
+          changed.add(source.id);
         } else if (edit.op === 'annotation.lock') {
           if (edit.regionId) {
             const target = region(edit.regionId);

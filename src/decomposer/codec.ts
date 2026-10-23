@@ -1,5 +1,5 @@
 import { unzipSync, zipSync } from 'fflate';
-import type { DecompositionDocumentV1, RegionMask } from './types';
+import type { CorrespondenceRecord, DecompositionDocumentV1, RegionMask } from './types';
 
 const encoder = new TextEncoder(), decoder = new TextDecoder();
 const MAX_ARCHIVE_BYTES = 256 * 1024 * 1024;
@@ -26,6 +26,7 @@ export function validateDecompositionDocument(document: unknown, sourceBytes?: M
   for (const item of document.sources) {
     if (!record(item) || !safeId(String(item.id)) || sourceIds.has(String(item.id)) || !['primary', 'alternate-view', 'alternate-pose', 'detail', 'mask-guide'].includes(String(item.role)) || !['image/png', 'image/jpeg', 'image/webp'].includes(String(item.mime)) || !Number.isInteger(item.width) || !Number.isInteger(item.height) || Number(item.width) * Number(item.height) > 4_000_000 || typeof item.byteHash !== 'string' || !/^[a-f0-9]{64}$/.test(item.byteHash) || typeof item.pixelHash !== 'string' || !/^[a-f0-9]{64}$/.test(item.pixelHash) || !Number.isInteger(item.byteLength) || Number(item.byteLength) <= 0) throw new Error('Invalid source metadata.');
     sourceIds.add(String(item.id));
+    if (item.transformToPrimary !== undefined && (!Array.isArray(item.transformToPrimary) || item.transformToPrimary.length !== 6 || item.transformToPrimary.some((value: unknown) => typeof value !== 'number' || !Number.isFinite(value) || Math.abs(value) > 1e6) || Math.abs(item.transformToPrimary[0] * item.transformToPrimary[3] - item.transformToPrimary[1] * item.transformToPrimary[2]) < 1e-8)) throw new Error('Source alignment transform is invalid or singular.');
     if (sourceBytes && (!sourceBytes.has(String(item.id)) || sourceBytes.get(String(item.id))!.length !== item.byteLength)) throw new Error('Source bytes are missing or the wrong size.');
     if (pixels && (!pixels.has(String(item.id)) || pixels.get(String(item.id))!.length !== Number(item.width) * Number(item.height) * 4)) throw new Error('Canonical source pixels are missing or the wrong size.');
   }
@@ -33,6 +34,7 @@ export function validateDecompositionDocument(document: unknown, sourceBytes?: M
   for (const item of document.regions) {
     if (!record(item) || !safeId(String(item.id)) || regionIds.has(String(item.id)) || !sourceIds.has(String(item.sourceId)) || !safeId(String(item.maskId)) || maskIds.has(String(item.maskId)) || !record(item.bounds) || !Number.isInteger(item.bounds.width) || !Number.isInteger(item.bounds.height) || Number(item.bounds.width) < 1 || Number(item.bounds.height) < 1 || !record(item.geometry)) throw new Error('Invalid region metadata.');
     regionIds.add(String(item.id)); maskIds.add(String(item.maskId));
+    if (item.suppressed !== undefined && (typeof item.suppressed !== 'boolean' || item.geometry.status !== 'inferred')) throw new Error('Only inferred regions can be suppressed.');
     const source = document.sources.find(source => source.id === item.sourceId)!;
     if (!Number.isInteger(item.bounds.x) || !Number.isInteger(item.bounds.y) || Number(item.bounds.x) < 0 || Number(item.bounds.y) < 0 || Number(item.bounds.x) + Number(item.bounds.width) > source.width || Number(item.bounds.y) + Number(item.bounds.height) > source.height) throw new Error('Region bounds exceed the source image.');
     if (masks) {
@@ -74,6 +76,14 @@ export function validateDecompositionDocument(document: unknown, sourceBytes?: M
   const correspondenceIds = new Set<string>();
   for (const item of document.correspondences) {
     if (!record(item) || !safeId(String(item.id)) || correspondenceIds.has(String(item.id)) || !Array.isArray(item.sourceIds) || item.sourceIds.length !== 2 || item.sourceIds.some((id: string) => !sourceIds.has(id)) || item.regionIds !== undefined && (!Array.isArray(item.regionIds) || item.regionIds.length !== 2 || item.regionIds.some((id: string) => !regionIds.has(id))) || item.partIds !== undefined && (!Array.isArray(item.partIds) || item.partIds.length !== 2 || item.partIds.some((id: string) => !partIds.has(id)))) throw new Error('Correspondence has an invalid or missing reference.');
+    const pair = item as unknown as CorrespondenceRecord, typed = document as unknown as DecompositionDocumentV1;
+    if (pair.sourceIds[0] === pair.sourceIds[1] || pair.regionIds?.some((id, index) => typed.regions.find(region => region.id === id)?.sourceId !== pair.sourceIds[index])) throw new Error('Correspondence points to the wrong source.');
+    if (pair.kind === 'landmark') {
+      if (!Array.isArray(pair.landmarkPoints) || pair.landmarkPoints.length !== 2 || pair.landmarkPoints.some((point, index) => {
+        const source = typed.sources.find(source => source.id === pair.sourceIds[index])!;
+        return !record(point) || typeof point.x !== 'number' || typeof point.y !== 'number' || !Number.isFinite(point.x) || !Number.isFinite(point.y) || point.x < 0 || point.y < 0 || point.x > source.width || point.y > source.height;
+      })) throw new Error('Landmark coordinates are outside their sources.');
+    } else if (pair.landmarkPoints !== undefined) throw new Error('Only landmark correspondences can store source-space point pairs.');
     correspondenceIds.add(String(item.id));
   }
 }

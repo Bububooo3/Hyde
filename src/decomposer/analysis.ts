@@ -2,13 +2,18 @@ import type { ShapePath } from '../model';
 import type { Box, CorrespondenceRecord, DecompositionDiagnostic, DecompositionMode, LayerRecord, PartRecord, Point, ReconstructionSettings, RegionGeometry, RegionMask, RegionRecord, SourceReference } from './types';
 import type { DecodedImage } from './image';
 
-export const ALGORITHM_VERSION = 'deterministic-regions-1';
-interface Component { id: number; count: number; minX: number; minY: number; maxX: number; maxY: number; r: number; g: number; b: number; variance: number }
+export const ALGORITHM_VERSION = 'deterministic-regions-2';
+interface Component { id: number; count: number; minX: number; minY: number; maxX: number; maxY: number; r: number; g: number; b: number; variance: number; partialAlpha: number }
+interface BoundaryEvidence { shared: number; contrast: number; coarse2: number; coarse4: number }
 export interface AnalysisResult { regions: RegionRecord[]; parts: PartRecord[]; masks: Map<string, RegionMask>; layers: LayerRecord[]; diagnostics: DecompositionDiagnostic[] }
 const abort = (signal?: AbortSignal) => { if (signal?.aborted) throw new Error('CANCELED'); };
 const clamp = (n: number) => Math.max(0, Math.min(255, Math.round(n)));
 const hex = (r: number, g: number, b: number) => `#${[r, g, b].map(value => clamp(value).toString(16).padStart(2, '0')).join('')}`;
 const rgbDistance = (a: Pick<Component, 'r' | 'g' | 'b'>, b: Pick<Component, 'r' | 'g' | 'b'>) => Math.hypot(a.r - b.r, a.g - b.g, a.b - b.b);
+const pixelDistance = (rgba: Uint8Array, a: number, b: number) => {
+  const left = a * 4, right = b * 4;
+  return Math.hypot(rgba[left] - rgba[right], rgba[left + 1] - rgba[right + 1], rgba[left + 2] - rgba[right + 2]);
+};
 const boxContains = (a: Box, b: Box) => b.x > a.x && b.y > a.y && b.x + b.width < a.x + a.width && b.y + b.height < a.y + a.height;
 const area = (points: Point[]) => points.reduce((sum, point, index) => {
   const next = points[(index + 1) % points.length]; return sum + point.x * next.y - next.x * point.y;
@@ -18,31 +23,46 @@ const pointDistance = (point: Point, a: Point, b: Point) => {
   const t = dx || dy ? Math.max(0, Math.min(1, ((point.x - a.x) * dx + (point.y - a.y) * dy) / (dx * dx + dy * dy))) : 0;
   return Math.hypot(point.x - a.x - t * dx, point.y - a.y - t * dy);
 };
+/** Simplify each of two closed-contour arcs against the *original* pixels.
+ * Removing each vertex against its newly shortened neighbors can snowball until
+ * a smooth silhouette has only three points even for a subpixel tolerance.
+ */
 function simplify(points: Point[], tolerance: number, maxPoints: number): Point[] {
-  let current = points.filter((point, index) => {
-    const previous = points[(index + points.length - 1) % points.length], next = points[(index + 1) % points.length];
-    return (point.x - previous.x) * (next.y - point.y) !== (point.y - previous.y) * (next.x - point.x);
-  });
-  if (current.length < 3) current = points;
-  let error = tolerance;
-  while (current.length > maxPoints || error === tolerance) {
-    let changed = true;
-    while (changed && current.length > 3) {
-      changed = false;
-      const kept: Point[] = [];
-      for (let index = 0; index < current.length; index++) {
-        const previous = current[(index + current.length - 1) % current.length];
-        const point = current[index], next = current[(index + 1) % current.length];
-        if (current.length - (index - kept.length) > 3 && pointDistance(point, previous, next) <= error) { changed = true; continue; }
-        kept.push(point);
+  if (points.length <= 3) return points;
+  const first = points.reduce((best, point, index) => point.y < points[best].y || point.y === points[best].y && point.x < points[best].x ? index : best, 0);
+  const anchor = points[first];
+  const opposite = points.reduce((best, point, index) => {
+    const distance = (point.x - anchor.x) ** 2 + (point.y - anchor.y) ** 2;
+    const previous = (points[best].x - anchor.x) ** 2 + (points[best].y - anchor.y) ** 2;
+    return distance > previous ? index : best;
+  }, first);
+  if (opposite === first) throw new Error('PATH_TOO_COMPLEX');
+  const n = points.length;
+  const arc = (from: number, to: number, error: number) => {
+    const count = (to - from + n) % n + 1;
+    const selected = new Uint8Array(count); selected[0] = selected[count - 1] = 1;
+    const stack: [number, number][] = [[0, count - 1]];
+    while (stack.length) {
+      const [start, end] = stack.pop()!;
+      let farthest = -1, distance = error;
+      const a = points[(from + start) % n], b = points[(from + end) % n];
+      for (let offset = start + 1; offset < end; offset++) {
+        const current = pointDistance(points[(from + offset) % n], a, b);
+        if (current > distance) { distance = current; farthest = offset; }
       }
-      if (kept.length >= 3) current = kept;
+      if (farthest >= 0) { selected[farthest] = 1; stack.push([start, farthest], [farthest, end]); }
     }
-    if (current.length <= maxPoints) break;
-    error *= 1.5;
+    const result: Point[] = [];
+    for (let offset = 0; offset < count; offset++) if (selected[offset]) result.push(points[(from + offset) % n]);
+    return result;
+  };
+  let error = Math.max(0, tolerance);
+  while (true) {
+    const current = [...arc(first, opposite, error).slice(0, -1), ...arc(opposite, first, error).slice(0, -1)];
+    if (current.length >= 3 && current.length <= maxPoints) return current;
+    error = error ? error * 1.5 : 0.25;
     if (error > 128) throw new Error('PATH_TOO_COMPLEX');
   }
-  return current;
 }
 function contours(mask: RegionMask, offsetX: number, offsetY: number): Point[][] {
   const { width, height, bytes } = mask;
@@ -98,15 +118,32 @@ function sampledIoU(points: Point[], mask: RegionMask, bounds: Box): number {
   return union ? intersection / union : 1;
 }
 
+function fitVisibleContour(loop: Point[], mask: RegionMask, bounds: Box, settings: ReconstructionSettings, hasHoles: boolean) {
+  let tolerance = settings.pathTolerance;
+  let outer = simplify(loop, tolerance, settings.maxPathPoints);
+  let quality = sampledIoU(outer, mask, bounds);
+  // Use the requested tolerance as the initial complexity budget. If it drops
+  // visible source pixels, spend a few more vertices while within maxPoints.
+  // Holes cannot be represented by one Hyde path, so do not disguise their
+  // residual error by repeatedly refining only the outside contour.
+  for (let attempt = 0; attempt < 3 && !hasHoles && quality < .98 && tolerance > .08; attempt++) {
+    tolerance /= 2;
+    const candidate = simplify(loop, tolerance, settings.maxPathPoints);
+    const improved = sampledIoU(candidate, mask, bounds);
+    if (improved > quality) { outer = candidate; quality = improved; }
+  }
+  return { outer, quality };
+}
+
 export function fitMaskGeometry(id: string, mask: RegionMask, bounds: Box, settings: ReconstructionSettings, texture: RegionGeometry['texture']): { geometry: RegionGeometry; holeCount: number } {
   const loops = contours(mask, bounds.x, bounds.y);
   if (!loops.length) throw new Error('Mask contains no foreground pixels.');
   if (loops.filter(loop => area(loop) > 0).length > 1) throw new Error('AMBIGUOUS_REGION: A single path cannot represent disconnected mask islands. Split them into separate regions.');
-  const outer = simplify(loops[0], settings.pathTolerance, settings.maxPathPoints);
+  const { outer, quality } = fitVisibleContour(loops[0], mask, bounds, settings, loops.length > 1);
   if (outer.length > 4096) throw new Error('PATH_TOO_COMPLEX');
   return {
     geometry: { id: `${id}_geometry`, generatedPath: { points: outer.map(point => ({ x: (point.x - bounds.x) / bounds.width, y: (point.y - bounds.y) / bounds.height })) }, bounds,
-      status: 'visible', quality: { maskIoU: sampledIoU(outer, mask, bounds), pathPointCount: outer.length, colorError: 0 }, texture, locked: false },
+      status: 'visible', quality: { maskIoU: quality, pathPointCount: outer.length, colorError: 0 }, texture, locked: false },
     holeCount: Math.max(0, loops.length - 1),
   };
 }
@@ -157,6 +194,33 @@ function backgroundMask(image: DecodedImage, settings: ReconstructionSettings, d
   return foreground;
 }
 
+/** Foreground-only 2× and 4× color evidence. Original pixels remain untouched. */
+function colorPyramid(image: DecodedImage, foreground: Uint8Array, scale: 2 | 4, signal?: AbortSignal) {
+  const width = Math.ceil(image.width / scale), height = Math.ceil(image.height / scale);
+  const values = new Float32Array(width * height * 3), counts = new Uint8Array(width * height);
+  for (let y = 0; y < image.height; y++) {
+    if ((y & 63) === 0) abort(signal);
+    for (let x = 0; x < image.width; x++) {
+      const source = y * image.width + x;
+      if (!foreground[source]) continue;
+      const target = (Math.floor(y / scale) * width + Math.floor(x / scale));
+      counts[target]++;
+      for (let channel = 0; channel < 3; channel++) values[target * 3 + channel] += image.rgba[source * 4 + channel];
+    }
+  }
+  for (let index = 0; index < counts.length; index++) if (counts[index]) {
+    for (let channel = 0; channel < 3; channel++) values[index * 3 + channel] /= counts[index];
+  }
+  const distance = (a: number, b: number) => {
+    const ax = a % image.width, ay = (a / image.width) | 0;
+    const bx = b % image.width, by = (b / image.width) | 0;
+    const left = Math.floor(ay / scale) * width + Math.floor(ax / scale);
+    const right = Math.floor(by / scale) * width + Math.floor(bx / scale);
+    return Math.hypot(values[left * 3] - values[right * 3], values[left * 3 + 1] - values[right * 3 + 1], values[left * 3 + 2] - values[right * 3 + 2]);
+  };
+  return { distance };
+}
+
 /** Connected, color-aware segmentation, with exact source masks and independent native paths. */
 export function analyzeImage(image: DecodedImage, source: SourceReference, mode: DecompositionMode, settings: ReconstructionSettings, settingsFingerprint: string, signal?: AbortSignal): AnalysisResult {
   const { width, height, rgba } = image, total = width * height;
@@ -174,44 +238,81 @@ export function analyzeImage(image: DecodedImage, source: SourceReference, mode:
     if (!foreground[start] || labels[start] !== -1) continue;
     const id = components.length, key = bucket(start);
     let head = 0, tail = 0, count = 0;
-    let minX = width, minY = height, maxX = -1, maxY = -1, r = 0, g = 0, b = 0, squares = 0;
+    let minX = width, minY = height, maxX = -1, maxY = -1, r = 0, g = 0, b = 0, squares = 0, partialAlpha = 0;
     labels[start] = id; queue[tail++] = start;
     while (head < tail) {
       if ((head & 65535) === 0) abort(signal);
       const index = queue[head++], x = index % width, y = (index / width) | 0, at = index * 4;
       count++; minX = Math.min(minX, x); minY = Math.min(minY, y); maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
       r += rgba[at]; g += rgba[at + 1]; b += rgba[at + 2]; squares += rgba[at] ** 2 + rgba[at + 1] ** 2 + rgba[at + 2] ** 2;
+      if (rgba[at + 3] < 255) partialAlpha++;
       const visit = (neighbor: number) => { if (foreground[neighbor] && labels[neighbor] === -1 && bucket(neighbor) === key) { labels[neighbor] = id; queue[tail++] = neighbor; } };
       if (x > 0) visit(index - 1); if (x + 1 < width) visit(index + 1);
       if (y > 0) visit(index - width); if (y + 1 < height) visit(index + width);
     }
     const means = { r: r / count, g: g / count, b: b / count };
-    components.push({ id, count, minX, minY, maxX, maxY, ...means, variance: Math.max(0, squares / (count * 3) - (means.r ** 2 + means.g ** 2 + means.b ** 2) / 3) });
+    components.push({ id, count, minX, minY, maxX, maxY, ...means, variance: Math.max(0, squares / (count * 3) - (means.r ** 2 + means.g ** 2 + means.b ** 2) / 3), partialAlpha });
     if (components.length > 20_000) throw new Error('RESOURCE_LIMIT: Segmentation produced too many islands; increase minimum feature scale.');
   }
-  const adjacency = new Map<string, number>();
-  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
-    const index = y * width + x, left = labels[index]; if (left < 0) continue;
-    for (const neighbor of [x + 1 < width ? labels[index + 1] : -1, y + 1 < height ? labels[index + width] : -1]) {
-      if (neighbor < 0 || neighbor === left) continue;
-      const key = `${Math.min(left, neighbor)}:${Math.max(left, neighbor)}`;
-      adjacency.set(key, (adjacency.get(key) ?? 0) + 1);
+  const pyramid2 = colorPyramid(image, foreground, 2, signal);
+  const pyramid4 = colorPyramid(image, foreground, 4, signal);
+  const adjacency = new Map<string, BoundaryEvidence>();
+  const interiorContrast = new Float64Array(components.length), interiorEdges = new Uint32Array(components.length);
+  for (let y = 0; y < height; y++) {
+    if ((y & 63) === 0) abort(signal);
+    for (let x = 0; x < width; x++) {
+      const index = y * width + x, left = labels[index]; if (left < 0) continue;
+      for (const next of [x + 1 < width ? index + 1 : -1, y + 1 < height ? index + width : -1]) {
+        if (next < 0 || labels[next] < 0) continue;
+        const neighbor = labels[next], contrast = pixelDistance(rgba, index, next);
+        if (neighbor === left) { interiorContrast[left] += contrast; interiorEdges[left]++; continue; }
+        const key = `${Math.min(left, neighbor)}:${Math.max(left, neighbor)}`;
+        const evidence = adjacency.get(key) ?? { shared: 0, contrast: 0, coarse2: 0, coarse4: 0 };
+        evidence.shared++; evidence.contrast += contrast;
+        evidence.coarse2 += pyramid2.distance(index, next);
+        evidence.coarse4 += pyramid4.distance(index, next);
+        adjacency.set(key, evidence);
+      }
     }
   }
   const parent = Int32Array.from(components.map(item => item.id));
   const root = (id: number): number => { while (parent[id] !== id) id = parent[id] = parent[parent[id]]; return id; };
   const neighborMap = new Map<number, { other: number; shared: number }[]>();
-  for (const [key, shared] of adjacency) {
+  for (const [key, evidence] of adjacency) {
     const [a, b] = key.split(':').map(Number);
     for (const [id, other] of [[a, b], [b, a]]) {
-      const list = neighborMap.get(id) ?? []; list.push({ other, shared }); neighborMap.set(id, list);
+      const list = neighborMap.get(id) ?? []; list.push({ other, shared: evidence.shared }); neighborMap.set(id, list);
     }
   }
   for (const component of components) {
     if (component.count >= settings.minRegionPixels) continue;
-    const choices = (neighborMap.get(component.id) ?? []).map(({ other, shared }) => ({ other, shared, distance: rgbDistance(component, components[other]) }))
+    const choices = (neighborMap.get(component.id) ?? []).map(({ other, shared }) => {
+      const edge = adjacency.get(`${Math.min(component.id, other)}:${Math.max(component.id, other)}`)!;
+      return { other, shared, distance: rgbDistance(component, components[other]), contrast: edge.contrast / edge.shared };
+    })
       .sort((a, b) => b.shared - a.shared || a.distance - b.distance || a.other - b.other);
-    if (choices[0] && choices[0].distance <= settings.colorStep * 2.5) parent[root(component.id)] = root(choices[0].other);
+    if (choices[0] && choices[0].distance <= settings.colorStep * 2.5 && choices[0].contrast <= Math.max(8, settings.colorStep * .8)) parent[root(component.id)] = root(choices[0].other);
+  }
+  // Quantization can cut a smooth painted field into bands. At each candidate
+  // seam compare original pixel contrast with variation *inside* both bands,
+  // then require agreement in the 2×/4× pyramid. A flat hard edge has no
+  // interior variation and stays a separate editable paint region.
+  const smoothSeams = [...adjacency.entries()].sort(([a], [b]) => {
+    const [a1, a2] = a.split(':').map(Number), [b1, b2] = b.split(':').map(Number);
+    return a1 - b1 || a2 - b2;
+  });
+  for (const [key, edge] of smoothSeams) {
+    const [a, b] = key.split(':').map(Number);
+    if (root(a) === root(b)) continue;
+    const first = components[a], second = components[b];
+    const interior = Math.max(interiorEdges[a] ? interiorContrast[a] / interiorEdges[a] : 0, interiorEdges[b] ? interiorContrast[b] / interiorEdges[b] : 0);
+    const contrast = edge.contrast / edge.shared;
+    if (contrast > Math.max(4, interior * 2.5 + 3) || contrast > settings.colorStep * .8) continue;
+    if (edge.coarse2 / edge.shared > settings.colorStep * .8 || edge.coarse4 / edge.shared > settings.colorStep * .8) continue;
+    if (rgbDistance(first, second) > settings.colorStep * 2.5) continue;
+    // Single-pixel strokes and tiny islands carry actual contour evidence.
+    if (Math.min(first.maxX - first.minX + 1, first.maxY - first.minY + 1, second.maxX - second.minX + 1, second.maxY - second.minY + 1) <= 2 && interior < .5) continue;
+    parent[Math.max(root(a), root(b))] = Math.min(root(a), root(b));
   }
   const grouped = new Map<number, Component>();
   for (let index = 0; index < total; index++) if (labels[index] >= 0) labels[index] = root(labels[index]);
@@ -220,10 +321,13 @@ export function analyzeImage(image: DecodedImage, source: SourceReference, mode:
     if (!previous) grouped.set(id, { ...component, id });
     else {
       const count = previous.count + component.count;
+      const previousSquares = previous.variance + (previous.r ** 2 + previous.g ** 2 + previous.b ** 2) / 3;
+      const componentSquares = component.variance + (component.r ** 2 + component.g ** 2 + component.b ** 2) / 3;
       previous.r = (previous.r * previous.count + component.r * component.count) / count;
       previous.g = (previous.g * previous.count + component.g * component.count) / count;
       previous.b = (previous.b * previous.count + component.b * component.count) / count;
-      previous.variance = (previous.variance * previous.count + component.variance * component.count) / count;
+      previous.variance = Math.max(0, (previousSquares * previous.count + componentSquares * component.count) / count - (previous.r ** 2 + previous.g ** 2 + previous.b ** 2) / 3);
+      previous.partialAlpha += component.partialAlpha;
       previous.count = count; previous.minX = Math.min(previous.minX, component.minX); previous.minY = Math.min(previous.minY, component.minY);
       previous.maxX = Math.max(previous.maxX, component.maxX); previous.maxY = Math.max(previous.maxY, component.maxY);
     }
@@ -253,32 +357,34 @@ export function analyzeImage(image: DecodedImage, source: SourceReference, mode:
     const maskId = `${id}_mask`;
     const loops = contours(mask, bounds.x, bounds.y);
     if (!loops.length) continue;
-    const outer = simplify(loops[0], settings.pathTolerance, settings.maxPathPoints);
+    const { outer, quality } = fitVisibleContour(loops[0], mask, bounds, settings, loops.length > 1);
     if (outer.length > 4096) throw new Error('PATH_TOO_COMPLEX');
     const shapePath: ShapePath = { points: outer.map(point => ({ x: (point.x - bounds.x) / bounds.width, y: (point.y - bounds.y) / bounds.height })) };
     const holeCount = Math.max(0, loops.length - 1);
     if (holeCount) diagnostics.push({ code: 'HOLE_NOT_REPRESENTABLE', severity: 'warning', sourceId: source.id, regionId: id, bounds, message: 'The source mask has interior holes; a single Hyde path cannot preserve transparent cutouts.', suggestion: 'Keep a masked raster texture or manually split the geometry.' });
-    const variance = Math.sqrt(component.variance), texture = settings.preserveTexture && variance > 8 ? 'source-crop' : 'flat';
+    const variance = Math.sqrt(component.variance), texture = settings.preserveTexture && (variance > 8 || component.partialAlpha > 0) ? 'source-crop' : 'flat';
+    if (component.partialAlpha && !settings.preserveTexture) diagnostics.push({ code: 'TEXTURE_APPROXIMATION', severity: 'warning', sourceId: source.id, regionId: id, bounds,
+      message: 'This region has partially transparent source pixels, but texture preservation is disabled; a flat Hyde fill loses the alpha fringe.', suggestion: 'Enable texture preservation for this region.' });
     const region: RegionRecord = {
       id, sourceId: source.id, maskId, bounds, pixelCount: component.count, classification: 'foreground', color: hex(component.r, component.g, component.b), colorVariance: variance,
-      confidence: { kind: 'heuristic', reasons: ['connected 4-neighbor foreground pixels', 'similar quantized sRGB color', 'visible alpha or opaque-border contrast'] },
+      confidence: { kind: 'heuristic', reasons: ['connected 4-neighbor foreground pixels', 'original-pixel boundary contrast and 2×/4× color agreement', 'visible alpha or opaque-border contrast'] },
       provenance: { algorithmVersion: ALGORITHM_VERSION, settingsFingerprint }, generationStatus: 'generated',
       locked: { mask: false, geometry: false, part: false }, lineage: { parents: [], children: [] }, partId,
-      geometry: { id: `${id}_geometry`, generatedPath: shapePath, bounds, status: 'visible', quality: { maskIoU: sampledIoU(outer, mask, bounds), pathPointCount: outer.length, colorError: variance }, texture, locked: false },
+      geometry: { id: `${id}_geometry`, generatedPath: shapePath, bounds, status: 'visible', quality: { maskIoU: quality, pathPointCount: outer.length, colorError: variance }, texture, locked: false },
       holeCount, adjacency: [],
     };
     regions.push(region); masks.set(maskId, mask); labelToRegion.set(component.id, region);
   }
   const regionContacts = new Map<string, { left: RegionRecord; right: RegionRecord; sharedBoundary: number; colorDistance: number }>();
-  for (const [key, sharedBoundary] of adjacency) {
+  for (const [key, evidence] of adjacency) {
     const [a, b] = key.split(':').map(Number), left = labelToRegion.get(root(a)), right = labelToRegion.get(root(b));
     if (!left || !right || left.id === right.id) continue;
     const distance = rgbDistance(grouped.get(root(a))!, grouped.get(root(b))!);
     const ordered = left.id < right.id ? [left, right] : [right, left];
     const pair = `${ordered[0].id}:${ordered[1].id}`;
     const existing = regionContacts.get(pair);
-    if (existing) existing.sharedBoundary += sharedBoundary;
-    else regionContacts.set(pair, { left: ordered[0], right: ordered[1], sharedBoundary, colorDistance: distance });
+    if (existing) existing.sharedBoundary += evidence.shared;
+    else regionContacts.set(pair, { left: ordered[0], right: ordered[1], sharedBoundary: evidence.shared, colorDistance: distance });
   }
   for (const contact of regionContacts.values()) {
     contact.left.adjacency.push({ regionId: contact.right.id, sharedBoundary: contact.sharedBoundary, colorDistance: contact.colorDistance });

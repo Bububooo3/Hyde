@@ -4,6 +4,7 @@ import type { Assembly, Project, StoryElement } from './model';
 import { AUDIO_EFFECT_BOUNDS, MAX_AUDIO_EFFECTS } from './audioEffects';
 import { validPinCorners } from './projectivePin';
 import { MOTION_LIMITS } from './motion';
+import { assertSafeSvg, baseMime, headerMatchesMime, kindForMime, resemblesActiveMarkup, sniffAssetMime } from './assetSniff';
 
 /** V1 is an in-memory ZIP archive, not a streaming container. These limits bound
  * input allocation; practical browser memory limits can be lower. */
@@ -695,7 +696,17 @@ function unpack(bytes: Uint8Array, assembly: boolean): DocumentModel {
     const { archivePath, ...metadata } = asset;
     check(typeof archivePath === 'string' && safePath(archivePath) && archivePath.startsWith('assets/') && Object.hasOwn(files, archivePath), 'An asset file is missing or has an invalid path.');
     string(metadata.mime, 'Asset MIME type');
-    return { ...metadata, dataUrl: bytesDataUrl(files[archivePath], metadata.mime) };
+    check(kindForMime(metadata.mime) === metadata.kind, 'Asset kind does not match its declared MIME type.');
+    const contents = files[archivePath];
+    const detected = sniffAssetMime(contents);
+    check(!detected || headerMatchesMime(detected, metadata.mime), 'Asset MIME type does not match its embedded bytes.');
+    if (baseMime(metadata.mime) === 'image/svg+xml') {
+      try { assertSafeSvg(contents); }
+      catch (error) { fail(`Unsafe SVG asset: ${error instanceof Error ? error.message : 'invalid SVG'}`); }
+    } else check(!resemblesActiveMarkup(contents), 'Non-SVG asset contains active markup.');
+    // Historical Hyde archives may carry unknown opaque media signatures. Keep
+    // them editable, but refuse recognized mismatches and active markup.
+    return { ...metadata, dataUrl: bytesDataUrl(contents, metadata.mime) };
   });
   validateDocument(model, assembly);
   return model;

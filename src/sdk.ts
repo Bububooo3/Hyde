@@ -1,4 +1,5 @@
 import { decodeAssemblyBytes, encodeAssemblyBytes, validateDocument } from './archive';
+import { unzipSync } from 'fflate';
 import { HydeAuthoringSession } from './authoring';
 import type { ExecuteRequest, ExecuteResult, HydeDiagnostic } from './authoring';
 import { evaluateCamera } from './engine';
@@ -10,6 +11,35 @@ export type { HydeCommand, ExecuteRequest, ExecuteResult, HydeDiagnostic } from 
 export { HYDE_OPERATIONS, HYDE_COMMAND_KEYS } from './authoring';
 export { HYDE_EXECUTE_SCHEMA_V1, HYDE_INSPECT_SCHEMA_V1 } from './sdkSchema';
 export type { RenderFrameOptions, RenderedFrame } from './browserHost';
+
+/** Digest of the content emitted by Hyde's native archive codec. ZIP metadata,
+ * entry order, and compression do not affect this value. */
+export interface HydeContentDigest {
+  algorithm: 'SHA-256';
+  digestVersion: 1;
+  archiveType: 'hyde' | 'hyde-assembly';
+  archiveVersion: 1;
+  hex: string;
+}
+
+async function sha256(bytes: Uint8Array): Promise<string> {
+  if (!globalThis.crypto?.subtle) throw Object.assign(new Error('SHA-256 requires WebCrypto.'), { code: 'CAPABILITY_UNAVAILABLE' });
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes as BufferSource);
+  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function nativeContentDigest(bytes: Uint8Array, archiveType: HydeContentDigest['archiveType']): Promise<HydeContentDigest> {
+  // Hash the native encoder's uncompressed entries so ordinary ZIP timestamps
+  // and deflate choices cannot change the digest of the saved Hyde content.
+  const entries = unzipSync(bytes);
+  const fingerprints = await Promise.all(Object.entries(entries).map(async ([path, content]) =>
+    [path, content.byteLength, await sha256(content)] as const));
+  fingerprints.sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
+  return {
+    algorithm: 'SHA-256', digestVersion: 1, archiveType, archiveVersion: 1,
+    hex: await sha256(new TextEncoder().encode(JSON.stringify(fingerprints))),
+  };
+}
 
 export interface NewProjectOptions {
   name?: string;
@@ -48,6 +78,7 @@ export class HydeSession {
   stageAssembly(bytes: Uint8Array): string { return this.ready().stageAssembly(bytes); }
   discardAssembly(handle: string): void { this.ready().discardAssembly(handle); }
   exportProject(): Promise<Uint8Array> { return Promise.resolve(this.ready().exportProject()); }
+  contentDigest(): Promise<HydeContentDigest> { return nativeContentDigest(this.ready().exportProject(), 'hyde'); }
   exportAssembly(rootId: string, timeSeconds?: number): Promise<Uint8Array> { return Promise.resolve(this.ready().exportAssembly(rootId, timeSeconds)); }
   snapshot(): Project { return this.ready().snapshot(); }
   undo(expectedRevision: number): boolean { return this.ready().undo(expectedRevision); }
@@ -66,6 +97,7 @@ export class HydeAssemblyHandle {
     if (this.closed) throw new Error('The assembly handle is closed.');
     return encodeAssemblyBytes(this.assembly);
   }
+  contentDigest(): Promise<HydeContentDigest> { return nativeContentDigest(this.exportBytes(), 'hyde-assembly'); }
   close(): void { this.closed = true; }
 }
 

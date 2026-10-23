@@ -125,7 +125,7 @@ describe('deterministic decomposition and native Hyde export', () => {
     await expect(blank.exportHyde({ format: 'hyde' })).rejects.toThrow('INSUFFICIENT_STRUCTURE');
   });
 
-  it('keeps alternate pose references as uncertain correspondence evidence without motion', async () => {
+  it('keeps alternate pose references as correspondence evidence without motion', async () => {
     const first = propPng(), second = propPng();
     const session = await DecompositionSession.importSources([
       { bytes: first, name: 'front.png', mime: 'image/png', role: 'primary' },
@@ -133,7 +133,8 @@ describe('deterministic decomposition and native Hyde export', () => {
     ]);
     await session.analyze();
     expect(session.snapshot().correspondences.length).toBeGreaterThan(0);
-    expect(session.snapshot().correspondences.every(item => item.kind === 'possible-match' && item.accepted !== true)).toBe(true);
+    expect(session.snapshot().correspondences.some(item => item.kind === 'same-part' && item.accepted === true)).toBe(true);
+    expect(session.snapshot().correspondences.every(item => item.kind === 'same-part' || item.kind === 'possible-match')).toBe(true);
     const proposal = session.snapshot().correspondences[0];
     const rejected = await session.execute({ expectedRevision: session.revision, edits: [{ op: 'reference.correspond', correspondence: { ...proposal, accepted: false, origin: 'manual', evidence: ['visually rejected by the user'] } }] });
     expect(rejected.ok).toBe(true);
@@ -141,6 +142,40 @@ describe('deterministic decomposition and native Hyde export', () => {
     expect(session.snapshot().correspondences.filter(item => item.id === proposal.id)).toEqual([{ ...proposal, accepted: false, origin: 'manual', evidence: ['visually rejected by the user'] }]);
     const native = await session.exportHyde({ format: 'hyde' });
     expect(native.project.elements.every(item => item.tracks.length === 0)).toBe(true);
+  });
+
+  it('stores manual cross-reference landmarks and explicit source alignment without fabricating a pose transform', async () => {
+    const bytes = propPng();
+    const session = await DecompositionSession.importSources([
+      { bytes, name: 'front.png', mime: 'image/png', role: 'primary' },
+      { bytes, name: 'side.png', mime: 'image/png', role: 'alternate-view' },
+    ]);
+    await session.analyze();
+    const [primary, alternate] = session.snapshot().sources;
+    const landmark = { id: 'manual_landmark_1', sourceIds: [alternate.id, primary.id] as [string, string],
+      kind: 'landmark' as const, origin: 'manual' as const, evidence: ['user paired two visible points'],
+      landmarkPoints: [{ x: 10, y: 12 }, { x: 13, y: 12 }] as [{ x: number; y: number }, { x: number; y: number }] };
+    const aligned = await session.execute({ expectedRevision: session.revision, edits: [
+      { op: 'reference.correspond', correspondence: landmark },
+      { op: 'reference.setTransform', sourceId: alternate.id, transformToPrimary: [1, 0, 0, 1, 3, 0] },
+    ] });
+    expect(aligned.ok, JSON.stringify(aligned)).toBe(true);
+    const reopened = await DecompositionSession.openDocument(await session.saveDocument());
+    expect(reopened.snapshot().correspondences.find(item => item.id === landmark.id)?.landmarkPoints).toEqual(landmark.landmarkPoints);
+    expect(reopened.snapshot().sources.find(item => item.id === alternate.id)?.transformToPrimary).toEqual([1, 0, 0, 1, 3, 0]);
+    const second = { ...landmark, id: 'manual_landmark_2', landmarkPoints: [{ x: 20, y: 12 }, { x: 13, y: 22 }] as typeof landmark.landmarkPoints };
+    const guided = await reopened.execute({ expectedRevision: reopened.revision, edits: [
+      { op: 'reference.correspond', correspondence: second },
+      { op: 'reference.alignFromLandmarks', sourceId: alternate.id, landmarkIds: [landmark.id, second.id] },
+    ] });
+    expect(guided.ok, JSON.stringify(guided)).toBe(true);
+    expect(reopened.snapshot().sources.find(item => item.id === alternate.id)?.transformToPrimary).toEqual([0, 1, -1, 0, 25, 2]);
+    const invalid = await reopened.execute({ expectedRevision: reopened.revision, edits: [
+      { op: 'reference.setTransform', sourceId: alternate.id, transformToPrimary: [0, 0, 0, 0, 0, 0] },
+    ] });
+    expect(invalid.ok).toBe(false);
+    expect(reopened.snapshot().sources.find(item => item.id === alternate.id)?.transformToPrimary).toEqual([0, 1, -1, 0, 25, 2]);
+    await reopened.close(); await session.close();
   });
 
   it('retains authentic texture inside an editable native path and refuses an unapproved transparent hole', async () => {
@@ -195,5 +230,38 @@ describe('deterministic decomposition and native Hyde export', () => {
     const reopened = await DecompositionSession.openDocument(await session.saveDocument());
     expect(reopened.maskFor(regenerated.originalMaskId!)).toEqual(original);
     expect(reopened.maskFor(regenerated.maskId)).toEqual(refined);
+  });
+
+  it('uses bounded color seeds for undoable local mask correction without changing other regions', async () => {
+    const session = await DecompositionSession.importSources([{ bytes: propPng(), name: 'seeded-prop.png', mime: 'image/png' }]);
+    await session.analyze();
+    const red = session.snapshot().regions.find(item => item.color === '#b53627')!;
+    const blue = session.snapshot().regions.find(item => item.id !== red.id)!;
+    const original = session.maskFor(red.maskId), other = session.maskFor(blue.maskId);
+    const cut = { ...original, bytes: Uint8Array.from(original.bytes) };
+    for (let y = 0; y < cut.height; y++) cut.bytes[y * cut.width + cut.width - 1] = 0;
+    const handle = session.stageMask(cut);
+    expect((await session.execute({ expectedRevision: session.revision, edits: [{ op: 'region.refineMask', regionId: red.id, handle }] })).ok).toBe(true);
+    const beforeSeed = session.snapshot(), revision = session.revision;
+    const added = await session.execute({ expectedRevision: revision, edits: [
+      { op: 'region.seedMask', regionId: red.id, x: 19, y: 15, action: 'add', colorTolerance: 0, radius: 3 },
+    ] });
+    expect(added.ok, JSON.stringify(added)).toBe(true);
+    const after = session.snapshot().regions.find(item => item.id === red.id)!;
+    expect(after.pixelCount).toBeGreaterThan(beforeSeed.regions.find(item => item.id === red.id)!.pixelCount);
+    expect(after.originalMaskId).toBe(red.maskId);
+    expect(session.maskFor(blue.maskId)).toEqual(other);
+    const reopened = await DecompositionSession.openDocument(await session.saveDocument());
+    expect(reopened.maskFor(after.maskId)).toEqual(session.maskFor(after.maskId));
+    expect(reopened.maskFor(after.originalMaskId!)).toEqual(original);
+    await reopened.close();
+    expect(session.undo(session.revision)).toBe(true);
+    expect(session.snapshot().regions.find(item => item.id === red.id)).toEqual(beforeSeed.regions.find(item => item.id === red.id));
+    const denied = await session.execute({ expectedRevision: session.revision, edits: [
+      { op: 'region.seedMask', regionId: red.id, x: 20, y: 15, action: 'add', colorTolerance: 255, radius: 5 },
+    ] });
+    expect(denied.ok).toBe(false);
+    expect(session.snapshot().regions.find(item => item.id === red.id)).toEqual(beforeSeed.regions.find(item => item.id === red.id));
+    await session.close();
   });
 });
