@@ -108,6 +108,16 @@ describe('deterministic decomposition and native Hyde export', () => {
     const reopened = await DecompositionSession.openDocument(await session.saveDocument());
     expect(reopened.snapshot().regions.find(item => item.id === first.id)?.geometry.manualPath).toEqual(path);
     expect(reopened.snapshot().parts.find(item => item.id === part.id)?.pivotLocked).toBe(true);
+    const blocked = await reopened.execute({ expectedRevision: reopened.revision, edits: [{ op: 'region.clearManualPath', regionId: first.id }] });
+    expect(blocked.ok).toBe(false);
+    const cleared = await reopened.execute({ expectedRevision: reopened.revision, edits: [
+      { op: 'annotation.lock', regionId: first.id, target: 'geometry', locked: false },
+      { op: 'region.clearManualPath', regionId: first.id },
+    ] });
+    expect(cleared.ok).toBe(true);
+    expect(reopened.snapshot().regions.find(item => item.id === first.id)?.geometry.manualPath).toBeUndefined();
+    expect(reopened.undo(reopened.revision)).toBe(true);
+    expect(reopened.snapshot().regions.find(item => item.id === first.id)?.geometry.manualPath).toEqual(path);
   });
 
   it('preserves last complete candidate on cancellation and reports incomplete structure', async () => {

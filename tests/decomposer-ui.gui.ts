@@ -173,6 +173,12 @@ test('guided seed and path controls preserve editable history', async ({ page })
   await expect(page.getByRole('button', { name: 'Remove outgoing handle' })).toBeVisible();
   await page.getByRole('button', { name: 'Remove path anchor' }).click();
   await expect(page.getByRole('status')).toContainText('region.setPath saved');
+  await page.getByRole('checkbox', { name: 'Lock path' }).click();
+  await expect(page.getByRole('checkbox', { name: 'Lock path' })).not.toBeChecked();
+  await page.getByRole('button', { name: 'Use generated contour' }).click();
+  await expect(page.getByRole('status')).toContainText('region.clearManualPath saved');
+  await expect(page.getByRole('button', { name: 'Use generated contour' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Apply outward feather' })).toBeEnabled();
 });
 
 test('manual cross-reference landmarks and affine alignment survive source reopen', async ({ page }) => {
