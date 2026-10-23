@@ -1,0 +1,82 @@
+import { expect, test } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
+import { encodePng } from '../src/decomposer/image';
+
+function fixture(): Buffer {
+  const width = 40, height = 32, rgba = new Uint8Array(width * height * 4);
+  for (let y = 9; y < 23; y++) for (let x = 4; x < 20; x++) rgba.set([181, 54, 39, 255], (y * width + x) * 4);
+  for (let y = 4; y < 27; y++) for (let x = 20; x < 33; x++) rgba.set([30, 111, 188, 255], (y * width + x) * 4);
+  return Buffer.from(encodePng({ width, height, rgba }));
+}
+
+test('import, edit, save/reopen and export native editable assembly', async ({ page }, testInfo) => {
+  await page.goto('/decomposer.html');
+  await expect(page.getByText('Turn illustrations into editable Hyde art')).toBeVisible();
+  await page.getByLabel('Import images').setInputFiles({ name: 'two-piece-prop.png', mimeType: 'image/png', buffer: fixture() });
+  await expect(page.getByRole('status')).toContainText('Automatic first pass found 2 editable regions.');
+  await expect(page.locator('.left-pane .scroll-list').first().locator('.row')).toHaveCount(2);
+  await page.locator('.left-pane .scroll-list').first().locator('.row').first().click();
+  await expect(page.getByText('Selected region')).toBeVisible();
+  const name = page.getByLabel('Part name');
+  await name.fill('Handle'); await name.blur();
+  await expect(page.getByRole('status')).toContainText('part.rename saved');
+  await page.getByRole('button', { name: 'Undo' }).click();
+  await expect(page.getByRole('status')).toContainText('Undo applied.');
+  await page.getByRole('button', { name: 'Redo' }).click();
+  await expect(page.getByRole('status')).toContainText('Redo applied.');
+  const savePromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Save source' }).click();
+  const saved = await savePromise;
+  expect(saved.suggestedFilename()).toMatch(/\.hydecomp$/);
+  const sourceBytes = await readFile(await saved.path());
+  const exportPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export', exact: true }).click();
+  const exported = await exportPromise;
+  expect(exported.suggestedFilename()).toMatch(/\.hyproj$/);
+  expect((await readFile(await exported.path())).subarray(0, 2).toString()).toBe('PK');
+  await page.getByRole('button', { name: 'Preview in Hyde' }).click();
+  await expect(page.getByAltText('Native Hyde render of current export')).toBeVisible();
+  const metrics = page.getByLabel('Native quality metrics');
+  await expect(metrics).toBeVisible();
+  await expect(metrics).toContainText('Silhouette IoU');
+  await expect(metrics).toContainText('Color error');
+  await expect(metrics).toContainText('Coverage missing');
+  await expect(metrics).toContainText('Complexity');
+  await page.getByLabel('Show residual overlay').check();
+  const residual = page.getByAltText('Native residual overlay');
+  await expect(residual).toBeVisible();
+  expect(await residual.evaluate((image: HTMLImageElement) => [image.naturalWidth, image.naturalHeight])).toEqual([40, 32]);
+  await page.getByLabel('Show residual overlay').uncheck();
+  await expect(residual).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath('decomposer-ui.png'), fullPage: true });
+  await page.getByLabel('Open .hydecomp').setInputFiles({ name: 'restored.hydecomp', mimeType: 'application/zip', buffer: sourceBytes });
+  await expect(page.getByRole('status')).toContainText('Opened restored.hydecomp');
+  await expect(page.locator('.left-pane .scroll-list').first().locator('.row')).toHaveCount(2);
+  await expect(page.getByText('Handle', { exact: true }).first()).toBeVisible();
+});
+
+test('guided mask brush, path drag and pivot edits commit through worker revisions', async ({ page }) => {
+  await page.goto('/decomposer.html');
+  await page.getByLabel('Import images').setInputFiles({ name: 'two-piece-prop.png', mimeType: 'image/png', buffer: fixture() });
+  await expect(page.getByRole('status')).toContainText('Automatic first pass found 2 editable regions.');
+  await page.locator('.left-pane .scroll-list').first().locator('.row').first().click();
+  const canvas = page.locator('canvas.interactive-canvas');
+  const box = await canvas.boundingBox();
+  expect(box).toBeTruthy();
+  if (!box) return;
+  const imagePoint = (x: number, y: number) => ({ x: box.x + x / 40 * box.width, y: box.y + y / 32 * box.height });
+  await page.getByLabel('Canvas tool').selectOption('paint-erase');
+  await page.getByLabel('Brush radius').fill('1');
+  const erase = imagePoint(23, 5);
+  await page.mouse.move(erase.x, erase.y); await page.mouse.down(); await page.mouse.up();
+  await expect(page.getByRole('status')).toContainText('region.refineMask saved');
+  await page.getByLabel('Canvas tool').selectOption('path');
+  const anchor = imagePoint(20, 4), destination = imagePoint(21, 4);
+  await page.mouse.move(anchor.x, anchor.y); await page.mouse.down(); await page.mouse.move(destination.x, destination.y); await page.mouse.up();
+  await expect(page.getByRole('status')).toContainText('region.setPath saved');
+  await page.getByLabel('Canvas tool').selectOption('pivot');
+  const pivot = imagePoint(26, 15);
+  await page.mouse.click(pivot.x, pivot.y);
+  await expect(page.getByRole('status')).toContainText('part.setPivot saved');
+  expect(Number(await page.getByLabel('Pivot X').inputValue())).toBeCloseTo(26, 1);
+});

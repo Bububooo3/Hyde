@@ -1,4 +1,4 @@
-import { stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Page } from 'playwright';
@@ -7,7 +7,8 @@ import type { Project } from './model';
 
 export type CliBrowserTask =
   | { kind: 'preview'; options: { timeSeconds: number; width?: number; height?: number; format?: 'png' | 'jpeg' | 'webp'; quality?: number } }
-  | { kind: 'render'; settings: { format: 'gif' | 'mp4' | 'webm'; start: number; end: number; width: number; height: number; fps: number; quality: 'low' | 'medium' | 'high'; loop: boolean; background: string; includeAudio: boolean } };
+  | { kind: 'render'; settings: { format: 'gif' | 'mp4' | 'webm'; start: number; end: number; width: number; height: number; fps: number; quality: 'low' | 'medium' | 'high'; loop: boolean; background: string; includeAudio: boolean } }
+  | { kind: 'web' };
 
 export interface BrowserTaskResult {
   bytes: Uint8Array;
@@ -27,8 +28,22 @@ export class BrowserHostError extends Error {
 
 function runtimePath(): string {
   const folder = dirname(fileURLToPath(import.meta.url));
-  const bundled = basename(folder) === 'cli' && basename(dirname(folder)) === 'dist';
-  return bundled ? resolve(folder, 'hyde-browser.iife.js') : resolve(folder, '../dist/cli/hyde-browser.iife.js');
+  if (basename(dirname(folder)) === 'dist') return resolve(folder, '../cli/hyde-browser.iife.js');
+  return resolve(folder, '../dist/cli/hyde-browser.iife.js');
+}
+
+async function portableResources(): Promise<{ playerJs: string; playerCss: string; licenseText: string }> {
+  const folder = resolve(dirname(runtimePath()), '../portable');
+  try {
+    const [playerJs, playerCss, licenseText] = await Promise.all([
+      readFile(resolve(folder, 'player.js'), 'utf8'),
+      readFile(resolve(folder, 'player.css'), 'utf8'),
+      readFile(resolve(folder, 'licenses/JetBrains-Mono.txt'), 'utf8'),
+    ]);
+    return { playerJs, playerCss, licenseText };
+  } catch {
+    throw new BrowserHostError('CAPABILITY_UNAVAILABLE', 'Hyde portable player is missing. Run npm run cli:build to build the player and browser runtime.');
+  }
 }
 
 async function browserPage(): Promise<{ page: Page; close: () => Promise<void> }> {
@@ -69,6 +84,7 @@ function responseError(response: { ok: boolean; code?: string; message?: string 
 /** Run Hyde's real browser renderer in a private, offline page. No local server is opened. */
 export async function runBrowserTask(project: Project, task: CliBrowserTask, options: { signal?: AbortSignal; timeoutMs?: number; onProgress?: (progress: ExportProgress) => void } = {}): Promise<BrowserTaskResult> {
   if (options.signal?.aborted) throw new BrowserHostError('CANCELED', 'Browser job canceled.');
+  const request = task.kind === 'web' ? { kind: 'web' as const, resources: await portableResources() } : task;
   const session = await browserPage();
   const { page } = session;
   let latestProgress: ExportProgress | undefined;
@@ -88,7 +104,7 @@ export async function runBrowserTask(project: Project, task: CliBrowserTask, opt
         const failure = error as Error & { code?: string };
         return { ok: false, code: failure.code ?? (failure.name === 'AbortError' ? 'CANCELED' : 'EXPORT_FAILED'), message: failure.message };
       }
-    }, { source: project, request: task });
+    }, { source: project, request });
     const canceled = new Promise<never>((_, reject) => {
       abortListener = () => {
         void page.evaluate(() => window.__hydeCliRuntime.cancel()).catch(() => undefined);

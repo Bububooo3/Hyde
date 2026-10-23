@@ -20,6 +20,7 @@ export interface HydeDiagnostic {
   targetId?: string;
   commandIndex?: number;
   field?: string;
+  details?: Record<string, unknown>;
   suggestions?: string[];
 }
 
@@ -29,6 +30,7 @@ type Transform = Partial<Pick<StoryElement, 'x' | 'y' | 'width' | 'height' | 'ro
 type Appearance = Partial<Pick<StoryElement, 'fill' | 'stroke' | 'strokeWidth' | 'opacity' | 'hidden' | 'optimize' | 'shadow'>>;
 
 export type CoreHydeCommand =
+  | { op: 'project.create'; args: { name: string } & Partial<Pick<Project, 'width' | 'height' | 'fps' | 'duration' | 'background' | 'webPlayer'>>; clientCommandId?: string }
   | { op: 'project.updateMetadata'; args: Partial<Pick<Project, 'name' | 'width' | 'height' | 'fps' | 'duration' | 'background' | 'webPlayer'>>; clientCommandId?: string }
   | { op: 'scene.create'; args: { id?: string; alias?: string; name: string; start: number; duration: number; color?: string }; clientCommandId?: string }
   | { op: 'scene.rename'; args: { id: Ref; name: string }; clientCommandId?: string }
@@ -67,14 +69,15 @@ export type ExecuteResult =
   | { ok: false; revision: number; errors: HydeDiagnostic[]; warnings: HydeDiagnostic[] };
 
 const coreOperations = [
-  'project.updateMetadata', 'scene.create', 'scene.rename', 'scene.duplicate', 'scene.delete', 'scene.retime', 'scene.move', 'scene.link', 'scene.unlink',
+  'project.create', 'project.updateMetadata', 'scene.create', 'scene.rename', 'scene.duplicate', 'scene.delete', 'scene.retime', 'scene.move', 'scene.link', 'scene.unlink',
   'element.create', 'element.remove', 'element.setTransform', 'element.updateAppearance',
   'shape.setPath', 'shape.convertToPath', 'shape.insertPoint', 'shape.movePoint', 'shape.setHandle', 'shape.removePoint',
   'assembly.attach', 'assembly.detach', 'track.ensure', 'keyframe.upsert', 'caption.create', 'asset.add',
 ] as const;
-const operations = [...new Set<string>([...coreOperations, ...timelineOperations, ...MEDIA_AUTHORING_OPERATIONS, ...CATALOG_OPERATIONS])];
+export const HYDE_OPERATIONS = [...new Set<string>([...coreOperations, ...timelineOperations, ...MEDIA_AUTHORING_OPERATIONS, ...CATALOG_OPERATIONS])];
 
 const coreCommandKeys: Record<(typeof coreOperations)[number], string[]> = {
+  'project.create': ['name', 'width', 'height', 'fps', 'duration', 'background', 'webPlayer'],
   'project.updateMetadata': ['name', 'width', 'height', 'fps', 'duration', 'background', 'webPlayer'],
   'scene.create': ['id', 'alias', 'name', 'start', 'duration', 'color'],
   'scene.rename': ['id', 'name'],
@@ -101,7 +104,7 @@ const coreCommandKeys: Record<(typeof coreOperations)[number], string[]> = {
   'caption.create': ['id', 'alias', 'sceneId', 'text', 'start', 'end'],
   'asset.add': ['id', 'alias', 'handle', 'name'],
 };
-const commandKeys: Record<string, readonly string[]> = { ...coreCommandKeys, ...timelineCommandKeys, ...MEDIA_AUTHORING_COMMAND_KEYS, ...CATALOG_COMMAND_KEYS };
+export const HYDE_COMMAND_KEYS: Record<string, readonly string[]> = { ...coreCommandKeys, ...timelineCommandKeys, ...MEDIA_AUTHORING_COMMAND_KEYS, ...CATALOG_COMMAND_KEYS };
 const elementCreateKeys = ['name', 'x', 'y', 'width', 'height', 'rotation', 'scaleX', 'scaleY', 'pivotX', 'pivotY', 'fill', 'stroke', 'strokeWidth', 'opacity', 'start', 'duration', 'assetId', 'text', 'fontFamily', 'fontSize', 'parentId', 'hidden', 'locked'];
 const transformKeys = ['x', 'y', 'width', 'height', 'rotation', 'scaleX', 'scaleY', 'pivotX', 'pivotY'];
 const appearanceKeys = ['fill', 'stroke', 'strokeWidth', 'opacity', 'hidden', 'optimize', 'shadow'];
@@ -113,6 +116,19 @@ function assertKeys(value: unknown, allowed: readonly string[], label: string): 
 
 function diagnostic(code: string, message: string, commandIndex?: number): HydeDiagnostic {
   return { code, severity: 'error', message, commandIndex };
+}
+function failureCode(cause: unknown): string {
+  if (cause instanceof MediaAuthoringError || cause instanceof CatalogError) return cause.code;
+  const message = cause instanceof Error ? cause.message : String(cause);
+  if (/Unsupported operation/.test(message)) return 'OPERATION_UNSUPPORTED';
+  if (/duplicate|already exists|collision/i.test(message)) return 'DUPLICATE_ID';
+  if (/cycle/i.test(message)) return 'ATTACHMENT_CYCLE';
+  if (/attachment|reparent|parent/i.test(message)) return 'INVALID_ATTACHMENT';
+  if (/time|duration|range|start|end|fps/i.test(message)) return 'INVALID_TIMING';
+  if (/path|point|geometry|shape/i.test(message)) return 'INVALID_GEOMETRY';
+  if (/asset|MIME|SVG|media/i.test(message)) return 'INVALID_ASSET';
+  if (/does not exist|not found|unavailable|missing/i.test(message)) return 'TARGET_NOT_FOUND';
+  return 'INVALID_ARGUMENT';
 }
 function namedId(id: string | undefined, alias: string | undefined, ids: Map<string, string>): string {
   const value = id ?? uid();
@@ -190,24 +206,27 @@ function projectFields(value: Record<string, unknown>, fields?: string[] | strin
 
 export class HydeAuthoringSession {
   private project: Project;
+  private readonly canCreateProject: boolean;
   private currentRevision = 0;
   private undoStack: Project[] = [];
   private redoStack: Project[] = [];
   private readonly staged = new Map<string, { bytes: Uint8Array; mime: string; kind: Asset['kind']; licenseNotice?: string }>();
   private readonly stagedAssemblies = new Map<string, Assembly>();
   private readonly changes = new Map<number, ChangeSummary>();
+  private readonly replay = new Map<string, { signature: string; result: Extract<ExecuteResult, { ok: true }> }>();
 
-  constructor(project: Project) {
+  constructor(project: Project, canCreateProject = false) {
     validateDocument(project, false);
     this.project = structuredClone(project);
+    this.canCreateProject = canCreateProject;
   }
-  static create(name?: string): HydeAuthoringSession { return new HydeAuthoringSession(createProject(name)); }
+  static create(name?: string): HydeAuthoringSession { return new HydeAuthoringSession(createProject(name), true); }
   static open(bytes: Uint8Array): HydeAuthoringSession { return new HydeAuthoringSession(decodeProjectBytes(bytes)); }
   get revision(): number { return this.currentRevision; }
   capabilities(environment: 'node' | 'browser' = typeof window === 'undefined' ? 'node' : 'browser') {
     return {
       protocolVersion: 1 as const, sdkVersion: '0.1.0', projectVersions: [1], assemblyVersions: [1],
-      operations: [...operations], environment,
+      operations: [...HYDE_OPERATIONS], environment,
       preview: { frames: false, audio: false, video: false },
       exports: ['hyde', 'hy', 'hyproj'] as const,
       resourceLimits: { maxArchiveBytes: 512 * 1024 * 1024, maxCommandsPerBatch: 1000 },
@@ -276,26 +295,39 @@ export class HydeAuthoringSession {
   }
   async execute(request: ExecuteRequest): Promise<ExecuteResult> {
     if (request.protocolVersion !== 1) return { ok: false, revision: this.revision, errors: [diagnostic('SCHEMA_UNSUPPORTED', 'Command protocol version is unsupported.')], warnings: [] };
-    if (request.expectedRevision !== this.revision) return { ok: false, revision: this.revision, errors: [diagnostic('REVISION_CONFLICT', `Expected revision ${request.expectedRevision}; current revision is ${this.revision}.`)], warnings: [] };
+    if (request.correlationId !== undefined && (typeof request.correlationId !== 'string' || request.correlationId.length < 1 || request.correlationId.length > 128)) return { ok: false, revision: this.revision, errors: [diagnostic('INVALID_ARGUMENT', 'correlationId must contain 1 to 128 characters.')], warnings: [] };
+    let signature = '';
+    if (request.correlationId) {
+      try { signature = JSON.stringify({ commands: request.commands, dryRun: request.dryRun }); }
+      catch { return { ok: false, revision: this.revision, errors: [diagnostic('INVALID_ARGUMENT', 'Commands must be JSON-compatible data.')], warnings: [] }; }
+    }
+    const replayed = request.correlationId ? this.replay.get(request.correlationId) : undefined;
+    if (replayed) return replayed.signature === signature ? structuredClone(replayed.result) : { ok: false, revision: this.revision, errors: [diagnostic('INVALID_ARGUMENT', 'correlationId was reused for a different batch.')], warnings: [] };
+    if (request.expectedRevision !== this.revision) {
+      const changes = [...this.changes.entries()].filter(([revision]) => revision > request.expectedRevision).slice(0, 25).map(([revision, change]) => ({ revision, ...change }));
+      return { ok: false, revision: this.revision, errors: [{ ...diagnostic('REVISION_CONFLICT', `Expected revision ${request.expectedRevision}; current revision is ${this.revision}.`), details: { changes, truncated: this.revision - request.expectedRevision > changes.length }, suggestions: ['Inspect changed IDs, then retry with the current revision.'] }], warnings: [] };
+    }
     if (!Array.isArray(request.commands) || request.commands.length < 1 || request.commands.length > 1000) return { ok: false, revision: this.revision, errors: [diagnostic('RESOURCE_LIMIT', 'A batch must contain between 1 and 1000 commands.')], warnings: [] };
     let candidate = structuredClone(this.project);
     const aliases = new Map<string, string>(), usedHandles = new Set<string>(), usedAssemblyHandles = new Set<string>(), seenCommands = new Set<string>();
     for (let index = 0; index < request.commands.length; index++) {
       const command = request.commands[index];
       try {
+        assertKeys(command, ['op', 'args', 'clientCommandId'], 'Command');
+        if (typeof command.op !== 'string' || !command.op || command.clientCommandId !== undefined && (typeof command.clientCommandId !== 'string' || !command.clientCommandId || command.clientCommandId.length > 128)) throw new Error('Operation and clientCommandId must be valid strings.');
         if (command.clientCommandId) {
           if (seenCommands.has(command.clientCommandId)) throw new Error('Repeated clientCommandId in one batch.');
           seenCommands.add(command.clientCommandId);
         }
         candidate = this.apply(candidate, command, aliases, usedHandles, usedAssemblyHandles);
       } catch (error) {
-        const code = error instanceof MediaAuthoringError || error instanceof CatalogError ? error.code : error instanceof Error && error.message.startsWith('Unsupported operation') ? 'OPERATION_UNSUPPORTED' : 'INVALID_ARGUMENT';
+        const code = failureCode(error);
         return { ok: false, revision: this.revision, errors: [diagnostic(code, error instanceof Error ? error.message : 'Command failed.', index)], warnings: [] };
       }
     }
     candidate.updatedAt = new Date().toISOString();
     try { validateDocument(candidate, false); }
-    catch (error) { return { ok: false, revision: this.revision, errors: [diagnostic('INVALID_REFERENCE', error instanceof Error ? error.message : 'Project validation failed.')], warnings: [] }; }
+    catch (error) { return { ok: false, revision: this.revision, errors: [diagnostic(failureCode(error) === 'INVALID_ARGUMENT' ? 'INVALID_REFERENCE' : failureCode(error), error instanceof Error ? error.message : 'Project validation failed.')], warnings: [] }; }
     const changes = summarize(this.project, candidate);
     const result = { ok: true as const, revision: this.revision + (request.dryRun ? 0 : 1), applied: request.commands.length, idMap: Object.fromEntries(aliases), changes, warnings: [] };
     if (!request.dryRun) {
@@ -306,6 +338,10 @@ export class HydeAuthoringSession {
       this.changes.set(this.revision, changes);
       for (const handle of usedHandles) this.staged.delete(handle);
       for (const handle of usedAssemblyHandles) this.stagedAssemblies.delete(handle);
+      if (request.correlationId) {
+        this.replay.set(request.correlationId, { signature, result });
+        if (this.replay.size > 128) this.replay.delete(this.replay.keys().next().value!);
+      }
     }
     return result;
   }
@@ -315,6 +351,7 @@ export class HydeAuthoringSession {
     this.redoStack.push(this.project);
     this.changes.set(++this.currentRevision, summarize(this.project, previous));
     this.project = previous;
+    this.replay.clear();
     return true;
   }
   redo(expectedRevision: number): boolean {
@@ -323,14 +360,15 @@ export class HydeAuthoringSession {
     this.undoStack.push(this.project);
     this.changes.set(++this.currentRevision, summarize(this.project, next));
     this.project = next;
+    this.replay.clear();
     return true;
   }
   private apply(project: Project, command: HydeCommand, aliases: Map<string, string>, usedHandles: Set<string>, usedAssemblyHandles: Set<string>): Project {
     // The public discriminated union types callers; incoming bridge/CLI JSON is
     // checked again by command preconditions and the full native validator.
     const args = command.args as any;
-    if (!Object.hasOwn(commandKeys, command.op)) throw new Error(`Unsupported operation ${command.op}.`);
-    assertKeys(args, commandKeys[command.op], `${command.op} arguments`);
+    if (!Object.hasOwn(HYDE_COMMAND_KEYS, command.op)) throw new Error(`Unsupported operation ${command.op}.`);
+    assertKeys(args, HYDE_COMMAND_KEYS[command.op], `${command.op} arguments`);
     if (Object.hasOwn(timelineCommandKeys, command.op)) return applyTimelineCommand(project, command as TimelineCommand, {
       resolve: ref => resolve(ref, aliases),
       register: (alias, id) => { if (alias !== undefined) namedId(id, alias, aliases); },
@@ -354,6 +392,12 @@ export class HydeAuthoringSession {
     if (command.op === 'element.setTransform') assertKeys(args.transform, transformKeys, 'Transform');
     if (command.op === 'element.updateAppearance') assertKeys(args.appearance, appearanceKeys, 'Appearance');
     switch (command.op) {
+      case 'project.create': {
+        if (!this.canCreateProject || this.currentRevision !== 0 || project.elements.length || project.assets.length || project.sequences.length !== 1 || project.captions.length) throw new Error('project.create is available only in a new, empty SDK project.');
+        if (typeof args.name !== 'string' || !args.name.trim()) throw new Error('project.create requires a name.');
+        Object.assign(project, args);
+        break;
+      }
       case 'project.updateMetadata': Object.assign(project, args); break;
       case 'scene.create': {
         const id = namedId(args.id, args.alias, aliases);

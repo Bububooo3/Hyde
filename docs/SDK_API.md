@@ -1,0 +1,79 @@
+# Hyde Agent Authoring SDK (local development API)
+
+The SDK uses Story Studio's `Project`/`Assembly` types, evaluator, editing helpers and archive codec. It does not require a server. Build the Node package and CLI with `npm run sdk:build` and `npm run cli:build`. The local package exposes `hyde-editor/sdk`; direct source imports work in this repository. The protocol version is **1** and the current SDK version is **0.1.0**. This is an implementation checkpoint; [ACCEPTANCE.md](ACCEPTANCE.md) lists unfinished requirements.
+
+## Node example
+
+```ts
+import { hyde } from 'hyde-editor/sdk';
+
+const session = await hyde.createProject({ name: 'An editable story', width: 640, height: 480 });
+const sceneId = session.snapshot().sequences[0].id;
+const dryRun = await session.execute({
+  protocolVersion: 1, expectedRevision: session.revision, dryRun: true,
+  commands: [
+    { op: 'element.create', args: { alias: '$body', kind: 'ellipse', sceneId,
+      properties: { name: 'Body', x: 120, y: 140, width: 100, height: 80 } } },
+    { op: 'keyframe.upsert', args: { elementId: '$body', property: 'rotation', timeSeconds: 1, value: 30 } },
+  ],
+});
+if (!dryRun.ok) throw new Error(dryRun.errors.map(error => error.message).join('; '));
+const committed = await session.execute({ protocolVersion: 1, expectedRevision: session.revision,
+  correlationId: 'create-body-v1', commands: [
+    { op: 'element.create', args: { alias: '$body', kind: 'ellipse', sceneId,
+      properties: { name: 'Body', x: 120, y: 140, width: 100, height: 80 } } },
+    { op: 'keyframe.upsert', args: { elementId: '$body', property: 'rotation', timeSeconds: 1, value: 30 } },
+  ] });
+if (!committed.ok) throw new Error(committed.errors.map(error => error.message).join('; '));
+const bytes = await session.exportProject(); // write bytes to an explicit .hyde destination
+await session.close();
+```
+
+`HydeCommand` is a discriminated TypeScript union. `HYDE_EXECUTE_SCHEMA_V1` and `HYDE_INSPECT_SCHEMA_V1` describe the protocol and operation-specific required keys, value types and static bounds. State-dependent rules such as attachment cycles, scene ranges and media references are checked by the native transaction validator. No object-path setter or JavaScript evaluation is exposed.
+
+## Session surface
+
+| Method | Behavior |
+| --- | --- |
+| `hyde.createProject(options)`, `hyde.openProject(bytes)` | Create/open a native v1 project. The opened archive remains untouched until explicitly written. |
+| `hyde.openAssembly(bytes)` | Validate a `.hyproj`; inspect metadata or re-export its bytes. |
+| `session.execute(request)` | Apply 1–1000 commands atomically with `expectedRevision`; `dryRun` returns proposed IDs/changes without committing. |
+| `session.inspect(query)` | Bounded project, scene, object, tree, assembly, timeline, asset or revision-change query; asset bytes are excluded. |
+| `session.evaluate(timeSeconds)` | Hyde evaluator output and active camera, without rendering pixels or changing authoring state. |
+| `session.stageAsset(bytes, mime, kind)`, `stageAssembly(bytes)` | Validate binary input and receive a transient handle for `asset.add`/`asset.replace` or `assembly.import`. |
+| `session.exportProject()`, `exportAssembly(rootId)` | Emit self-contained native ZIP bytes through Hyde's codec. |
+| `session.undo(revision)`, `redo(revision)`, `close()` | Session history and lifetime management. The live bridge uses the editor's own history. |
+| `hyde.connectBrowser(session)` | Attach Hyde's real browser renderer/export host when a DOM/WebGL environment exists. |
+
+Times are seconds; `fps` controls frame snapping in editor operations. Stage positions are logical pixels, rotations are degrees, pivots and path coordinates are normalized. Aliases such as `$body` exist only within one batch. `idMap` reports generated IDs. A repeated `correlationId` with identical commands returns the prior commit result within a bounded 128-batch session window; reusing it for changed commands fails.
+
+The current registered command catalog is available from `HYDE_OPERATIONS` and the session capability manifest. Its typed definitions are grouped in `src/authoring.ts` (project, scene, element, path, attachment, asset creation), `src/authoringCatalog.ts` (scene timing/placement, clone, folders, pivots, alignment, assembly import, captions, assets), `src/authoringTimeline.ts` (tracks, keys, camera, motion, reusable clips), and `src/authoringMedia.ts` (primitive geometry, texture/media, text, audio and video). A batch fails with a structured code and command index when a command or final graph is invalid. Broader command-specific diagnostic fields and a saved-content digest remain open.
+
+## CLI
+
+`node dist/cli/hyde.mjs doctor --json` checks Node and browser capabilities. The CLI supports `project new|validate|inspect|apply|diff|preview|render|export`, `assembly inspect|validate|export|import`, and writes binary artifacts only to an explicit destination. For example:
+
+```sh
+node dist/cli/hyde.mjs project new --name Example --output example.hyde --json
+node dist/cli/hyde.mjs project apply example.hyde --commands edits.json --output revised.hyde --json
+node dist/cli/hyde.mjs project preview revised.hyde --time 1 --output frame.png --json
+node dist/cli/hyde.mjs project export revised.hyde --format web --output story-web.zip --json
+```
+
+`edits.json` can be an array of commands or a request object with `commands` and `stagedAssets` file declarations. The CLI writes temporary files and keeps a backup when replacing an existing explicit output. Preview/render use a private Chromium page, Hyde's renderer/export stack, and no local HTTP server. Codec availability is probed at runtime; an unsupported MP4/WebM request fails rather than emitting substitute bytes.
+
+## Live editor bridge
+
+In Story Studio, open **View → Automation access**, choose scopes, then enable access for this tab. The bridge is absent by default and removed on reload, project replacement or revocation. A same-page client uses `window.hydeAutomation.sessionId` and calls `request({ protocolVersion: 1, sessionId, requestId, operation, payload })`. Scopes are `read`, `write`, `assets`, `preview`, `export`, and `editorNavigation`. Each committed automation batch enters the GUI history as one undo action. Same-origin scripts already running in Hyde are outside this consent boundary; the bridge is not a sandbox for them.
+
+## Compatibility and limitations
+
+| Component | Current compatibility |
+| --- | --- |
+| Hyde archive | Native project/assembly schema v1, `.hyde`/`.hy` and `.hyproj`; unknown safe optional fields round-trip. |
+| Command protocol | v1, session revisions begin at 0 and are separate from archive version. |
+| Node runtime | Node 20+ with WebCrypto; authoring and archives work without a browser. |
+| Browser runtime | DOM/WebGL required for frame rendering; export formats depend on browser codecs. |
+| Image Decomposer | `.hydecomp` v1 is a separate working document; native output goes through these SDK transactions. |
+
+No migration from a future Hyde schema is available yet. Unsupported versions fail before overwriting input. Node evaluation returns model poses, not pixels. Browser text capture and some advanced editor-only workflows are still tracked as gaps in [ACCEPTANCE.md](ACCEPTANCE.md).

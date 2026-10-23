@@ -5,7 +5,8 @@ import type { Project } from './model';
 
 type BrowserTask =
   | { kind: 'preview'; options: Omit<RenderFrameOptions, 'signal'> }
-  | { kind: 'render'; settings: MediaExportSettings };
+  | { kind: 'render'; settings: MediaExportSettings }
+  | { kind: 'web'; resources: { playerJs: string; playerCss: string; licenseText: string } };
 
 interface BrowserResult {
   mime: string;
@@ -45,6 +46,15 @@ window.__hydeCliRuntime = {
         const frame = await host.renderFrame({ ...task.options, signal: controller.signal });
         artifact = new Blob([frame.bytes as Uint8Array<ArrayBuffer>], { type: frame.mime });
         return { mime: frame.mime, bytes: frame.bytes.byteLength, width: frame.width, height: frame.height, warnings: frame.warnings };
+      }
+      if (task.kind === 'web') {
+        const bytes = await host.exportWeb({
+          playerJs: task.resources.playerJs,
+          playerCss: task.resources.playerCss,
+          staticFiles: { 'licenses/JetBrains-Mono.txt': new TextEncoder().encode(task.resources.licenseText) },
+        }, controller.signal);
+        artifact = new Blob([bytes as Uint8Array<ArrayBuffer>], { type: 'application/zip' });
+        return { mime: artifact.type, bytes: bytes.byteLength };
       }
       const result = await host.exportMedia(task.settings, {
         signal: controller.signal,

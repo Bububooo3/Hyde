@@ -7,6 +7,8 @@ import type { Assembly, Asset, Project } from './model';
 import type { HydeRenderHost } from './browserHost';
 
 export type { HydeCommand, ExecuteRequest, ExecuteResult, HydeDiagnostic } from './authoring';
+export { HYDE_OPERATIONS, HYDE_COMMAND_KEYS } from './authoring';
+export { HYDE_EXECUTE_SCHEMA_V1, HYDE_INSPECT_SCHEMA_V1 } from './sdkSchema';
 export type { RenderFrameOptions, RenderedFrame } from './browserHost';
 
 export interface NewProjectOptions {

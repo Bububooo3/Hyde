@@ -4,6 +4,7 @@ import { exportMedia, getVideoCapabilities } from './mediaExport';
 import type { ExportOptions, ExportResult, MediaExportSettings } from './mediaExport';
 import type { Project } from './model';
 import type { HydeAuthoringSession, HydeDiagnostic } from './authoring';
+import type { WebPackageResources } from './export';
 
 export interface RenderFrameOptions {
   timeSeconds: number;
@@ -57,7 +58,7 @@ export class HydeRenderHost {
     const video = await getVideoCapabilities(project.width, project.height, project.fps, false);
     return {
       preview: { frames: true, audio: false, video: true },
-      exports: ['hyde', 'hy', 'hyproj', 'gif', ...video.filter(item => item.supported).map(item => item.format)],
+      exports: ['hyde', 'hy', 'hyproj', 'web', 'gif', ...video.filter(item => item.supported).map(item => item.format)],
       video,
       resourceLimits: { maxRenderPixels: 8_294_400, maxConcurrentJobs: 1 },
     };
@@ -90,6 +91,12 @@ export class HydeRenderHost {
   async exportMedia(settings: MediaExportSettings, options?: ExportOptions): Promise<ExportResult> {
     if (this.closed) throw capabilityError('The render host has been closed.');
     return exportMedia(this.source(), settings, options);
+  }
+  /** Produce a standalone ZIP from Hyde's built portable player and native archive codec. */
+  async exportWeb(resources: WebPackageResources, signal?: AbortSignal): Promise<Uint8Array> {
+    if (this.closed) throw capabilityError('The render host has been closed.');
+    const { buildWebPackageBytes } = await import('./export');
+    return buildWebPackageBytes(this.source(), resources, signal);
   }
   close(): void {
     if (this.closed) return;

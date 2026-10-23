@@ -10,7 +10,8 @@
     }
   },
   "bin": {
-    "hyde": "./dist/cli/hyde.mjs"
+    "hyde": "./dist/cli/hyde.mjs",
+    "hyde-decompose": "./dist/decomposer-cli/hyde-decompose.mjs"
   },
   "scripts": {
     "dev": "vite --host 127.0.0.1",
@@ -19,8 +20,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "cli:build": "vite build --config vite.cli.config.ts && vite build --config vite.cli-browser.config.ts",
-    "sdk:build": "vite build --config vite.sdk.config.ts && tsc --project tsconfig.sdk.json"
+    "cli:build": "vite build --config vite.cli.config.ts && vite build --config vite.cli-browser.config.ts && vite build --config vite.portable.config.ts",
+    "sdk:build": "vite build --config vite.sdk.config.ts && tsc --project tsconfig.sdk.json",
+    "decomposer:build": "npm run cli:build && vite build --config vite.decomposer.config.ts && vite build --config vite.decomposer-cli.config.ts"
   },
   "dependencies": {
     "@chenglou/pretext": "latest",

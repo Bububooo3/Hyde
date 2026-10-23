@@ -1,10 +1,11 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
-import { HydeSDK } from './sdk';
+import { HydeSDK, HYDE_EXECUTE_SCHEMA_V1 } from './sdk';
 
 describe('public Node SDK', () => {
   it('creates, edits, inspects, evaluates, and reopens a native Hyde archive', async () => {
     const sdk = new HydeSDK();
+    expect(HYDE_EXECUTE_SCHEMA_V1.properties.commands.items.oneOf.length).toBeGreaterThan(80);
     const session = await sdk.createProject({ name: 'Native SDK', width: 640, height: 480, duration: 4 });
     const scene = session.snapshot().sequences[0].id;
     const committed = await session.execute({ protocolVersion: 1, expectedRevision: 0, commands: [

@@ -1,6 +1,6 @@
-import { createHash, randomUUID } from 'node:crypto';
-import { readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { basename, dirname, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decodeAssemblyBytes, decodeProjectBytes, encodeProjectBytes, validateDocument } from './archive';
 import { HydeAuthoringSession } from './authoring';
@@ -9,6 +9,8 @@ import type { ExecuteRequest, HydeCommand } from './authoring';
 import { insertAssemblyAt } from './editing';
 import { sceneIdAt } from './model';
 import type { Assembly, Project } from './model';
+import { atomicWrite } from './atomicFile';
+export { atomicWrite } from './atomicFile';
 
 type Output = { stdout: (text: string) => void; stderr: (text: string) => void };
 type Flags = Record<string, string | true>;
@@ -58,32 +60,6 @@ function noExtra(positionals: string[], expected: number): void {
   if (positionals.length !== expected) throw new CliFailure('INVALID_ARGUMENT', 'Unexpected positional arguments.', 2);
 }
 function publicName(path: string): string { return basename(path); }
-async function exists(path: string): Promise<boolean> {
-  try { await stat(path); return true; }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error; }
-}
-
-/** Keep the previous file as a recoverable sibling if the explicit destination exists. */
-export async function atomicWrite(destination: string, bytes: Uint8Array): Promise<{ output: string; backup?: string }> {
-  const target = resolve(destination), folder = dirname(target);
-  const temporary = resolve(folder, `.${basename(target)}.${randomUUID()}.tmp`);
-  let backup: string | undefined, movedPrevious = false;
-  try {
-    await writeFile(temporary, bytes, { flag: 'wx' });
-    if (await exists(target)) {
-      backup = resolve(folder, `${basename(target)}.${randomUUID()}.bak`);
-      await rename(target, backup);
-      movedPrevious = true;
-    }
-    try { await rename(temporary, target); }
-    catch (error) {
-      if (movedPrevious && backup) await rename(backup, target);
-      throw error;
-    }
-    return { output: basename(target), ...(backup ? { backup: basename(backup) } : {}) };
-  } finally { await rm(temporary, { force: true }).catch(() => undefined); }
-}
-
 async function readBytes(path: string): Promise<Uint8Array> {
   try { return await readFile(path); }
   catch (error) { throw new CliFailure('INVALID_ARGUMENT', `Could not read ${publicName(path)} (${(error as NodeJS.ErrnoException).code ?? 'I/O error'}).`, 2); }
@@ -319,13 +295,29 @@ async function dispatch(args: string[], io: Output): Promise<{ command: string; 
         return { command: key, result: { mime: media.mime, bytes: media.bytes.byteLength, frameCount: media.frameCount, duration: media.duration, includesAudio: media.includesAudio, progress: media.progress, ...output } };
       } finally { job.close(); }
     }
+    case 'project export':
+    case 'project web': {
+      allowed(flags, ['format', 'timeout', 'output', 'json']); noExtra(positionals, 3);
+      const format = option(flags, 'format') ?? 'web';
+      if (format !== 'web') throw new CliFailure('INVALID_ARGUMENT', 'Use --format web for a standalone Hyde web package.', 2);
+      const project = await projectFrom(input(positionals, 2, 'Project archive'));
+      const destination = option(flags, 'output', true)!;
+      const timeout = numeric(flags, 'timeout', 1800)!;
+      if (timeout < 1 || timeout > 3600) throw new CliFailure('INVALID_ARGUMENT', '--timeout must be between 1 and 3600 seconds.', 2);
+      const job = browserJobSignal();
+      try {
+        const packageResult = await runBrowserTask(project, { kind: 'web' }, { signal: job.signal, timeoutMs: timeout * 1000 });
+        const output = await atomicWrite(destination, packageResult.bytes);
+        return { command: key, result: { mime: packageResult.mime, bytes: packageResult.bytes.byteLength, nativeSource: 'source.hyde', ...output } };
+      } finally { job.close(); }
+    }
     case 'doctor': {
       allowed(flags, ['json']); noExtra(positionals, 1);
       const session = HydeAuthoringSession.create();
       const capabilities = session.capabilities('node');
       return { command: key, result: { node: process.version, capabilities, browserHost: await probeBrowserHost(session.snapshot()) } };
     }
-    default: throw new CliFailure('OPERATION_UNSUPPORTED', 'Unknown command. Use project new/validate/inspect/apply/diff/preview/render, assembly inspect/validate/export/import, or doctor.', 2);
+    default: throw new CliFailure('OPERATION_UNSUPPORTED', 'Unknown command. Use project new/validate/inspect/apply/diff/preview/render/export, assembly inspect/validate/export/import, or doctor.', 2);
   }
 }
 

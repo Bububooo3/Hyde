@@ -1,0 +1,29 @@
+# Hyde Image Decomposer
+
+The standalone application starts with `npm run decomposer:build` and `npx vite preview --config vite.decomposer.config.ts`. It runs locally, uses a worker for deterministic image analysis, and needs no account, model weights or hosted service. Open `decomposer.html` in the preview server, import PNG/JPEG/WebP references, analyze, correct regions and parts, compare the actual Hyde render, and save the recoverable `.hydecomp` working document. Native `.hyde` projects and `.hyproj` assemblies are emitted through Hyde's SDK command transactions and archive codec.
+
+## Scriptable workflow
+
+`src/decomposer/index.ts` exports `DecompositionSession` for conventional TypeScript callers. `importSources`, `analyze`, `inspect`, `execute`, `compare`, `saveDocument`, `openDocument`, `exportHyde` and `close` use the same model as the GUI. Edits have an `expectedRevision`, commit atomically, and support dry-run. Binary masks are staged through handles. The source byte and decoded-pixel getters return copies.
+
+The `hyde-decompose` executable is built at `dist/decomposer-cli/hyde-decompose.mjs`. It writes JSON to stdout and binary artifacts only to explicit paths. Existing destinations are refused unless `--overwrite` is given; replacement retains a `.bak` sibling.
+
+```sh
+node dist/decomposer-cli/hyde-decompose.mjs import --source art.png --output art.hydecomp --json
+node dist/decomposer-cli/hyde-decompose.mjs analyze art.hydecomp --output art.hydecomp --overwrite --mode animation-ready --json
+node dist/decomposer-cli/hyde-decompose.mjs inspect art.hydecomp --target regions --limit 25 --json
+node dist/decomposer-cli/hyde-decompose.mjs compare art.hydecomp --native --overlay residual.png --json
+node dist/decomposer-cli/hyde-decompose.mjs export art.hydecomp --format hyproj --output art.hyproj --json
+```
+
+For multiple references, `import --request manifest.json` accepts `{ "name": "Art", "mode": "appearance", "sources": [{ "path": "primary.png", "role": "primary" }, { "path": "side.png", "role": "alternate-view" }] }`. `edit --request edits.json` accepts `{ "expectedRevision": 1, "edits": [{ "op": "part.rename", "partId": "...", "name": "Arm" }] }`. An optional `masks` array supplies raw binary 0/1 files with `name`, `path`, `width` and `height`; a `region.refineMask` edit can refer to that name as its handle. `compare --native` builds a neutral-pose `.hyde` candidate and renders through Hyde's private offline Chromium host. Its JSON omits the binary residual overlay; `--overlay` saves it separately.
+
+## Source and quality contract
+
+The `.hydecomp` ZIP stores exact original bytes, canonical decoded RGBA, masks, geometry, user edits, locks, lineage and correspondence with member hashes. PNG decoding is shared by Node and browser; JPEG/WebP use the browser decoder, with canonical pixels persisted so a reopened document is stable. SVG import is currently unsupported. Each reference is analyzed separately; alternate poses remain evidence and never become motion keys or clips.
+
+Appearance-first and animation-ready use the same region graph with different deterministic settings. Connected color/alpha regions become separate editable paths; broad shared boundaries can group multiple paint regions into one logical part. Authentic source crops back textured paths. A transparent hole in a single path needs explicit `allowHoleApproximation` approval, and the loss of inner vector topology is warned about. Very busy images that yield mostly tiny fragments are reported as insufficient structure and require guided correction before native export.
+
+The native comparison reports thresholded silhouette IoU, boundary distance, overlap sRGB error, missing/extra/halo pixels and structural complexity. It compares canonical source pixels with an actual Hyde browser-rendered PNG at source resolution and writes a colored residual overlay. This is objective pixel evidence, not a claim of subjective part usefulness. Synthetic rights-clear fixtures and measured boundaries are in `tests/decomposer-synthetic-acceptance.md`; the acceptance inventory is in `docs/ACCEPTANCE.md`.
+
+Current guided tools include mask add/erase brush within a selected region, path-point dragging, region split/merge, part assignment/rename/pivot/reparent/attachment, front/back relations, reference correspondence, locks, regeneration and undo/redo. Feathered brush, seed growing, stronger multi-scale segmentation, hidden-contour completion and owner visual review remain open requirements.

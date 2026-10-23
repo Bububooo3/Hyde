@@ -4,6 +4,21 @@ import { HydeAuthoringSession } from './authoring';
 import { decodeProjectBytes } from './archive';
 
 describe('authoring transactions in Node', () => {
+  it('configures a new project with project.create and refuses archive replacement', async () => {
+    const session = HydeAuthoringSession.create();
+    const result = await session.execute({ protocolVersion: 1, expectedRevision: 0, commands: [
+      { op: 'project.create', args: { name: 'New story', width: 800, height: 600, fps: 24 } },
+    ] });
+    expect(result.ok).toBe(true);
+    expect(session.snapshot()).toMatchObject({ name: 'New story', width: 800, height: 600, fps: 24 });
+    const opened = HydeAuthoringSession.open(session.exportProject());
+    const refused = await opened.execute({ protocolVersion: 1, expectedRevision: 0, commands: [
+      { op: 'project.create', args: { name: 'Unsafe replacement' } },
+    ] });
+    expect(refused.ok).toBe(false);
+    expect(opened.snapshot().name).toBe('New story');
+  });
+
   it('creates editable native content through aliases and round-trips its archive', async () => {
     const session = HydeAuthoringSession.create('Authored in Node');
     const imageBytes = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lXcAAAAASUVORK5CYII=', 'base64'));
@@ -108,5 +123,17 @@ describe('authoring transactions in Node', () => {
     expect(reopened.elements.some(item => item.id === made.idMap.$root)).toBe(false);
     expect(reopened.elements.find(item => item.id === imported.idMap.$imported)?.name).toBe('Mover');
     expect(reopened.elements.find(item => item.name === 'Part')?.parentId).toBe(imported.idMap.$imported);
+  });
+
+  it('replays a matching correlation ID once and reports bounded revision changes', async () => {
+    const session = HydeAuthoringSession.create();
+    const first = { protocolVersion: 1 as const, expectedRevision: 0, correlationId: 'agent-batch-1', commands: [{ op: 'element.create' as const, args: { kind: 'ellipse' as const, alias: '$first' } }] };
+    const applied = await session.execute(first);
+    expect(applied.ok).toBe(true);
+    expect(await session.execute(first)).toEqual(applied);
+    expect(session.snapshot().elements).toHaveLength(1);
+    const stale = await session.execute({ protocolVersion: 1, expectedRevision: 0, commands: [{ op: 'element.create', args: { kind: 'rectangle' } }] });
+    expect(stale).toMatchObject({ ok: false, revision: 1, errors: [{ code: 'REVISION_CONFLICT', details: { changes: [{ revision: 1 }] } }] });
+    expect((await session.execute({ ...first, commands: [{ op: 'element.create', args: { kind: 'rectangle' } }] })).ok).toBe(false);
   });
 });

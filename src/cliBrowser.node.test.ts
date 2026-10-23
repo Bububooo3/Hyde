@@ -2,15 +2,20 @@
 import { execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { strFromU8, unzipSync } from 'fflate';
 import { chromium } from 'playwright';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { HydeAuthoringSession } from './authoring';
+import { decodeProjectBytes } from './archive';
 import { runCli } from './cli';
 import { runBrowserTask } from './cliBrowserRunner';
+import { HydeSDK } from './sdk';
 
 let folder: string;
 beforeAll(async () => {
   execFileSync(process.execPath, [resolve('node_modules/vite/bin/vite.js'), 'build', '--config', 'vite.cli-browser.config.ts'], { stdio: 'ignore' });
+  execFileSync(process.execPath, [resolve('node_modules/vite/bin/vite.js'), 'build', '--config', 'vite.portable.config.ts'], { stdio: 'ignore' });
   await mkdir(resolve('tmp'), { recursive: true });
   folder = await mkdtemp(resolve('tmp', 'hyde-browser-cli-'));
 }, 30_000);
@@ -83,4 +88,60 @@ describe('CLI Hyde browser host', () => {
       onProgress: progress => { if (progress.phase === 'rendering') controller.abort(); },
     })).rejects.toMatchObject({ code: 'CANCELED' });
   }, 30_000);
+
+  it('packages an SDK story for isolated file playback with its original native source', async () => {
+    const sdk = new HydeSDK();
+    const session = await sdk.createProject({ name: 'SDK standalone story' });
+    const texture = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lXcAAAAASUVORK5CYII=', 'base64'));
+    const handle = session.stageAsset(texture, 'image/png', 'image');
+    const created = await session.execute({ protocolVersion: 1, expectedRevision: 0, commands: [
+      { op: 'asset.add', args: { alias: '$texture', handle, name: 'spot.png' } },
+      { op: 'element.create', args: { kind: 'rectangle', properties: { name: 'Red stage', x: 960, y: 540, width: 1920, height: 1080, fill: '#ff0000' } } },
+      { op: 'element.create', args: { kind: 'image', properties: { name: 'Editable spot', x: 100, y: 100, width: 64, height: 64, assetId: '$texture' } } },
+    ] });
+    expect(created.ok).toBe(true);
+    const source = join(folder, 'sdk-story.hyde'), output = join(folder, 'sdk-story-web.zip');
+    const native = await session.exportProject();
+    await writeFile(source, native);
+    const result = await cli('project', 'export', source, '--format', 'web', '--output', output);
+    expect(result.code, JSON.stringify(result)).toBe(0);
+    expect(result.stdout.result.mime).toBe('application/zip');
+    const packageFiles = unzipSync(new Uint8Array(await readFile(output)));
+    expect(packageFiles['index.html']).toBeTruthy();
+    expect(packageFiles['source.hyde']).toBeTruthy();
+    expect(packageFiles['licenses/JetBrains-Mono.txt']).toBeTruthy();
+    const original = decodeProjectBytes(native);
+    expect(decodeProjectBytes(packageFiles['source.hyde'])).toEqual(original);
+    expect(packageFiles['media/0.png']).toEqual(texture);
+    const reopened = await sdk.openProject(packageFiles['source.hyde']);
+    expect(reopened.snapshot().elements[0].id).toBe(original.elements[0].id);
+    expect(await readFile(source)).toEqual(Buffer.from(native));
+    const packedStory = JSON.parse(strFromU8(packageFiles['story.json']));
+    expect(packedStory.elements[0].id).toBe(original.elements[0].id);
+    expect(packedStory.assets[0].dataUrl).toBe('./media/0.png');
+
+    const html = join(folder, 'standalone.html');
+    await writeFile(html, packageFiles['index.html']);
+    const browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
+    try {
+      const page = await browser.newPage();
+      const failures: string[] = [], requests: string[] = [];
+      page.on('pageerror', error => failures.push(error.message));
+      page.on('request', request => requests.push(request.url()));
+      await page.goto(pathToFileURL(html).href);
+      await page.locator('.player-screen canvas').waitFor();
+      const pixel = await page.locator('.player-screen canvas').evaluate((canvas: HTMLCanvasElement) => {
+        const copy = document.createElement('canvas');
+        copy.width = canvas.width; copy.height = canvas.height;
+        const context = copy.getContext('2d')!;
+        context.drawImage(canvas, 0, 0);
+        return Array.from(context.getImageData(960, 540, 1, 1).data);
+      });
+      expect(pixel[0]).toBeGreaterThan(230);
+      expect(pixel[1]).toBeLessThan(40);
+      expect(pixel[2]).toBeLessThan(40);
+      expect(requests.every(url => url.startsWith('file:') || url.startsWith('data:'))).toBe(true);
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); }
+  }, 90_000);
 });

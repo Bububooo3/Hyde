@@ -189,7 +189,7 @@ export class StageRenderer {
     const app = new Application();
     await app.init({
       width: 960+editorMargin*2, height: 540+editorMargin*2, resolution: 1, autoDensity: false,
-      antialias: true, background: editorMargin?'#1f2933':'#d9dde3', backgroundAlpha: 1,
+      antialias: true, background: editorMargin?'#1f2933':'#d9dde3', backgroundAlpha: editorMargin ? 1 : 0,
       preference: 'webgl', autoStart: false, sharedTicker: false,
       preserveDrawingBuffer: true,
     });
@@ -591,7 +591,11 @@ export class StageRenderer {
     }
     this.resize(project.width, project.height);
     if(this.editorMargin){this.app.renderer.background.color=paint('#1f2933').color;this.editorBackdrop.clear().rect(0,0,project.width,project.height).fill(project.background);this.app.stage.setChildIndex(this.editorBackdrop,0);}
-    else this.app.renderer.background.color = paint(project.background).color;
+    else {
+      const background = paint(project.background);
+      this.app.renderer.background.color = background.color;
+      this.app.renderer.background.alpha = background.alpha;
+    }
     const camera = evaluateCamera(project, time);
     const setCamera=(target:Container,view:ReturnType<typeof evaluateCamera>)=>{
       target.pivot.set(view.x,view.y);
