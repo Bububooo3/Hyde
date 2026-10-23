@@ -99,6 +99,9 @@ export interface PartRecord {
   pivotLocked: boolean;
   attachment?: Pick<Attachment, 'type' | 'min' | 'max'>;
   attachmentApproved: boolean;
+  /** Unapproved contact-based suggestion; native export ignores it until accepted. */
+  attachmentProposal?: { parentId: string; type: 'fixed' | 'hinge'; pivot: Point; evidence: string[]; ambiguity?: string };
+  attachmentProposalRejected?: boolean;
   hiddenGeometry: 'none' | 'inferred' | 'user-authored';
   zOrder: number;
   transformLocked: boolean;

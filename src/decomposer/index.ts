@@ -4,6 +4,7 @@ export { decodePng, encodePng, decodeSource, MAX_IMAGE_PIXELS } from './image';
 export { encodeDecompositionDocument, decodeDecompositionDocument, validateDecompositionDocument } from './codec';
 export { analyzeImage, fitMaskGeometry, proposeCorrespondences, ALGORITHM_VERSION } from './analysis';
 export { rankReferenceCorrespondences } from './correspondence';
+export { proposePartAttachments } from './articulation';
 export type { CorrespondenceOptions, CorrespondenceRanking } from './correspondence';
 export { exportNativeDecomposition } from './export';
 export { compareNativeRender } from './quality';

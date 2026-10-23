@@ -32,6 +32,7 @@ h3 { font-size: 13px; margin: 0; }
 .row.selected { border-color: #39d3bb; background: #254a4c; }
 .row.inferred-row { border-left: 3px solid #ffcb70; }
 .row.suppressed-row { opacity: .72; border-left: 3px solid #876c45; }
+.attachment-proposal { border-color: #6dbfb1; }
 .row span { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row small { font-size: 10px; color: #aac1c0; }
 .reference-guide { display: grid; gap: 6px; margin-top: 10px; padding: 9px; border: 1px solid #3d5d65; border-radius: 7px; color: #d1e5e0; font-size: 11px; background: #1b343b; overflow-wrap: anywhere; }

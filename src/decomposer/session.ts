@@ -1,5 +1,6 @@
 import type { ShapePath } from '../model';
 import { analyzeImage, ALGORITHM_VERSION, fitMaskGeometry } from './analysis';
+import { proposePartAttachments } from './articulation';
 import { rankReferenceCorrespondences } from './correspondence';
 import { decodeDecompositionDocument, encodeDecompositionDocument, sha256, validateDecompositionDocument } from './codec';
 import { exportNativeDecomposition } from './export';
@@ -23,6 +24,8 @@ export type DecompositionEdit =
   | { op: 'part.setPivot'; partId: string; x: number; y: number }
   | { op: 'part.reparent'; partId: string; parentId?: string }
   | { op: 'part.setAttachment'; partId: string; type?: 'fixed' | 'hinge' | 'slider'; min?: number; max?: number; approved?: boolean }
+  | { op: 'part.acceptAttachmentProposal'; partId: string }
+  | { op: 'part.rejectAttachmentProposal'; partId: string }
   | { op: 'layer.setRelation'; frontRegionId: string; backRegionId: string; approved: boolean }
   | { op: 'reference.correspond'; correspondence: CorrespondenceRecord }
   | { op: 'reference.setTransform'; sourceId: string; transformToPrimary?: [number, number, number, number, number, number] }
@@ -383,6 +386,9 @@ export class DecompositionSession {
     for (const part of priorParts.values()) if (!nextParts.has(part.id)) nextParts.set(part.id, structuredClone(part));
     candidate.parts = [...nextParts.values()];
     refreshPartBounds(candidate);
+    const attachments = proposePartAttachments(candidate, masks);
+    for (const part of candidate.parts) part.attachmentProposal = attachments.proposals.get(part.id);
+    candidate.diagnostics.push(...attachments.diagnostics);
     const liveIds = new Set(candidate.regions.filter(active).map(region => region.id));
     const storedIds = new Set(candidate.regions.map(region => region.id));
     const suppressedIds = new Set(candidate.regions.filter(region => region.suppressed).map(region => region.id));
@@ -565,8 +571,18 @@ export class DecompositionSession {
           target.partId = owner.id; if (target.geometry.status === 'inferred') target.generationStatus = 'manual'; if (!owner.regionIds.includes(target.id)) owner.regionIds.push(target.id); changed.add(target.id); changed.add(owner.id);
         } else if (edit.op === 'part.rename') { part(edit.partId).name = edit.name; changed.add(edit.partId); }
         else if (edit.op === 'part.setPivot') { const target = part(edit.partId); if (target.pivotLocked) fail('Pivot is locked.'); finite(edit.x); finite(edit.y); target.pivot = { x: edit.x, y: edit.y }; changed.add(target.id); }
-        else if (edit.op === 'part.reparent') { const target = part(edit.partId); target.parentId = edit.parentId ? part(edit.parentId).id : undefined; if (!target.parentId) { target.attachment = undefined; target.attachmentApproved = false; } changed.add(target.id); }
-        else if (edit.op === 'part.setAttachment') { const target = part(edit.partId); if (edit.type && !target.parentId) fail('Attachment needs a parent part.'); target.attachment = edit.type ? { type: edit.type, min: edit.min, max: edit.max } : undefined; target.attachmentApproved = Boolean(edit.approved); changed.add(target.id); }
+        else if (edit.op === 'part.reparent') { const target = part(edit.partId); target.parentId = edit.parentId ? part(edit.parentId).id : undefined; target.attachmentProposal = undefined; if (!target.parentId) { target.attachment = undefined; target.attachmentApproved = false; } changed.add(target.id); }
+        else if (edit.op === 'part.setAttachment') { const target = part(edit.partId); if (edit.type && !target.parentId) fail('Attachment needs a parent part.'); target.attachment = edit.type ? { type: edit.type, min: edit.min, max: edit.max } : undefined; target.attachmentApproved = Boolean(edit.approved); target.attachmentProposal = undefined; changed.add(target.id); }
+        else if (edit.op === 'part.acceptAttachmentProposal') {
+          const target = part(edit.partId), proposal = target.attachmentProposal ?? fail('No current attachment proposal exists for this part.');
+          target.parentId = part(proposal.parentId).id; target.attachment = { type: proposal.type }; target.attachmentApproved = true;
+          if (!target.pivotLocked) target.pivot = structuredClone(proposal.pivot);
+          target.attachmentProposal = undefined; target.attachmentProposalRejected = false; changed.add(target.id);
+        } else if (edit.op === 'part.rejectAttachmentProposal') {
+          const target = part(edit.partId);
+          if (!target.attachmentProposal) fail('No current attachment proposal exists for this part.');
+          target.attachmentProposal = undefined; target.attachmentProposalRejected = true; changed.add(target.id);
+        }
         else if (edit.op === 'layer.setRelation') {
           region(edit.frontRegionId); region(edit.backRegionId); if (edit.frontRegionId === edit.backRegionId) fail('A region cannot layer in front of itself.');
           const id = `${edit.frontRegionId}_front_${edit.backRegionId}`;
@@ -611,6 +627,8 @@ export class DecompositionSession {
           candidate.settings = settings;
         } else fail(`OPERATION_UNSUPPORTED: Unknown decomposition edit ${(edit as { op?: string }).op ?? '<missing>'}.`);
       }
+      if (request.edits.some(edit => ['region.refineMask', 'region.seedMask', 'region.split', 'region.merge', 'part.create', 'part.assignRegion'].includes(edit.op)))
+        for (const item of candidate.parts) if (!item.attachmentApproved) item.attachmentProposal = undefined;
       refreshPartBounds(candidate);
       candidate.updatedAt = new Date().toISOString();
       validateDecompositionDocument(candidate, this.sourceBytes, masks, new Map([...this.images].map(([id, image]) => [id, image.rgba])));

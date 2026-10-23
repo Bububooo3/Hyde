@@ -83,6 +83,33 @@ test('guided mask brush, path drag and pivot edits commit through worker revisio
   expect(Number(await page.getByLabel('Pivot X').inputValue())).toBeCloseTo(26, 1);
 });
 
+test('animation-ready attachment proposal can be reviewed and accepted in the editor', async ({ page }) => {
+  const art = makeSyntheticFixture('articulated-character');
+  await page.goto('/decomposer.html');
+  await page.getByLabel('Import images').setInputFiles({ name: 'articulated-character.png', mimeType: 'image/png', buffer: Buffer.from(art.bytes) });
+  await expect(page.getByRole('status')).toContainText('Automatic first pass');
+  await page.getByLabel('Reconstruction mode').selectOption('animation-ready');
+  await expect(page.getByRole('status')).toContainText('Switched to animation-ready');
+  const suggested = page.locator('.left-pane .scroll-list').nth(1).locator('.row').filter({ hasText: 'hinge proposed' }).first();
+  await expect(suggested).toBeVisible();
+  const partName = await suggested.locator('span').textContent();
+  await suggested.click();
+  await expect(page.getByText('Suggested hinge attachment · unapproved')).toBeVisible();
+  await expect(page.getByLabel('Parent part')).toHaveValue('');
+  await page.getByRole('button', { name: 'Accept attachment proposal' }).click();
+  await expect(page.getByRole('status')).toContainText('part.acceptAttachmentProposal saved');
+  await expect(page.getByText('Suggested hinge attachment · unapproved')).toHaveCount(0);
+  await expect(page.getByLabel('Attachment type')).toHaveValue('hinge');
+  await expect(page.getByLabel('Parent part')).not.toHaveValue('');
+  const savePromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Save source' }).click();
+  const saved = await savePromise;
+  await page.getByLabel('Open .hydecomp').setInputFiles({ name: 'articulated.hydecomp', mimeType: 'application/zip', buffer: await readFile(await saved.path()) });
+  await expect(page.getByRole('status')).toContainText('Opened articulated.hydecomp');
+  await page.locator('.left-pane .scroll-list').nth(1).locator('.row').filter({ hasText: partName! }).click();
+  await expect(page.getByLabel('Attachment type')).toHaveValue('hinge');
+});
+
 test('guided seed and path controls preserve editable history', async ({ page }) => {
   await page.goto('/decomposer.html');
   await page.getByLabel('Import images').setInputFiles({ name: 'two-piece-prop.png', mimeType: 'image/png', buffer: fixture() });
