@@ -4,6 +4,7 @@ import type { AudioEffect, Project, StoryElement, TextAnimation, TextReflow } fr
 import type { MediaTransform } from './mediaTransform';
 import type { PinCorners } from './projectivePin';
 import { validPinCorners } from './projectivePin';
+import { captureStaticTextShapeLayout } from './textFlow';
 
 type Ref = string;
 type VisualKind = 'rectangle' | 'ellipse' | 'polygon' | 'image' | 'video';
@@ -249,7 +250,21 @@ export function applyMediaAuthoringCommand(project: Project, command: MediaAutho
     }
     case 'text.setAnimation': text(item); if (args.animation === null) delete item.textAnimation; else { record(args.animation, 'Text animation', ['unit', 'effect', 'direction', 'start', 'duration', 'stagger', 'easing', 'easingDirection', 'distance', 'seed', 'amplitude', 'frequency']); item.textAnimation = structuredClone(args.animation); } return next;
     case 'text.setReflow': text(item); if (item.textLayout === 'static' && args.reflow !== null) fail('Animated reflow requires live text layout.'); if (args.reflow === null) delete item.textReflow; else { record(args.reflow, 'Text reflow', ['preset', 'start', 'duration', 'stagger', 'easing', 'easingDirection']); item.textReflow = structuredClone(args.reflow); } return next;
-    case 'text.captureStaticLayout': text(item); fail('Static text capture requires Hyde browser text layout and cannot run in headless authoring.', 'CAPABILITY_UNAVAILABLE');
+    case 'text.captureStaticLayout': {
+      text(item);
+      finite(args.timeSeconds, 'Capture time', 0, next.duration);
+      if (item.textLayout !== 'static' || !item.flowAroundId || item.textShapeMode === 'clip')
+        fail('Static shape-aware text capture needs a static text element and an around/inside shape target.');
+      if (typeof document === 'undefined' || !document.fonts || document.fonts.status !== 'loaded')
+        fail('Static text capture requires a browser with loaded fonts; retry after document.fonts.ready.', 'CAPABILITY_UNAVAILABLE');
+      const font = `${Math.max(1, item.fontSize ?? 40)}px ${item.fontFamily || 'Georgia'}`;
+      if (!document.fonts.check(font, item.text || ' '))
+        fail(`Font ${item.fontFamily || 'Georgia'} is not ready for static text capture.`, 'CAPABILITY_UNAVAILABLE');
+      const snapshot = captureStaticTextShapeLayout(next, item.id, args.timeSeconds);
+      if (!snapshot) fail('Text and shape must be active in the same scene with representable geometry.');
+      item.staticTextFlow = snapshot;
+      return next;
+    }
     case 'audio.setRange': sound(next, item, 'audio'); return setMediaSourceWindow(next, item.id, args.inTime, args.outTime);
     case 'audio.split': {
       sound(next, item, 'audio');

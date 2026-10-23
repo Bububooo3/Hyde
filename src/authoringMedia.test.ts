@@ -73,6 +73,11 @@ describe('native media authoring commands', () => {
     expect(label.textReflow?.preset).toBe('glide');
     expect(() => commands(project, [{ op: 'text.captureStaticLayout', args: { id: 'label', timeSeconds: 0 } }])).toThrowError(MediaAuthoringError);
     try { commands(project, [{ op: 'text.captureStaticLayout', args: { id: 'label', timeSeconds: 0 } }]); }
+    catch (error) { expect((error as MediaAuthoringError).code).toBe('INVALID_ARGUMENT'); }
+    const staticProject = structuredClone(project);
+    staticProject.elements.find(item => item.id === 'label')!.textLayout = 'static';
+    expect(() => commands(staticProject, [{ op: 'text.captureStaticLayout', args: { id: 'label', timeSeconds: 0 } }])).toThrowError(MediaAuthoringError);
+    try { commands(staticProject, [{ op: 'text.captureStaticLayout', args: { id: 'label', timeSeconds: 0 } }]); }
     catch (error) { expect((error as MediaAuthoringError).code).toBe('CAPABILITY_UNAVAILABLE'); }
   });
 

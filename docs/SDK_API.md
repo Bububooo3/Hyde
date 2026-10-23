@@ -50,6 +50,8 @@ Times are seconds; `fps` controls frame snapping in editor operations. Stage pos
 
 The current registered command catalog is available from `HYDE_OPERATIONS` and the session capability manifest. Its typed definitions are grouped in `src/authoring.ts` (project, scene, element, path, attachment, asset creation), `src/authoringCatalog.ts` (scene timing/placement, clone, folders, pivots, alignment, assembly import, captions, assets), `src/authoringTimeline.ts` (tracks, keys, camera, motion, reusable clips), and `src/authoringMedia.ts` (primitive geometry, texture/media, text, audio and video). A batch fails with a structured code and command index when a command or final graph is invalid. Per-command errors identify the target ID and unsupported field when known. A stale revision reports the current revision and a bounded change summary; clients explicitly re-inspect before retrying. State-dependent final validation can still report a project-level diagnostic when Hyde's validator cannot identify one command as the cause.
 
+`text.captureStaticLayout` runs Hyde's shape-aware text layout in a browser after `document.fonts.ready`. Set the text's around/inside shape target and static layout first, then capture at an explicit project time in the same transaction. The resulting editable text and line arrangement persist in `.hyde`. Headless Node returns `CAPABILITY_UNAVAILABLE` with a font/browser requirement; it does not approximate font metrics.
+
 ## CLI
 
 `node dist/cli/hyde.mjs doctor --json` checks Node and browser capabilities. The CLI supports `project new|validate|inspect|apply|diff|preview|render|export`, `assembly inspect|validate|export|import`, and writes binary artifacts only to an explicit destination. For example:
