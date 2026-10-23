@@ -1,5 +1,13 @@
 # Hyde capability matrix
 
+## Agent SDK and Image Decomposer handoff
+
+Source baseline: `main` at `6d09c76` was copied from the existing local Hyde checkout into a separate writable clone; the original checkout and remote are untouched. The two user specifications are preserved exactly in [docs/specs](specs), with their requirement inventory in [ACCEPTANCE.md](ACCEPTANCE.md). The older Story Studio matrix below remains its own verified baseline.
+
+SDK integration checkpoint in progress: `src/archive.ts` is the shared validator and byte-based ZIP/XML codec; `src/storage.ts` delegates to it. `src/authoring.ts` provides revision-checked atomic commands, aliases, staged media and assemblies, dry-run, undo/redo, inspection, evaluation and native exports. The foundation plus catalog, timeline and media adapters register 93 native operations. `src/sdk.ts` is the public async facade, with a local Node bundle and declarations from `npm run sdk:build`. The CLI has structural commands and a browser-backed render/export runner under verification. `src/browserHost.ts` uses Hyde's Pixi renderer and export stack; `src/editorBridge.ts` is opt-in in the real React editor with scopes and GUI undo integration. The decomposer's independent core is being developed against this transaction contract. Neither product is complete: remaining SDK work includes command and inspector hardening, wider native round trips, docs/examples and full preview/export acceptance. Remaining decomposer work includes guided UI and quality validation.
+
+Verified so far: TypeScript and production editor/portable-player builds; focused SDK, adapter, archive, CLI and bridge tests; packaged Node SDK create/export/reopen; and `tests/sdk-bridge.spec.ts` in Chrome, including default-off permissions, GUI undo, revocation and a real PNG frame through Hyde's renderer. A staged native assembly import remaps IDs and reopens correctly. The browser CLI and decomposer are still under active verification. No checkpoint commit yet; commit the integrated SDK slice after CLI tests finish. Visual decomposition quality is not established by model tests.
+
 Updated 2026-10-22. **Implemented** means code exists; **Integrated** means it is reachable in the product; **Verified** means the relevant workflow has been exercised. The complete target remains [PLAN.md](PLAN.md); [ACCEPTANCE.md](ACCEPTANCE.md) tracks each requirement and its proof boundary.
 
 | Capability | State | Current boundary |
