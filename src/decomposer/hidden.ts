@@ -51,6 +51,7 @@ function opaqueAndEnclosed(front: RegionRecord, frontMask: RegionMask, back: Reg
   let contact = 0, perimeter = 0, pixels = 0;
   for (let y = front.bounds.y; y < front.bounds.y + front.bounds.height; y++) for (let x = front.bounds.x; x < front.bounds.x + front.bounds.width; x++) {
     if (!contains(front, frontMask, x, y)) continue;
+    if (frontMask.alpha && frontMask.alpha[(y - front.bounds.y) * frontMask.width + x - front.bounds.x] !== 255) return null;
     pixels++;
     if (rgba[(y * width + x) * 4 + 3] !== 255 || contains(back, backMask, x, y)) return null;
     for (const [dx, dy] of DIRECTIONS) {

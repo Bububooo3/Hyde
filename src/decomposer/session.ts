@@ -37,7 +37,8 @@ export interface DecompositionEditResult {
   error?: { code: string; message: string };
 }
 interface Snapshot { document: DecompositionDocumentV1; masks: Map<string, RegionMask> }
-const cloneMaskMap = (masks: Map<string, RegionMask>): Map<string, RegionMask> => new Map([...masks].map(([id, mask]) => [id, { width: mask.width, height: mask.height, bytes: Uint8Array.from(mask.bytes) }]));
+const cloneRegionMask = (mask: RegionMask): RegionMask => ({ width: mask.width, height: mask.height, bytes: Uint8Array.from(mask.bytes), ...(mask.alpha ? { alpha: Uint8Array.from(mask.alpha) } : {}) });
+const cloneMaskMap = (masks: Map<string, RegionMask>): Map<string, RegionMask> => new Map([...masks].map(([id, mask]) => [id, cloneRegionMask(mask)]));
 const active = (region: RegionRecord) => region.generationStatus !== 'historical' && !region.suppressed;
 const fail = (message: string): never => { throw new Error(message); };
 const finite = (value: number) => Number.isFinite(value) || fail('Coordinate must be finite.');
@@ -171,11 +172,15 @@ function seededMask(
   const bounds = edit.action === 'add' ? { x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1 } : target.bounds;
   const bytes = new Uint8Array(bounds.width * bounds.height);
   for (let row = 0; row < original.height; row++) bytes.set(original.bytes.subarray(row * original.width, (row + 1) * original.width), (row + target.bounds.y - bounds.y) * bounds.width + target.bounds.x - bounds.x);
+  const alpha = original.alpha ? new Uint8Array(bytes.length) : undefined;
+  if (alpha) for (let row = 0; row < original.height; row++) alpha.set(original.alpha!.subarray(row * original.width, (row + 1) * original.width), (row + target.bounds.y - bounds.y) * bounds.width + target.bounds.x - bounds.x);
   for (let index = 0; index < tail; index++) {
     const px = left + queue[index] % windowWidth, py = top + Math.floor(queue[index] / windowWidth);
-    bytes[(py - bounds.y) * bounds.width + px - bounds.x] = edit.action === 'add' ? 1 : 0;
+    const local = (py - bounds.y) * bounds.width + px - bounds.x;
+    bytes[local] = edit.action === 'add' ? 1 : 0;
+    if (alpha) alpha[local] = edit.action === 'add' ? 255 : 0;
   }
-  return { bounds, mask: { width: bounds.width, height: bounds.height, bytes }, count: bytes.reduce((sum, value) => sum + value, 0) };
+  return { bounds, mask: { width: bounds.width, height: bounds.height, bytes, ...(alpha ? { alpha } : {}) }, count: bytes.reduce((sum, value) => sum + value, 0) };
 }
 
 export class DecompositionSession {
@@ -237,12 +242,13 @@ export class DecompositionSession {
     if (!image) throw new Error('Source does not exist.');
     return { width: image.width, height: image.height, rgba: Uint8Array.from(image.rgba) };
   }
-  maskFor(id: string): RegionMask { this.ensureOpen(); const mask = this.masks.get(id); if (!mask) throw new Error('Mask does not exist.'); return { width: mask.width, height: mask.height, bytes: Uint8Array.from(mask.bytes) }; }
+  maskFor(id: string): RegionMask { this.ensureOpen(); const mask = this.masks.get(id); if (!mask) throw new Error('Mask does not exist.'); return cloneRegionMask(mask); }
   stageMask(mask: RegionMask): string {
     this.ensureOpen();
     if (!Number.isInteger(mask.width) || !Number.isInteger(mask.height) || mask.width < 1 || mask.height < 1 || mask.width * mask.height > 4_000_000 || mask.bytes.length !== mask.width * mask.height || mask.bytes.some(byte => byte !== 0 && byte !== 1)) throw new Error('Invalid binary mask.');
+    if (mask.alpha && (mask.alpha.length !== mask.bytes.length || mask.alpha.some((value, index) => !mask.bytes[index] && value !== 0))) throw new Error('Invalid soft mask.');
     const handle = `mask_handle_${this.currentRevision}_${this.stagedMasks.size + 1}`;
-    this.stagedMasks.set(handle, { width: mask.width, height: mask.height, bytes: Uint8Array.from(mask.bytes) });
+    this.stagedMasks.set(handle, cloneRegionMask(mask));
     return handle;
   }
   discardMask(handle: string) { this.stagedMasks.delete(handle); }
@@ -467,7 +473,7 @@ export class DecompositionSession {
           if (incoming.width !== target.bounds.width || incoming.height !== target.bounds.height) fail('Mask dimensions must match the region bounds.');
           if (!target.originalMaskId) target.originalMaskId = target.maskId;
           const id = `${target.id}_manual_mask_${this.revision + 1}_${editIndex}`;
-          target.maskId = id; masks.set(id, { ...incoming, bytes: Uint8Array.from(incoming.bytes) });
+          target.maskId = id; masks.set(id, cloneRegionMask(incoming));
           target.pixelCount = incoming.bytes.reduce((sum, value) => sum + value, 0);
           const fitted = fitMaskGeometry(target.id, incoming, target.bounds, candidate.settings, target.geometry.texture);
           target.geometry.generatedPath = fitted.geometry.generatedPath; target.geometry.quality = fitted.geometry.quality; target.holeCount = fitted.holeCount;
@@ -508,7 +514,8 @@ export class DecompositionSession {
           const children = [a, b].map((bytes, index) => {
             const id = `${target.id}_s${this.revision + 1}${index ? 'b' : 'a'}`;
             if (candidate.regions.some(item => item.id === id)) fail('Split IDs already exist.');
-            const maskId = `${id}_mask`, mask = { width: original.width, height: original.height, bytes };
+            const maskId = `${id}_mask`, mask: RegionMask = { width: original.width, height: original.height, bytes,
+              ...(original.alpha ? { alpha: Uint8Array.from(original.alpha, (value, pixel) => bytes[pixel] ? value : 0) } : {}) };
             masks.set(maskId, mask);
             const fitted = fitMaskGeometry(id, mask, target.bounds, candidate.settings, target.geometry.texture);
             const child: RegionRecord = { ...structuredClone(target), id, maskId, pixelCount: bytes.reduce((sum, value) => sum + value, 0), geometry: { ...fitted.geometry, status: target.geometry.status }, holeCount: fitted.holeCount, generationStatus: 'manual', lineage: { parents: [target.id], children: [] }, originalMaskId: undefined };
@@ -530,9 +537,14 @@ export class DecompositionSession {
           const x = Math.min(first.bounds.x, second.bounds.x), y = Math.min(first.bounds.y, second.bounds.y);
           const width = Math.max(first.bounds.x + first.bounds.width, second.bounds.x + second.bounds.width) - x, height = Math.max(first.bounds.y + first.bounds.height, second.bounds.y + second.bounds.height) - y;
           const bytes = new Uint8Array(width * height);
-          for (const source of [first, second]) { const mask = masks.get(source.maskId)!; for (let row = 0; row < mask.height; row++) for (let column = 0; column < mask.width; column++) if (mask.bytes[row * mask.width + column]) bytes[(source.bounds.y - y + row) * width + source.bounds.x - x + column] = 1; }
+          const alpha = masks.get(first.maskId)!.alpha || masks.get(second.maskId)!.alpha ? new Uint8Array(width * height) : undefined;
+          for (const source of [first, second]) { const mask = masks.get(source.maskId)!; for (let row = 0; row < mask.height; row++) for (let column = 0; column < mask.width; column++) {
+            const local = row * mask.width + column; if (!mask.bytes[local]) continue;
+            const target = (source.bounds.y - y + row) * width + source.bounds.x - x + column;
+            bytes[target] = 1; if (alpha) alpha[target] = Math.max(alpha[target], mask.alpha?.[local] ?? 255);
+          } }
           const id = `${first.id}_m${this.revision + 1}`; if (candidate.regions.some(item => item.id === id)) fail('Merge ID already exists.');
-          const maskId = `${id}_mask`, mask = { width, height, bytes }, bounds = { x, y, width, height };
+          const maskId = `${id}_mask`, mask: RegionMask = { width, height, bytes, ...(alpha ? { alpha } : {}) }, bounds = { x, y, width, height };
           masks.set(maskId, mask); const fitted = fitMaskGeometry(id, mask, bounds, candidate.settings, first.geometry.texture === 'source-crop' || second.geometry.texture === 'source-crop' || first.color !== second.color ? 'source-crop' : 'flat');
           const merged: RegionRecord = { ...structuredClone(first), id, maskId, bounds, pixelCount: bytes.reduce((sum, value) => sum + value, 0), geometry: { ...fitted.geometry, status: first.geometry.status === 'inferred' || second.geometry.status === 'inferred' ? 'inferred' : 'visible' }, holeCount: fitted.holeCount, generationStatus: 'manual', lineage: { parents: [first.id, second.id], children: [] }, originalMaskId: undefined };
           first.generationStatus = second.generationStatus = 'historical'; first.lineage.children.push(id); second.lineage.children.push(id);

@@ -17,6 +17,32 @@ async function run(args: string[]) {
 }
 
 describe('hyde-decompose CLI', () => {
+  it('accepts a soft coverage file alongside an editable binary mask', async () => {
+    const folder = await mkdtemp(join(process.cwd(), '.hyde-decompose-soft-')); folders.push(folder);
+    const rgba = new Uint8Array(16 * 16 * 4);
+    for (let y = 2; y < 14; y++) for (let x = 2; x < 14; x++) rgba.set([180, 75, 55, 255], (y * 16 + x) * 4);
+    const source = join(folder, 'source.png'), document = join(folder, 'source.hydecomp');
+    await writeFile(source, encodePng({ width: 16, height: 16, rgba }));
+    expect((await run(['import', '--source', source, '--output', document, '--json'])).exit).toBe(0);
+    expect((await run(['analyze', document, '--output', document, '--overwrite', '--json'])).exit).toBe(0);
+    const initial = await DecompositionSession.openDocument(await readFile(document));
+    const region = initial.snapshot().regions[0], mask = initial.maskFor(region.maskId), revision = initial.revision;
+    await initial.close();
+    const alpha = Uint8Array.from(mask.bytes, value => value ? 255 : 0);
+    const softPixel = Math.floor(mask.height / 2) * mask.width + Math.floor(mask.width / 2);
+    alpha[softPixel] = 112;
+    const path = join(folder, 'binary.raw'), alphaPath = join(folder, 'coverage.raw'), request = join(folder, 'edit.json');
+    await writeFile(path, mask.bytes); await writeFile(alphaPath, alpha);
+    await writeFile(request, JSON.stringify({ expectedRevision: revision, masks: [{ name: 'soft', path, alphaPath, width: mask.width, height: mask.height }],
+      edits: [{ op: 'region.refineMask', regionId: region.id, handle: 'soft' }] }));
+    const edited = await run(['edit', document, '--request', request, '--output', document, '--overwrite', '--json']);
+    expect(edited.exit, JSON.stringify(edited.error)).toBe(0);
+    const reopened = await DecompositionSession.openDocument(await readFile(document));
+    const current = reopened.snapshot().regions.find(item => item.id === region.id)!;
+    expect(reopened.maskFor(current.maskId).alpha?.[softPixel]).toBe(112);
+    await reopened.close();
+  });
+
   it('imports, analyzes, inspects, edits, compares and exports without losing a recoverable document', async () => {
     const folder = await mkdtemp(join(process.cwd(), '.hyde-decompose-cli-')); folders.push(folder);
     const pixels = new Uint8Array(32 * 32 * 4);

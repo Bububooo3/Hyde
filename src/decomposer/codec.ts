@@ -40,6 +40,7 @@ export function validateDecompositionDocument(document: unknown, sourceBytes?: M
     if (masks) {
       const mask = masks.get(String(item.maskId));
       if (!mask || mask.width !== item.bounds.width || mask.height !== item.bounds.height || mask.bytes.length !== mask.width * mask.height || mask.bytes.some(byte => byte !== 0 && byte !== 1)) throw new Error('Region mask is missing, malformed or the wrong size.');
+      if (mask.alpha && (mask.alpha.length !== mask.bytes.length || mask.alpha.some((value, index) => !mask.bytes[index] && value !== 0))) throw new Error('Region soft mask is malformed or outside its editable topology.');
       if (item.originalMaskId !== undefined && !masks.has(String(item.originalMaskId))) throw new Error('Original region mask evidence is missing.');
     }
     for (const path of [(item.geometry as Record<string, unknown>).generatedPath, (item.geometry as Record<string, unknown>).manualPath].filter(value => value !== undefined))
@@ -108,11 +109,12 @@ export async function encodeDecompositionDocument(document: DecompositionDocumen
   for (const [id, mask] of masks) {
     if (!safeId(id) || mask.bytes.length !== mask.width * mask.height) throw new Error('Invalid stored mask.');
     entries[`masks/${id}`] = mask.bytes;
+    if (mask.alpha) entries[`alphas/${id}`] = mask.alpha;
   }
   const manifest: Manifest = { format: 'hydecomp-archive', version: 1, members: {} };
   for (const [name, bytes] of Object.entries(entries)) {
     if (bytes.length > MAX_MEMBER_BYTES) throw new Error('RESOURCE_LIMIT');
-    const mask = name.startsWith('masks/') ? masks.get(name.slice('masks/'.length)) : undefined;
+    const mask = name.startsWith('masks/') ? masks.get(name.slice('masks/'.length)) : name.startsWith('alphas/') ? masks.get(name.slice('alphas/'.length)) : undefined;
     manifest.members[name] = { size: bytes.length, sha256: await sha256(bytes), ...(mask ? { width: mask.width, height: mask.height } : {}) };
   }
   entries['manifest.json'] = encoder.encode(JSON.stringify(manifest));
@@ -159,6 +161,11 @@ export async function decodeDecompositionDocument(bytes: Uint8Array): Promise<{ 
     const width = descriptor.width ?? bounds?.width, height = descriptor.height ?? bounds?.height;
     if (!safeId(id) || !Number.isInteger(width) || !Number.isInteger(height) || Number(width) < 1 || Number(height) < 1 || Number(width) * Number(height) !== entries[name].length) throw new Error(`Invalid mask dimensions for ${id}.`);
     masks.set(id, { width: Number(width), height: Number(height), bytes: entries[name] });
+  }
+  for (const name of Object.keys(manifest.members)) if (name.startsWith('alphas/')) {
+    const id = name.slice('alphas/'.length), mask = masks.get(id);
+    if (!mask || entries[name].length !== mask.bytes.length) throw new Error(`Invalid soft-mask dimensions for ${id}.`);
+    mask.alpha = entries[name];
   }
   validateDecompositionDocument(document, sourceBytes, masks, pixels);
   return { document, sourceBytes, masks, pixels };

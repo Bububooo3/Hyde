@@ -59,12 +59,21 @@ function sourcePixels(image: HTMLImageElement, width: number, height: number): U
   return context.getImageData(0, 0, width, height).data;
 }
 
-function paintDisc(mask: RegionMask, bounds: RegionRecord['bounds'], x: number, y: number, radius: number, value: number): void {
+function paintDisc(mask: RegionMask, bounds: RegionRecord['bounds'], x: number, y: number, radius: number, value: number, hardness: number): void {
   const left = Math.max(0, Math.floor(x - radius - bounds.x)), right = Math.min(mask.width - 1, Math.ceil(x + radius - bounds.x));
   const top = Math.max(0, Math.floor(y - radius - bounds.y)), bottom = Math.min(mask.height - 1, Math.ceil(y + radius - bounds.y));
+  if (hardness < 1 && !mask.alpha) mask.alpha = Uint8Array.from(mask.bytes, bit => bit ? 255 : 0);
   for (let row = top; row <= bottom; row++) for (let column = left; column <= right; column++) {
     const px = bounds.x + column + .5, py = bounds.y + row + .5;
-    if (Math.hypot(px - x, py - y) <= radius) mask.bytes[row * mask.width + column] = value;
+    const distance = Math.hypot(px - x, py - y);
+    if (distance > radius) continue;
+    const coverage = hardness >= 1 || distance <= radius * hardness ? 255 : Math.round(255 * (radius - distance) / (radius * (1 - hardness)));
+    if (!coverage) continue;
+    const index = row * mask.width + column;
+    const old = mask.alpha?.[index] ?? (mask.bytes[index] ? 255 : 0);
+    const next = value ? Math.max(old, coverage) : Math.min(old, 255 - coverage);
+    mask.bytes[index] = next > 0 ? 1 : 0;
+    if (mask.alpha) mask.alpha[index] = next;
   }
 }
 
@@ -103,7 +112,7 @@ export default function App() {
   const [selectedPartId, setSelectedPartId] = useState<string>();
   const [view, setView] = useState<View>('side-by-side'), [tool, setTool] = useState<Tool>('select');
   const [zoom, setZoom] = useState<'fit' | number>('fit');
-  const [brushRadius, setBrushRadius] = useState(3), [overlayAlpha, setOverlayAlpha] = useState(.5);
+  const [brushRadius, setBrushRadius] = useState(3), [brushHardness, setBrushHardness] = useState(1), [overlayAlpha, setOverlayAlpha] = useState(.5);
   const [selectedPoint, setSelectedPoint] = useState<number>(), [draftPoint, setDraftPoint] = useState<{ x: number; y: number }>();
   const [draftHandle, setDraftHandle] = useState<{ side: 'in' | 'out'; x: number; y: number }>();
   const [edgeSnap, setEdgeSnap] = useState(false), [edgeSnapRadius, setEdgeSnapRadius] = useState(4);
@@ -334,6 +343,7 @@ export default function App() {
         const index = ((region.bounds.y + y) * source.width + region.bounds.x + x) * 4;
         if (region.geometry.texture === 'source-crop' || region.holeCount) imageData.data.set(rgba.subarray(index, index + 4), index);
         else imageData.data.set([...rgb, rgba[index + 3]], index);
+        imageData.data[index + 3] = Math.round(imageData.data[index + 3] * (mask.alpha?.[y * mask.width + x] ?? 255) / 255);
       }
     }
     context.putImageData(imageData, 0, 0);
@@ -461,12 +471,12 @@ export default function App() {
       setDraftPoint(undefined); setDraftHandle(undefined);
     } else if (stroke.tool === 'paint-add' || stroke.tool === 'paint-erase') {
       const old = masks.get(selectedRegion.id); if (!old) return;
-      const mask: RegionMask = { width: old.width, height: old.height, bytes: Uint8Array.from(old.bytes) };
+      const mask: RegionMask = { width: old.width, height: old.height, bytes: Uint8Array.from(old.bytes), ...(old.alpha ? { alpha: Uint8Array.from(old.alpha) } : {}) };
       const points = [...stroke.points, point];
       for (let index = 0; index < points.length; index++) {
         const from = points[Math.max(0, index - 1)], to = points[index];
         const steps = Math.max(1, Math.ceil(Math.hypot(to.x - from.x, to.y - from.y) / Math.max(1, brushRadius / 2)));
-        for (let step = 0; step <= steps; step++) paintDisc(mask, selectedRegion.bounds, from.x + (to.x - from.x) * step / steps, from.y + (to.y - from.y) * step / steps, brushRadius, stroke.tool === 'paint-add' ? 1 : 0);
+        for (let step = 0; step <= steps; step++) paintDisc(mask, selectedRegion.bounds, from.x + (to.x - from.x) * step / steps, from.y + (to.y - from.y) * step / steps, brushRadius, stroke.tool === 'paint-add' ? 1 : 0, brushHardness);
       }
       void perform([{ op: 'region.refineMask', regionId: selectedRegion.id, handle: 'worker' }], mask);
     }
@@ -501,7 +511,7 @@ export default function App() {
       <main className="center-pane">
         <div className="canvas-toolbar"><div className="segmented">{(['original', 'reconstruction', 'overlay', 'side-by-side'] as View[]).map(item => <button key={item} aria-pressed={view === item} onClick={() => setView(item)}>{item === 'side-by-side' ? 'Side by side' : item[0].toUpperCase() + item.slice(1)}</button>)}</div><label>Zoom<select aria-label="Canvas zoom" value={String(zoom)} onChange={event => setZoom(event.target.value === 'fit' ? 'fit' : Number(event.target.value))}><option value="fit">Fit</option><option value="1">1× pixels</option><option value="2">2× pixels</option><option value="4">4× pixels</option><option value="8">8× pixels</option></select></label><label>Tool <select aria-label="Canvas tool" value={tool} onChange={event => setTool(event.target.value as Tool)}><option value="select">Select</option><option value="path">Edit path and handles</option><option value="paint-add">Add mask brush</option><option value="paint-erase">Subtract mask brush</option><option value="seed-add">Foreground seed</option><option value="seed-erase">Background seed</option><option value="landmark">Pair reference landmark</option><option value="pivot">Set pivot</option></select></label><label><input type="checkbox" checked={isolate} onChange={event => setIsolate(event.target.checked)}/> Isolate</label></div>
         {(tool === 'path' || tool.startsWith('paint') || tool.startsWith('seed') || view === 'overlay' || inferredRegions.length > 0) && <div className="canvas-subbar">
-          {tool.startsWith('paint') && <label>Hard brush radius <input aria-label="Brush radius" type="range" min="1" max="40" value={brushRadius} onChange={event => setBrushRadius(Number(event.target.value))}/>{brushRadius}px</label>}
+          {tool.startsWith('paint') && <><label>Brush radius <input aria-label="Brush radius" type="range" min="1" max="40" value={brushRadius} onChange={event => setBrushRadius(Number(event.target.value))}/>{brushRadius}px</label><label>Brush hardness <input aria-label="Brush hardness" type="range" min="0.1" max="1" step="0.1" value={brushHardness} onChange={event => setBrushHardness(Number(event.target.value))}/>{Math.round(brushHardness * 100)}%</label></>}
           {tool.startsWith('seed') && <><label>Seed tolerance <input aria-label="Seed tolerance" type="range" min="0" max="255" value={seedTolerance} onChange={event => setSeedTolerance(Number(event.target.value))}/>{seedTolerance}</label><label>Seed reach <input aria-label="Seed reach" type="range" min="1" max="256" value={seedRadius} onChange={event => setSeedRadius(Number(event.target.value))}/>{seedRadius}px</label></>}
           {tool === 'path' && <><label><input aria-label="Snap path to source edges" type="checkbox" checked={edgeSnap} onChange={event => setEdgeSnap(event.target.checked)}/> Snap anchors to source edges</label>{edgeSnap && <label>Snap reach <input aria-label="Snap reach" type="range" min="1" max="12" value={edgeSnapRadius} onChange={event => setEdgeSnapRadius(Number(event.target.value))}/>{edgeSnapRadius}px</label>}</>}
           {view === 'overlay' && <label>Overlay opacity <input aria-label="Overlay opacity" type="range" min="0" max="1" step="0.05" value={overlayAlpha} onChange={event => setOverlayAlpha(Number(event.target.value))}/></label>}
@@ -541,7 +551,7 @@ export default function App() {
         <h2>Selected region</h2>{selectedRegion ? <div className="inspector"><p className="identity">{selectedRegion.id}</p><p>{selectedRegion.bounds.width} × {selectedRegion.bounds.height} at {selectedRegion.bounds.x}, {selectedRegion.bounds.y} · {selectedRegion.geometry.quality.pathPointCount} anchors</p>{selectedRegion.geometry.status === 'inferred' && <div className="inferred-callout"><strong>Unseen continuation · uncertain</strong><span>This amber contour is estimated beneath the foreground. Its hidden appearance is not visible in the source. Isolate and edit it before articulating the part.</span><button disabled={busy || Boolean(selectedRegion.geometry.manualPath)} onClick={() => void perform([{ op: 'region.setPath', regionId: selectedRegion.id, path: selectedRegion.geometry.generatedPath }])}>{selectedRegion.geometry.manualPath ? 'Contour pinned as manual edit' : 'Pin current hidden contour'}</button></div>}<p className="hint">Evidence: {selectedRegion.confidence.reasons.join('; ')}</p>
           {selectedRegion.geometry.status === 'inferred' && <button disabled={busy} onClick={() => void perform([{ op: 'region.setSuppressed', regionId: selectedRegion.id, suppressed: true }])}>Suppress inferred region</button>}
           <label>Assign to part<select aria-label="Assign to part" value={selectedRegion.partId ?? ''} onChange={event => { if (event.target.value) void perform([{ op: 'part.assignRegion', regionId: selectedRegion.id, partId: event.target.value }]); }}><option value="">Unassigned</option>{documentModel?.parts.map(part => <option key={part.id} value={part.id}>{part.name}</option>)}</select></label>
-          <p className="hint">Brush and seed edits stay within this region’s current bounds. Masks are binary; antialiasing remains in the retained source texture. Split or merge to change topology.</p>
+          <p className="hint">Brush and seed edits stay within this region’s current bounds. Brush hardness stores editable soft coverage inside binary contour topology; source alpha remains separate. Split or merge to change topology.</p>
           <label><input type="checkbox" checked={selectedRegion.locked.mask} onChange={event => void perform([{ op: 'annotation.lock', regionId: selectedRegion.id, target: 'mask', locked: event.target.checked }])}/> Lock mask</label>
           <label><input type="checkbox" checked={selectedRegion.locked.geometry} onChange={event => void perform([{ op: 'annotation.lock', regionId: selectedRegion.id, target: 'geometry', locked: event.target.checked }])}/> Lock path</label>
           <label><input type="checkbox" checked={selectedRegion.locked.part} onChange={event => void perform([{ op: 'annotation.lock', regionId: selectedRegion.id, target: 'part', locked: event.target.checked }])}/> Lock part assignment</label>

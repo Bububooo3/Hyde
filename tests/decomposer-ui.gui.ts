@@ -68,6 +68,7 @@ test('guided mask brush, path drag and pivot edits commit through worker revisio
   const imagePoint = (x: number, y: number) => ({ x: box.x + x / 40 * box.width, y: box.y + y / 32 * box.height });
   await page.getByLabel('Canvas tool').selectOption('paint-erase');
   await page.getByLabel('Brush radius').fill('1');
+  await page.getByLabel('Brush hardness').fill('0.4');
   const erase = imagePoint(23, 5);
   await page.mouse.move(erase.x, erase.y); await page.mouse.down(); await page.mouse.up();
   await expect(page.getByRole('status')).toContainText('region.refineMask saved');

@@ -33,10 +33,15 @@ function regionPath(region: RegionRecord): ShapePath { return region.geometry.ma
 function cropTexture(region: RegionRecord, mask: RegionMask, image: DecodedImage): Uint8Array {
   const { bounds } = region;
   const rgba = new Uint8Array(bounds.width * bounds.height * 4);
+  const sourceColor = region.geometry.texture === 'source-crop' || region.holeCount > 0;
+  const flat = [1, 3, 5].map(at => parseInt(region.color.slice(at, at + 2), 16));
   for (let y = 0; y < bounds.height; y++) for (let x = 0; x < bounds.width; x++) {
     const source = ((bounds.y + y) * image.width + bounds.x + x) * 4, target = (y * bounds.width + x) * 4;
-    rgba[target] = image.rgba[source]; rgba[target + 1] = image.rgba[source + 1]; rgba[target + 2] = image.rgba[source + 2];
-    rgba[target + 3] = mask.bytes[y * bounds.width + x] ? image.rgba[source + 3] : 0;
+    rgba[target] = sourceColor ? image.rgba[source] : flat[0];
+    rgba[target + 1] = sourceColor ? image.rgba[source + 1] : flat[1];
+    rgba[target + 2] = sourceColor ? image.rgba[source + 2] : flat[2];
+    const pixel = y * bounds.width + x;
+    rgba[target + 3] = mask.bytes[pixel] ? Math.round(image.rgba[source + 3] * (mask.alpha?.[pixel] ?? 255) / 255) : 0;
   }
   return encodePng({ width: bounds.width, height: bounds.height, rgba });
 }
@@ -141,14 +146,15 @@ export async function exportNativeDecomposition(document: DecompositionDocumentV
     if (!mask) throw new Error(`Region ${region.id} mask is missing.`);
     const id = `hc_${region.id}`; regionIds[region.id] = id;
     const part = partById.get(region.partId ?? '');
-    const texture = region.geometry.texture === 'source-crop' || region.holeCount > 0;
+    const texture = region.geometry.texture === 'source-crop' || region.holeCount > 0 || Boolean(mask.alpha);
     let assetId: string | undefined;
     if (texture) {
       const bytes = cropTexture(region, mask, image);
       const handle = sdk.stageAsset(bytes, 'image/png', 'image');
       assetId = `hc_${region.id}_texture`;
       commands.push({ op: 'asset.add', args: { id: assetId, name: `${region.id} texture.png`, handle } });
-      warnings.push({ code: 'TEXTURE_APPROXIMATION', severity: 'info', regionId: region.id, bounds: region.bounds, message: 'Authentic source pixels are retained inside an editable Hyde path.' });
+      warnings.push({ code: 'TEXTURE_APPROXIMATION', severity: 'info', regionId: region.id, bounds: region.bounds,
+        message: mask.alpha ? 'Editable soft-mask coverage is stored as texture alpha inside a Hyde path.' : 'Authentic source pixels are retained inside an editable Hyde path.' });
     }
     const { bounds } = region;
     commands.push({ op: 'element.create', args: { id, kind: 'polygon', properties: {

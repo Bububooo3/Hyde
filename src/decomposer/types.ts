@@ -156,7 +156,14 @@ export interface SourceInput {
   decoded?: { width: number; height: number; rgba: Uint8Array };
 }
 
-export interface RegionMask { width: number; height: number; bytes: Uint8Array }
+export interface RegionMask {
+  width: number;
+  height: number;
+  /** Binary editable topology used for contours and region ownership. */
+  bytes: Uint8Array;
+  /** Optional editable 0–255 coverage inside the binary mask. */
+  alpha?: Uint8Array;
+}
 
 export function defaultSettings(mode: DecompositionMode): ReconstructionSettings {
   return {

@@ -144,8 +144,9 @@ async function dispatch(argv: string[]): Promise<Record<string, unknown>> {
       if (request.masks !== undefined) {
         if (!Array.isArray(request.masks)) throw new CliError('INVALID_ARGUMENT', 'Request masks must be an array.');
         for (const item of request.masks) {
-          if (!item || typeof item.name !== 'string' || typeof item.path !== 'string' || !Number.isInteger(item.width) || !Number.isInteger(item.height)) throw new CliError('INVALID_ARGUMENT', 'Each mask needs name, path, width and height.');
-          handles.set(item.name, session.stageMask({ width: item.width, height: item.height, bytes: await readLimitedFile(item.path, 4_000_000) }));
+          if (!item || typeof item.name !== 'string' || typeof item.path !== 'string' || !Number.isInteger(item.width) || !Number.isInteger(item.height) || item.alphaPath !== undefined && typeof item.alphaPath !== 'string') throw new CliError('INVALID_ARGUMENT', 'Each mask needs name, path, width and height; alphaPath is an optional 0–255 coverage file.');
+          handles.set(item.name, session.stageMask({ width: item.width, height: item.height, bytes: await readLimitedFile(item.path, 4_000_000),
+            ...(item.alphaPath ? { alpha: await readLimitedFile(item.alphaPath, 4_000_000) } : {}) }));
         }
       }
       const edits = (request.edits as DecompositionEdit[]).map(item => item.op === 'region.refineMask' && handles.has(item.handle) ? { ...item, handle: handles.get(item.handle)! } : item);
