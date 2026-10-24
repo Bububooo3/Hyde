@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { decodeAssemblyBytes, decodeProjectBytes, encodeProjectBytes, HydeSchemaUnsupportedError, validateDocument } from './archive';
 import { HydeAuthoringSession } from './authoring';
 import { BrowserHostError, probeBrowserHost, runBrowserTask } from './cliBrowserRunner';
-import type { ExecuteRequest, HydeCommand, HydeDiagnostic } from './authoring';
+import type { ExecuteRequest, HydeCommand, HydeDiagnostic, InspectRequest } from './authoring';
 import { insertAssemblyAt } from './editing';
 import { sceneIdAt } from './model';
 import type { Assembly, Project } from './model';
@@ -119,12 +119,11 @@ function bounded(value: unknown, depth = 0): unknown {
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, bounded(entry, depth + 1)]));
   return value;
 }
-function fieldsOnly(value: unknown, fields?: string): unknown {
-  if (!fields) return value;
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
-  const requested = fields.split(',').map(part => part.trim()).filter(Boolean);
-  if (requested.length > 40) throw new CliFailure('RESOURCE_LIMIT', 'At most 40 fields may be requested.', 2);
-  return Object.fromEntries(Object.entries(value).filter(([key]) => requested.includes(key) || key === 'revision'));
+function inspectInteger(flags: Flags, name: string, minimum: number, maximum: number): number | undefined {
+  const value = numeric(flags, name);
+  if (value !== undefined && (!Number.isSafeInteger(value) || value < minimum || value > maximum))
+    throw new CliFailure('INVALID_ARGUMENT', `--${name} must be an integer between ${minimum} and ${maximum}.`, 2);
+  return value;
 }
 function projectSummary(project: Project) {
   return { format: project.format, version: project.version, id: project.id, name: project.name, width: project.width, height: project.height, fps: project.fps, duration: project.duration, scenes: project.sequences.length, elements: project.elements.length, assets: project.assets.length, captions: project.captions.length };
@@ -193,15 +192,32 @@ async function dispatch(args: string[], io: Output): Promise<{ command: string; 
       return { command: key, result: projectSummary(project) };
     }
     case 'project inspect': {
-      allowed(flags, ['target', 'id', 'limit', 'cursor', 'fields', 'json']); noExtra(positionals, 3);
+      allowed(flags, ['target', 'id', 'scene', 'scene-id', 'limit', 'cursor', 'depth', 'fields', 'time-start', 'time-end', 'since-revision', 'json']); noExtra(positionals, 3);
       const session = new HydeAuthoringSession(await projectFrom(input(positionals, 2, 'Project archive')));
       const target = (option(flags, 'target') ?? 'project') as Parameters<typeof session.inspect>[0]['target'];
-      if (!['project', 'scenes', 'scene', 'elements', 'element', 'assets', 'changes'].includes(target)) throw new CliFailure('INVALID_ARGUMENT', 'Unknown inspection target.', 2);
+      if (!['project', 'scenes', 'scene', 'elements', 'element', 'assets', 'asset', 'changes', 'tree', 'timeline', 'assembly'].includes(target)) throw new CliFailure('INVALID_ARGUMENT', 'Unknown inspection target.', 2);
+      const scene = option(flags, 'scene'), sceneId = option(flags, 'scene-id');
+      if (scene && sceneId) throw new CliFailure('INVALID_ARGUMENT', 'Use only one of --scene and --scene-id.', 2);
+      const fields = option(flags, 'fields');
+      if (fields !== undefined) {
+        const selected = fields.split(',').map(value => value.trim());
+        if (selected.length > 40 || selected.some(value => !value || value.length > 100)) throw new CliFailure('INVALID_ARGUMENT', '--fields must list 1 to 40 field names.', 2);
+      }
+      const start = numeric(flags, 'time-start'), end = numeric(flags, 'time-end');
+      if ((start !== undefined && start < 0) || (end !== undefined && end < 0) || (start !== undefined && end !== undefined && end < start))
+        throw new CliFailure('INVALID_ARGUMENT', 'Inspection time range is invalid.', 2);
+      const query: InspectRequest = {
+        target, id: option(flags, 'id'), sceneId: scene ?? sceneId, fields,
+        limit: inspectInteger(flags, 'limit', 1, 100), cursor: inspectInteger(flags, 'cursor', 0, Number.MAX_SAFE_INTEGER),
+        depth: inspectInteger(flags, 'depth', 0, 8), sinceRevision: inspectInteger(flags, 'since-revision', 0, Number.MAX_SAFE_INTEGER),
+        timeStart: start, timeEnd: end,
+      };
+      if (['scene', 'element', 'asset', 'assembly'].includes(target) && !query.id) throw new CliFailure('INVALID_ARGUMENT', `--id is required for ${target} inspection.`, 2);
       let result: ReturnType<typeof session.inspect>;
-      try { result = session.inspect({ target, id: option(flags, 'id'), limit: numeric(flags, 'limit'), cursor: numeric(flags, 'cursor') }); }
+      try { result = session.inspect(query); }
       catch (error) { throw new CliFailure('TARGET_NOT_FOUND', error instanceof Error ? error.message : 'Inspection target not found.', 2); }
       if ('error' in result && result.error) throw new CliFailure(result.error.code, result.error.message, 2);
-      return { command: key, result: bounded(fieldsOnly(result, option(flags, 'fields'))) };
+      return { command: key, result: bounded(result) };
     }
     case 'project apply': {
       allowed(flags, ['commands', 'output', 'dry-run', 'json']); noExtra(positionals, 3);

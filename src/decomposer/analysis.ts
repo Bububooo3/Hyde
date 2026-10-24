@@ -1,4 +1,4 @@
-import type { ShapePath } from '../model';
+import type { PathPoint, ShapePath } from '../model';
 import type { Box, CorrespondenceRecord, DecompositionDiagnostic, DecompositionMode, LayerRecord, PartRecord, Point, ReconstructionSettings, RegionGeometry, RegionMask, RegionRecord, SourceReference } from './types';
 import type { DecodedImage } from './image';
 
@@ -121,7 +121,157 @@ function sampledIoU(points: Point[], mask: RegionMask, bounds: Box): number {
   return union ? intersection / union : 1;
 }
 
-function fitVisibleContour(loop: Point[], mask: RegionMask, bounds: Box, settings: ReconstructionSettings, hasHoles: boolean) {
+function flattenedPath(points: PathPoint[]): Point[] {
+  const flattened: Point[] = [];
+  for (let index = 0; index < points.length; index++) {
+    const a = points[index], b = points[(index + 1) % points.length];
+    flattened.push({ x: a.x, y: a.y });
+    if (!a.out && !b.in) continue;
+    const p = a.out ?? a, q = b.in ?? b;
+    const steps = Math.min(32, Math.max(4, Math.ceil((Math.hypot(p.x - a.x, p.y - a.y) + Math.hypot(q.x - p.x, q.y - p.y) + Math.hypot(b.x - q.x, b.y - q.y)) / .5)));
+    for (let step = 1; step < steps; step++) {
+      const t = step / steps, u = 1 - t;
+      flattened.push({ x: u ** 3 * a.x + 3 * u ** 2 * t * p.x + 3 * u * t ** 2 * q.x + t ** 3 * b.x,
+        y: u ** 3 * a.y + 3 * u ** 2 * t * p.y + 3 * u * t ** 2 * q.y + t ** 3 * b.y });
+    }
+  }
+  return flattened;
+}
+
+function intersects(a: Point, b: Point, c: Point, d: Point): boolean {
+  const cross = (u: Point, v: Point, w: Point) => (v.x - u.x) * (w.y - u.y) - (v.y - u.y) * (w.x - u.x);
+  const abC = cross(a, b, c), abD = cross(a, b, d), cdA = cross(c, d, a), cdB = cross(c, d, b);
+  return abC * abD < -1e-10 && cdA * cdB < -1e-10;
+}
+
+function selfIntersects(points: Point[]): boolean {
+  for (let i = 0; i < points.length; i++) {
+    const a = points[i], b = points[(i + 1) % points.length];
+    if (Math.hypot(b.x - a.x, b.y - a.y) < 1e-6) return true;
+    for (let j = i + 2; j < points.length; j++) {
+      if (i === 0 && j === points.length - 1) continue;
+      const c = points[j], d = points[(j + 1) % points.length];
+      if (Math.max(a.x, b.x) < Math.min(c.x, d.x) || Math.max(c.x, d.x) < Math.min(a.x, b.x)
+        || Math.max(a.y, b.y) < Math.min(c.y, d.y) || Math.max(c.y, d.y) < Math.min(a.y, b.y)) continue;
+      if (intersects(a, b, c, d)) return true;
+    }
+  }
+  return false;
+}
+
+/** Move partially covered outer edges a bounded subpixel distance *outside*
+ * the source pixel. The source-crop alpha owns the true antialias coverage;
+ * shrinking its clipping path would multiply that alpha and erase the fringe. */
+function coverageContour(loop: Point[], mask: RegionMask, bounds: Box, coverage?: Uint8Array): Point[] {
+  if (!coverage || coverage.length !== mask.bytes.length) return loop;
+  const inward = (a: Point, b: Point) => {
+    const dx = b.x - a.x, dy = b.y - a.y, length = Math.hypot(dx, dy) || 1;
+    const nx = -dy / length, ny = dx / length;
+    const x = Math.floor((a.x + b.x) / 2 + nx * .25 - bounds.x);
+    const y = Math.floor((a.y + b.y) / 2 + ny * .25 - bounds.y);
+    const alpha = x >= 0 && y >= 0 && x < mask.width && y < mask.height ? coverage[y * mask.width + x] : 255;
+    const shift = alpha < 255 ? -Math.min(.22, (255 - alpha) / 255 * .3) : 0;
+    return { nx, ny, shift };
+  };
+  return loop.map((point, index) => {
+    const before = inward(loop[(index + loop.length - 1) % loop.length], point);
+    const after = inward(point, loop[(index + 1) % loop.length]);
+    if (!before.shift && !after.shift) return point;
+    const divisor = Math.max(.5, 1 + before.nx * after.nx + before.ny * after.ny);
+    return { x: point.x + (before.nx * before.shift + after.nx * after.shift) / divisor,
+      y: point.y + (before.ny * before.shift + after.ny * after.shift) / divisor };
+  });
+}
+
+function arcPoints(loop: Point[], from: number, to: number): Point[] {
+  const result = [loop[from]];
+  for (let at = (from + 1) % loop.length; at !== to; at = (at + 1) % loop.length) result.push(loop[at]);
+  result.push(loop[to]);
+  return result;
+}
+
+function cubicPoint(a: Point, p: Point, q: Point, b: Point, t: number): Point {
+  const u = 1 - t;
+  return { x: u ** 3 * a.x + 3 * u ** 2 * t * p.x + 3 * u * t ** 2 * q.x + t ** 3 * b.x,
+    y: u ** 3 * a.y + 3 * u ** 2 * t * p.y + 3 * u * t ** 2 * q.y + t ** 3 * b.y };
+}
+
+function fitCubic(arc: Point[], tolerance: number): { out: Point; in: Point; error: number; lineError: number } | null {
+  if (arc.length < 5 || arc.length > 256) return null;
+  const a = arc[0], b = arc[arc.length - 1], chord = Math.hypot(b.x - a.x, b.y - a.y);
+  if (chord < 3) return null;
+  const tangent = (from: Point, to: Point) => {
+    const length = Math.hypot(to.x - from.x, to.y - from.y);
+    return length ? { x: (to.x - from.x) / length, y: (to.y - from.y) / length } : null;
+  };
+  const left = tangent(a, arc[Math.min(3, arc.length - 2)]), right = tangent(arc[Math.max(1, arc.length - 4)], b);
+  if (!left || !right) return null;
+  const distances = new Float64Array(arc.length);
+  for (let index = 1; index < arc.length; index++) distances[index] = distances[index - 1] + Math.hypot(arc[index].x - arc[index - 1].x, arc[index].y - arc[index - 1].y);
+  const total = distances[arc.length - 1];
+  let xx = 0, xy = 0, yy = 0, bx = 0, by = 0;
+  for (let index = 1; index < arc.length - 1; index++) {
+    const t = distances[index] / total, u = 1 - t;
+    const first = 3 * u * u * t, second = 3 * u * t * t;
+    const ax = left.x * first, ay = left.y * first, cx = -right.x * second, cy = -right.y * second;
+    const baseX = (u ** 3 + first) * a.x + (second + t ** 3) * b.x;
+    const baseY = (u ** 3 + first) * a.y + (second + t ** 3) * b.y;
+    const ex = arc[index].x - baseX, ey = arc[index].y - baseY;
+    xx += ax * ax + ay * ay; xy += ax * cx + ay * cy; yy += cx * cx + cy * cy;
+    bx += ax * ex + ay * ey; by += cx * ex + cy * ey;
+  }
+  const determinant = xx * yy - xy * xy;
+  const leftLength = determinant > 1e-8 ? (bx * yy - by * xy) / determinant : chord / 3;
+  const rightLength = determinant > 1e-8 ? (by * xx - bx * xy) / determinant : chord / 3;
+  if (!Number.isFinite(leftLength) || !Number.isFinite(rightLength) || leftLength < chord * .08 || rightLength < chord * .08
+    || leftLength > chord * .8 || rightLength > chord * .8) return null;
+  const out = { x: a.x + left.x * leftLength, y: a.y + left.y * leftLength };
+  const incoming = { x: b.x - right.x * rightLength, y: b.y - right.y * rightLength };
+  let error = 0, lineError = 0;
+  for (let index = 1; index < arc.length - 1; index++) {
+    const t = distances[index] / total, fitted = cubicPoint(a, out, incoming, b, t);
+    error = Math.max(error, Math.hypot(fitted.x - arc[index].x, fitted.y - arc[index].y));
+    lineError = Math.max(lineError, pointDistance(arc[index], a, b));
+  }
+  // The reverse check prevents a curve from bulging between sampled pixels.
+  const steps = Math.min(48, Math.max(12, Math.ceil(total)));
+  for (let step = 1; step < steps; step++) {
+    const point = cubicPoint(a, out, incoming, b, step / steps);
+    let closest = Infinity;
+    for (let index = 0; index < arc.length - 1; index++) closest = Math.min(closest, pointDistance(point, arc[index], arc[index + 1]));
+    error = Math.max(error, closest);
+  }
+  if (error > Math.max(.35, Math.min(.85, tolerance)) || lineError < .28 || error > lineError * .9) return null;
+  return { out, in: incoming, error, lineError };
+}
+
+function curvedContour(loop: Point[], anchors: Point[], tolerance: number): PathPoint[] {
+  if (anchors.length < 4 || anchors.length > 256 || loop.length > 8192) return anchors.map(point => ({ ...point }));
+  const indexOf = new Map(loop.map((point, index) => [point, index]));
+  const indices = anchors.map(point => indexOf.get(point)!);
+  // Remove only smooth anchors for which a single cubic follows every source
+  // boundary sample. A long, abrupt turn remains a straight pixel-art corner.
+  for (let pass = 0; pass < 2; pass++) for (let index = 0; index < indices.length && indices.length > 3; index++) {
+    const previous = indices[(index + indices.length - 1) % indices.length], current = indices[index], next = indices[(index + 1) % indices.length];
+    const before = arcPoints(loop, previous, current), after = arcPoints(loop, current, next);
+    if (before.length < 3 || after.length < 3 || before.length + after.length > 257) continue;
+    const first = before[Math.max(0, before.length - 4)], last = after[Math.min(3, after.length - 1)];
+    const u = { x: loop[current].x - first.x, y: loop[current].y - first.y }, v = { x: last.x - loop[current].x, y: last.y - loop[current].y };
+    const cosine = (u.x * v.x + u.y * v.y) / (Math.hypot(u.x, u.y) * Math.hypot(v.x, v.y) || 1);
+    if (cosine < .6) continue;
+    if (fitCubic(arcPoints(loop, previous, next), tolerance)) { indices.splice(index, 1); index--; }
+  }
+  const points: PathPoint[] = indices.map(index => ({ ...loop[index] }));
+  for (let index = 0; index < indices.length; index++) {
+    const fit = fitCubic(arcPoints(loop, indices[index], indices[(index + 1) % indices.length]), tolerance);
+    if (!fit) continue;
+    points[index].out = fit.out;
+    points[(index + 1) % indices.length].in = fit.in;
+  }
+  return points;
+}
+
+function fitVisibleContour(loop: Point[], mask: RegionMask, bounds: Box, settings: ReconstructionSettings, hasHoles: boolean, coverage?: Uint8Array) {
   let tolerance = settings.pathTolerance;
   let outer = simplify(loop, tolerance, settings.maxPathPoints);
   let quality = sampledIoU(outer, mask, bounds);
@@ -135,18 +285,36 @@ function fitVisibleContour(loop: Point[], mask: RegionMask, bounds: Box, setting
     const improved = sampledIoU(candidate, mask, bounds);
     if (improved > quality) { outer = candidate; quality = improved; }
   }
-  return { outer, quality };
+  const refined = coverageContour(loop, mask, bounds, coverage);
+  let trace = loop;
+  if (refined !== loop) {
+    const candidate = simplify(refined, tolerance, settings.maxPathPoints);
+    const improved = sampledIoU(candidate, mask, bounds);
+    if (improved >= quality - .005 && !selfIntersects(candidate)) { outer = candidate; trace = refined; }
+  }
+  const path = curvedContour(trace, outer, tolerance);
+  const flattened = flattenedPath(path);
+  const curvedQuality = sampledIoU(flattened, mask, bounds);
+  if (path.length >= 3 && path.length <= settings.maxPathPoints && flattened.length <= 4096
+    && !selfIntersects(flattened) && Math.abs(area(flattened)) > 1e-5
+    && curvedQuality >= quality - .005 && (hasHoles || curvedQuality >= .98)) return { path, quality: curvedQuality };
+  return { path: outer.map(point => ({ ...point })), quality: sampledIoU(outer, mask, bounds) };
+}
+
+function normalizedPath(path: PathPoint[], bounds: Box): ShapePath {
+  const normalize = (point: Point) => ({ x: (point.x - bounds.x) / bounds.width, y: (point.y - bounds.y) / bounds.height });
+  return { points: path.map(point => ({ ...normalize(point), ...(point.in ? { in: normalize(point.in) } : {}), ...(point.out ? { out: normalize(point.out) } : {}) })) };
 }
 
 export function fitMaskGeometry(id: string, mask: RegionMask, bounds: Box, settings: ReconstructionSettings, texture: RegionGeometry['texture']): { geometry: RegionGeometry; holeCount: number } {
   const loops = contours(mask, bounds.x, bounds.y);
   if (!loops.length) throw new Error('Mask contains no foreground pixels.');
   if (loops.filter(loop => area(loop) > 0).length > 1) throw new Error('AMBIGUOUS_REGION: A single path cannot represent disconnected mask islands. Split them into separate regions.');
-  const { outer, quality } = fitVisibleContour(loops[0], mask, bounds, settings, loops.length > 1);
-  if (outer.length > 4096) throw new Error('PATH_TOO_COMPLEX');
+  const { path, quality } = fitVisibleContour(loops[0], mask, bounds, settings, loops.length > 1, mask.alpha);
+  if (path.length > 4096) throw new Error('PATH_TOO_COMPLEX');
   return {
-    geometry: { id: `${id}_geometry`, generatedPath: { points: outer.map(point => ({ x: (point.x - bounds.x) / bounds.width, y: (point.y - bounds.y) / bounds.height })) }, bounds,
-      status: 'visible', quality: { maskIoU: quality, pathPointCount: outer.length, colorError: 0 }, texture, locked: false },
+    geometry: { id: `${id}_geometry`, generatedPath: normalizedPath(path, bounds), bounds,
+      status: 'visible', quality: { maskIoU: quality, pathPointCount: path.length, colorError: 0 }, texture, locked: false },
     holeCount: Math.max(0, loops.length - 1),
   };
 }
@@ -395,9 +563,13 @@ export function analyzeImage(image: DecodedImage, source: SourceReference, mode:
     const maskId = `${id}_mask`;
     const loops = contours(mask, bounds.x, bounds.y);
     if (!loops.length) continue;
-    const { outer, quality } = fitVisibleContour(loops[0], mask, bounds, settings, loops.length > 1);
-    if (outer.length > 4096) throw new Error('PATH_TOO_COMPLEX');
-    const shapePath: ShapePath = { points: outer.map(point => ({ x: (point.x - bounds.x) / bounds.width, y: (point.y - bounds.y) / bounds.height })) };
+    const coverage = component.partialAlpha ? new Uint8Array(mask.bytes.length) : undefined;
+    if (coverage) for (let y = 0; y < mask.height; y++) for (let x = 0; x < mask.width; x++) if (mask.bytes[y * mask.width + x]) {
+      coverage[y * mask.width + x] = rgba[((bounds.y + y) * width + bounds.x + x) * 4 + 3];
+    }
+    const { path, quality } = fitVisibleContour(loops[0], mask, bounds, settings, loops.length > 1, coverage);
+    if (path.length > 4096) throw new Error('PATH_TOO_COMPLEX');
+    const shapePath = normalizedPath(path, bounds);
     const holeCount = Math.max(0, loops.length - 1);
     if (holeCount) diagnostics.push({ code: 'HOLE_NOT_REPRESENTABLE', severity: 'warning', sourceId: source.id, regionId: id, bounds, message: 'The source mask has interior holes; a single Hyde path cannot preserve transparent cutouts.', suggestion: 'Keep a masked raster texture or manually split the geometry.' });
     const variance = Math.sqrt(component.variance), texture = component.partialAlpha > 0 || settings.preserveTexture && variance > 8 ? 'source-crop' : 'flat';
@@ -408,7 +580,7 @@ export function analyzeImage(image: DecodedImage, source: SourceReference, mode:
       confidence: { kind: 'heuristic', reasons: ['connected 4-neighbor foreground pixels', 'original-pixel boundary contrast and 2×/4× color agreement', 'visible alpha or opaque-border contrast'] },
       provenance: { algorithmVersion: ALGORITHM_VERSION, settingsFingerprint }, generationStatus: 'generated',
       locked: { mask: false, geometry: false, part: false }, lineage: { parents: [], children: [] }, partId,
-      geometry: { id: `${id}_geometry`, generatedPath: shapePath, bounds, status: 'visible', quality: { maskIoU: quality, pathPointCount: outer.length, colorError: variance }, texture, locked: false },
+      geometry: { id: `${id}_geometry`, generatedPath: shapePath, bounds, status: 'visible', quality: { maskIoU: quality, pathPointCount: path.length, colorError: variance }, texture, locked: false },
       holeCount, adjacency: [],
     };
     regions.push(region); masks.set(maskId, mask); labelToRegion.set(component.id, region);

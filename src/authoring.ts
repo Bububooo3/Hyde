@@ -247,6 +247,10 @@ export class HydeAuthoringSession {
   exportAssembly(rootId: string, timeSeconds?: number): Uint8Array { return encodeAssemblyBytes(makeAssembly(this.project, [rootId], timeSeconds)); }
   evaluate(timeSeconds: number): StoryElement[] { return evaluateProject(this.project, timeSeconds).map(item => structuredClone(item)); }
   inspect(query: InspectRequest) {
+    if (!['project', 'scenes', 'scene', 'elements', 'element', 'assets', 'asset', 'changes', 'tree', 'timeline', 'assembly'].includes(query.target))
+      return { revision: this.revision, error: diagnostic('OPERATION_UNSUPPORTED', 'Inspection target is unsupported.') };
+    if (query.sceneId !== undefined && !this.project.sequences.some(scene => scene.id === query.sceneId))
+      return { revision: this.revision, error: { ...diagnostic('TARGET_NOT_FOUND', 'Scene does not exist.'), targetId: query.sceneId, field: 'sceneId' } };
     const limit = Math.min(100, Math.max(1, query.limit ?? 25));
     const cursor = Math.max(0, Math.floor(query.cursor ?? 0));
     if (!Number.isFinite(limit) || !Number.isFinite(cursor)) throw new Error('Inspection limit and cursor must be finite.');

@@ -104,4 +104,36 @@ describe('Hyde Node CLI workflow', () => {
     expect(await readFile(project)).toEqual(before);
     expect(await readdir(folder)).not.toContain('should-not-exist.hyde');
   });
+
+  it('inspects native hierarchy and timeline through bounded CLI queries', async () => {
+    const folder = await fixtureDirectory();
+    const original = join(folder, 'original.hyde'), authored = join(folder, 'authored.hyde'), commands = join(folder, 'hierarchy.json');
+    expect((await call('project', 'new', '--output', original)).code).toBe(0);
+    const sceneId = decodeProjectBytes(await readFile(original)).sequences[0].id;
+    await writeFile(commands, JSON.stringify([
+      { op: 'element.create', args: { alias: '$root', kind: 'group', properties: { name: 'Character' } } },
+      { op: 'element.create', args: { alias: '$arm', kind: 'ellipse', properties: { name: 'Arm', parentId: '$root' } } },
+      { op: 'assembly.attach', args: { id: '$arm', parentId: '$root', type: 'hinge', min: -30, max: 30 } },
+      { op: 'keyframe.upsert', args: { elementId: '$arm', property: 'rotation', timeSeconds: 1, value: 20 } },
+    ]));
+    const applied = await call('project', 'apply', original, '--commands', commands, '--output', authored);
+    expect(applied.code, JSON.stringify(applied)).toBe(0);
+    const rootId = applied.stdout.result.idMap.$root, armId = applied.stdout.result.idMap.$arm;
+
+    const tree = await call('project', 'inspect', authored, '--target', 'tree', '--scene', sceneId, '--depth', '2', '--limit', '1');
+    expect(tree.code, JSON.stringify(tree)).toBe(0);
+    expect(tree.stdout.result.items).toMatchObject([{ id: rootId, children: [{ id: armId, attachment: { type: 'hinge', parentId: rootId } }] }]);
+    const assembly = await call('project', 'inspect', authored, '--target', 'assembly', '--id', rootId, '--depth', '1');
+    expect(assembly.stdout.result.items).toMatchObject([{ id: rootId, children: [{ id: armId }] }]);
+    const timeline = await call('project', 'inspect', authored, '--target', 'timeline', '--scene-id', sceneId, '--time-start', '0', '--time-end', '2');
+    expect(timeline.stdout.result.items).toEqual(expect.arrayContaining([expect.objectContaining({ id: armId, tracks: [expect.objectContaining({ property: 'rotation', keyframes: [expect.objectContaining({ value: 20 })] })] })]));
+    const projected = await call('project', 'inspect', authored, '--target', 'element', '--id', armId, '--fields', 'id,name');
+    expect(projected.stdout.result).toEqual({ revision: 0, element: { id: armId, name: 'Arm' } });
+    expect(JSON.stringify(tree.stdout)).not.toContain('dataUrl');
+
+    const missing = await call('project', 'inspect', authored, '--target', 'tree', '--scene', 'missing-scene');
+    expect(missing).toMatchObject({ code: 2, stderr: { errors: [{ code: 'TARGET_NOT_FOUND' }] } });
+    const invalid = await call('project', 'inspect', authored, '--target', 'timeline', '--depth', '1.5');
+    expect(invalid).toMatchObject({ code: 2, stderr: { errors: [{ code: 'INVALID_ARGUMENT' }] } });
+  });
 });

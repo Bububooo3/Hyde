@@ -1,4 +1,5 @@
 import { ALGORITHM_VERSION, fitMaskGeometry } from './analysis';
+import { shapePathCommands } from '../shapePath';
 import type { Box, DecompositionDiagnostic, DecompositionDocumentV1, LayerRecord, Point, RegionMask, RegionRecord } from './types';
 
 /** Additions only. The caller owns document integration and preservation of manual edits. */
@@ -34,8 +35,36 @@ function strictlyInside(outer: Box, inner: Box): boolean {
 }
 
 function pathPoints(region: RegionRecord): Point[] | null {
-  if (region.geometry.manualPath || region.geometry.generatedPath.points.some(point => point.in || point.out)) return null;
-  return region.geometry.generatedPath.points.map(point => ({ x: region.bounds.x + point.x * region.bounds.width, y: region.bounds.y + point.y * region.bounds.height }));
+  // A pinned manual outline is user intent, not evidence for another
+  // automatically inferred hidden surface.
+  if (region.geometry.manualPath) return null;
+  const path = region.geometry.generatedPath;
+  const commands = shapePathCommands(path, region.bounds.width, region.bounds.height);
+  const points: Point[] = [];
+  let previous: Point | undefined;
+  const distance = (point: Point, start: Point, end: Point) => {
+    const dx = end.x - start.x, dy = end.y - start.y;
+    const t = dx || dy ? Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / (dx * dx + dy * dy))) : 0;
+    return Math.hypot(point.x - start.x - t * dx, point.y - start.y - t * dy);
+  };
+  const midpoint = (a: Point, b: Point): Point => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+  const flatten = (a: Point, b: Point, c: Point, d: Point, depth: number): boolean => {
+    if (Math.max(distance(b, a, d), distance(c, a, d)) <= .08) { points.push(d); return points.length <= 4096; }
+    if (depth >= 12 || points.length >= 4096) return false;
+    const ab = midpoint(a, b), bc = midpoint(b, c), cd = midpoint(c, d);
+    const abc = midpoint(ab, bc), bcd = midpoint(bc, cd), center = midpoint(abc, bcd);
+    return flatten(a, ab, abc, center, depth + 1) && flatten(center, bcd, cd, d, depth + 1);
+  };
+  for (const command of commands) {
+    if (command.type === 'close') continue;
+    const point = { x: command.x, y: command.y };
+    if (command.type === 'move') points.push(point);
+    else if (command.type === 'line') points.push(point);
+    else if (command.type === 'cubic' && (!previous || !flatten(previous, { x: command.x1, y: command.y1 }, { x: command.x2, y: command.y2 }, point, 0))) return null;
+    previous = point;
+  }
+  if (points.length > 3 && Math.hypot(points[0].x - points.at(-1)!.x, points[0].y - points.at(-1)!.y) < 1e-9) points.pop();
+  return points.length >= 3 && points.length <= 4096 ? points.map(point => ({ x: point.x + region.bounds.x, y: point.y + region.bounds.y })) : null;
 }
 
 function polygonContains(points: Point[], x: number, y: number): boolean {

@@ -23,6 +23,23 @@ function maskAt(region: DecompositionDocumentV1['regions'][number], mask: Region
 }
 
 describe('conservative hidden continuation proposals', () => {
+  it('checks source-pose containment against editable cubic contours', async () => {
+    const fixture = makeSyntheticFixture('occlusion');
+    const { session, document, masks, rgba } = await analyze(fixture.bytes);
+    try {
+      const front = document.regions.find(region => region.holeCount === 0)!;
+      const path = front.geometry.generatedPath;
+      for (let index = 0; index < path.points.length; index++) {
+        const from = path.points[index], to = path.points[(index + 1) % path.points.length];
+        from.out = { x: from.x + (to.x - from.x) / 3, y: from.y + (to.y - from.y) / 3 };
+        to.in = { x: from.x + 2 * (to.x - from.x) / 3, y: from.y + 2 * (to.y - from.y) / 3 };
+      }
+      const proposed = proposeHiddenContinuations(document, masks, rgba);
+      expect(proposed.regions).toHaveLength(1);
+      expect(proposed.layers).toHaveLength(1);
+    } finally { await session.close(); }
+  });
+
   it('keeps user-split inferred children without regenerating their historical parent', async () => {
     const fixture = makeSyntheticFixture('occlusion');
     const session = await DecompositionSession.importSources([fixture.input], { mode: 'animation-ready' });

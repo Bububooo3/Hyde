@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, PointerEvent as ReactPointerEvent } from 'react';
-import type { DecompositionDocumentV1, DecompositionEdit, PartRecord, RegionMask, RegionRecord } from '../decomposer';
+import type { DecompositionDocumentV1, DecompositionEdit, DecompositionMode, PartRecord, ReconstructionSettings, RegionMask, RegionRecord } from '../decomposer';
 import { poseNativeDecomposition } from '../decomposer/pose';
 import type { ReconstructionQualityReport } from '../decomposer/quality';
 import type { Project, ShapePath } from '../model';
@@ -10,6 +10,12 @@ import { DecomposerWorkerClient } from './client';
 type View = 'original' | 'reconstruction' | 'overlay' | 'side-by-side';
 type Tool = 'select' | 'path' | 'paint-add' | 'paint-erase' | 'seed-add' | 'seed-erase' | 'landmark' | 'pivot';
 type WorkerState = { revision: number; document: DecompositionDocumentV1 };
+type RegenerationRequest = { kind: 'analysis'; mode?: DecompositionMode; settings?: Partial<ReconstructionSettings> } |
+  { kind: 'selected'; regionIds: string[]; settings?: Partial<ReconstructionSettings> };
+type RegenerationImpact = { baseRevision: number; kind: RegenerationRequest['kind']; mode: DecompositionMode; settings: ReconstructionSettings;
+  beforeActiveCount: number; afterActiveCount: number; addedIds: string[]; changedUnlockedIds: string[];
+  removedUnlockedIds: string[]; retainedUnlockedIds: string[]; retainedProtectedIds: string[];
+  changedProtectedIds: string[]; removedProtectedIds: string[]; diagnosticCount: number; remapped: Record<string, string> };
 type NativeQualityReport = Omit<ReconstructionQualityReport, 'residualOverlayPng'>;
 const color = (hex: string): [number, number, number] => [1, 3, 5].map(at => parseInt(hex.slice(at, at + 2), 16)) as [number, number, number];
 const current = (region: RegionRecord) => region.generationStatus !== 'historical';
@@ -123,6 +129,9 @@ export default function App() {
   const [renderVersion, setRenderVersion] = useState(0), [isolate, setIsolate] = useState(false);
   const [showInferred, setShowInferred] = useState(true);
   const [requestedInference, setRequestedInference] = useState<boolean>();
+  const [requestedMode, setRequestedMode] = useState<DecompositionMode>();
+  const [draftSettings, setDraftSettings] = useState<ReconstructionSettings>();
+  const [pendingRegeneration, setPendingRegeneration] = useState<{ label: string; request: RegenerationRequest; impact: RegenerationImpact }>();
   const [busy, setBusy] = useState(false), [status, setStatus] = useState('Import one or more illustrations to begin.');
   const [exportFormat, setExportFormat] = useState<'hyde' | 'hyproj'>('hyproj'), [allowHoleApproximation, setAllowHoleApproximation] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string>();
@@ -175,6 +184,8 @@ export default function App() {
   }, []);
   const refresh = useCallback(async (state: WorkerState, loadSource = false) => {
     clearNativePreview();
+    setPendingRegeneration(undefined); setDraftSettings(state.document.settings);
+    setRequestedMode(undefined); setRequestedInference(undefined);
     setDocumentModel(state.document); setRevision(state.revision);
     const primary = state.document.sources.find(item => item.role === 'primary') ?? state.document.sources[0];
     const sourceId = loadSource || !selectedSourceId || !state.document.sources.some(item => item.id === selectedSourceId) ? primary?.id : selectedSourceId;
@@ -270,30 +281,45 @@ export default function App() {
     } catch (error) { setStatus(error instanceof Error ? error.message : 'Native export failed.'); }
     finally { setBusy(false); }
   }
-  async function analyzeAgain() {
-    if (!documentModel || busy) return;
-    setBusy(true); setStatus('Regenerating unlocked candidates; source and manual edits remain available…');
+  async function planRegeneration(label: string, request: RegenerationRequest) {
+    if (!documentModel || busy || pendingRegeneration) return;
+    setBusy(true); setStatus(`Preparing ${label.toLowerCase()} impact preview…`);
     try {
       checkpoint.current = (await client.current.call<{ bytes: Uint8Array }>('save')).bytes;
-      await new Promise(resolve => window.setTimeout(resolve, 0));
-      const response = await client.current.call<WorkerState>('analyze', { mode: documentModel.mode, settings: documentModel.settings });
-      await refresh(response); setStatus(`Regenerated ${response.document.regions.filter(active).length} regions. Manual locks were preserved.`);
-    } catch (error) { if (!canceling.current) setStatus(error instanceof Error ? error.message : 'Regeneration failed.'); }
+      const impact = await client.current.call<RegenerationImpact>('regeneration.preview', { ...request, expectedRevision: revision });
+      setPendingRegeneration({ label, request, impact });
+      setStatus(`Review ${label.toLowerCase()}: ${impact.changedUnlockedIds.length} unlocked changed, ${impact.removedUnlockedIds.length} removed, ${impact.addedIds.length} added. Current document is unchanged.`);
+    } catch (error) { if (!canceling.current) setStatus(error instanceof Error ? error.message : 'Regeneration preview failed.'); }
+    finally { setRequestedMode(undefined); setRequestedInference(undefined); setBusy(false); }
+  }
+  async function applyPlannedRegeneration() {
+    if (!pendingRegeneration || busy) return;
+    const { request, impact, label } = pendingRegeneration;
+    if (impact.changedProtectedIds.length || impact.removedProtectedIds.length) return;
+    setBusy(true); setStatus(`Applying ${label.toLowerCase()}…`);
+    try {
+      let state: WorkerState;
+      if (request.kind === 'analysis') state = await client.current.call<WorkerState>('analyze', {
+        mode: request.mode, settings: request.settings, expectedRevision: impact.baseRevision,
+      });
+      else {
+        const response = await client.current.call<WorkerState & { result: { ok: boolean; error?: { message: string } } }>('execute', {
+          expectedRevision: impact.baseRevision, edits: [{ op: 'regenerate.selected', regionIds: request.regionIds, settings: request.settings }],
+        });
+        if (!response.result.ok) throw new Error(response.result.error?.message ?? 'Selected regeneration failed.');
+        state = response;
+      }
+      await refresh(state);
+      setStatus(`${label} applied in revision ${state.revision}; ${state.document.regions.filter(active).length} regions active.`);
+    } catch (error) { setStatus(error instanceof Error ? error.message : 'Regeneration failed.'); }
     finally { setBusy(false); }
   }
   async function setHiddenContinuations(enabled: boolean) {
-    if (!documentModel || busy || documentModel.mode !== 'animation-ready') return;
+    if (!documentModel || busy || pendingRegeneration || documentModel.mode !== 'animation-ready') return;
     setRequestedInference(enabled);
-    setBusy(true); setStatus(enabled ? 'Analyzing conservative hidden-continuation proposals…' : 'Disabling automatic hidden-continuation proposals…');
-    try {
-      checkpoint.current = (await client.current.call<{ bytes: Uint8Array }>('save')).bytes;
-      const response = await client.current.call<WorkerState>('analyze', { settings: { ...documentModel.settings, inferHiddenGeometry: enabled } });
-      await refresh(response);
-      const hidden = response.document.regions.filter(region => active(region) && region.geometry.status === 'inferred');
-      const pinned = hidden.filter(region => Boolean(region.geometry.manualPath) || region.locked.mask || region.locked.geometry || region.locked.part).length;
-      setStatus(`${enabled ? 'Automatic hidden-continuation analysis finished' : 'Automatic hidden-continuation proposals disabled'}: ${hidden.length} inferred region${hidden.length === 1 ? '' : 's'} active${pinned ? `, including ${pinned} pinned by user edits` : ''}. Unseen appearance remains uncertain.`);
-    } catch (error) { setStatus(error instanceof Error ? error.message : 'Hidden-continuation analysis failed.'); }
-    finally { setRequestedInference(undefined); setBusy(false); }
+    await planRegeneration(enabled ? 'Enable hidden continuations' : 'Disable hidden continuations', {
+      kind: 'analysis', settings: { ...(draftSettings ?? documentModel.settings), inferHiddenGeometry: enabled },
+    });
   }
   async function cancelWork() {
     if (!busy) return;
@@ -512,7 +538,7 @@ export default function App() {
         {documentModel?.correspondences.some(item => item.kind === 'landmark') && <div className="reference-guide"><strong>Paired landmarks</strong>{documentModel.correspondences.filter(item => item.kind === 'landmark' && item.landmarkPoints).map(item => <small key={item.id}>{item.sourceIds.map((id, index) => `${documentModel.sources.find(source => source.id === id)?.name ?? id} (${item.landmarkPoints![index].x.toFixed(1)}, ${item.landmarkPoints![index].y.toFixed(1)})`).join(' ↔ ')}</small>)}</div>}
         {source && source.role !== 'primary' && <div className="reference-guide"><strong>Alignment to primary</strong><small>Optional affine mapping of this source into primary pixels. Use only where one transform describes both images.</small><button disabled={!alignmentLandmarkIds.length || busy} onClick={() => void perform([{ op: 'reference.alignFromLandmarks', sourceId: source.id, landmarkIds: alignmentLandmarkIds }])}>Align from paired landmarks</button><div className="affine-grid">{(['a', 'b', 'c', 'd', 'tx', 'ty'] as const).map((name, index) => <label key={`${source.id}-${name}`}>{name}<input aria-label={`Alignment ${name}`} type="number" step="0.01" key={`${source.id}-${name}-${source.transformToPrimary?.[index] ?? ''}`} defaultValue={(source.transformToPrimary ?? [1, 0, 0, 1, 0, 0])[index]} onBlur={event => { const value = Number(event.target.value); if (!Number.isFinite(value)) return; const next = [...(source.transformToPrimary ?? [1, 0, 0, 1, 0, 0])] as [number, number, number, number, number, number]; if (next[index] === value) return; next[index] = value; void perform([{ op: 'reference.setTransform', sourceId: source.id, transformToPrimary: next }]); }}/></label>)}</div><small>x′ = ax + cy + tx; y′ = bx + dy + ty</small><button disabled={!source.transformToPrimary || busy} onClick={() => void perform([{ op: 'reference.setTransform', sourceId: source.id }])}>Clear alignment</button></div>}
         <div className="divider"/><h2>Regions</h2>
-        <div className="scroll-list">{visibleRegions.map(region => <button key={region.id} className={`row${selectedRegionId === region.id ? ' selected' : ''}${region.geometry.status === 'inferred' ? ' inferred-row' : ''}`} onClick={() => { setSelectedRegionId(region.id); setSelectedPartId(region.partId); setSelectedPoint(undefined); }}><span><i className="swatch" style={{ background: region.geometry.status === 'inferred' ? '#ffcb70' : region.color }}/> {region.id.split('_').slice(-2).join(' ')}</span><small>{region.geometry.status === 'inferred' ? 'Inferred · unseen and uncertain · ' : ''}{region.pixelCount} px · {region.geometry.texture === 'source-crop' ? 'texture' : 'vector'} {region.holeCount ? `· ${region.holeCount} hole` : ''}</small></button>)}{suppressedRegions.map(region => <button key={region.id} className={`row suppressed-row${selectedRegionId === region.id ? ' selected' : ''}`} onClick={() => { setSelectedRegionId(region.id); setSelectedPartId(region.partId); setSelectedPoint(undefined); }}><span><i className="swatch" style={{ background: '#876c45' }}/> {region.id.split('_').slice(-2).join(' ')}</span><small>Suppressed inferred region · source evidence retained</small></button>)}</div>
+        <div className="scroll-list">{visibleRegions.map(region => { const impact = pendingRegeneration?.impact; const risk = impact?.removedUnlockedIds.includes(region.id) ? 'Will be removed' : impact?.changedUnlockedIds.includes(region.id) ? 'Will change' : undefined; return <button key={region.id} className={`row${selectedRegionId === region.id ? ' selected' : ''}${region.geometry.status === 'inferred' ? ' inferred-row' : ''}${risk ? ' regeneration-affected' : ''}`} onClick={() => { setSelectedRegionId(region.id); setSelectedPartId(region.partId); setSelectedPoint(undefined); }}><span><i className="swatch" style={{ background: region.geometry.status === 'inferred' ? '#ffcb70' : region.color }}/> {region.id.split('_').slice(-2).join(' ')}</span><small>{risk ? `${risk} on confirmation · ` : ''}{region.geometry.status === 'inferred' ? 'Inferred · unseen and uncertain · ' : ''}{region.pixelCount} px · {region.geometry.texture === 'source-crop' ? 'texture' : 'vector'} {region.holeCount ? `· ${region.holeCount} hole` : ''}</small></button>; })}{suppressedRegions.map(region => <button key={region.id} className={`row suppressed-row${selectedRegionId === region.id ? ' selected' : ''}`} onClick={() => { setSelectedRegionId(region.id); setSelectedPartId(region.partId); setSelectedPoint(undefined); }}><span><i className="swatch" style={{ background: '#876c45' }}/> {region.id.split('_').slice(-2).join(' ')}</span><small>Suppressed inferred region · source evidence retained</small></button>)}</div>
         <div className="divider"/><h2>Parts</h2>
         <div className="scroll-list">{documentModel?.parts.filter(part => part.regionIds.some(id => documentModel.regions.some(region => region.id === id && active(region) && region.sourceId === source?.id))).map(part => <button key={part.id} className={selectedPart?.id === part.id ? 'row selected' : 'row'} onClick={() => { setSelectedPartId(part.id); setSelectedRegionId(part.regionIds.find(id => visibleRegions.some(region => region.id === id))); }}><span>{part.name}</span><small>{part.regionIds.length} region{part.regionIds.length === 1 ? '' : 's'} · pivot {part.pivot.x.toFixed(1)}, {part.pivot.y.toFixed(1)}{part.hiddenGeometry !== 'none' ? ` · ${part.hiddenGeometry} hidden area` : ''}{part.attachmentProposal ? ` · ${part.attachmentProposal.type} proposed` : ''}</small></button>)}</div>
       </aside>
@@ -548,13 +574,27 @@ export default function App() {
         <div className="status-panel"><div className="section-heading"><h3>{busy ? 'Processing' : 'Status'}</h3>{busy && <button onClick={() => void cancelWork()}>Cancel and restore</button>}</div><p role="status">{status}</p>{quality && <p className="metric">Sampled path to mask IoU: {(quality.meanSampledMaskIoU * 100).toFixed(1)}% · {quality.pointCount} path anchors. Color and texture fidelity require the native render preview.</p>}</div>
       </main>
       <aside className="right-pane pane"><h2>Reconstruction</h2>
-        {documentModel && <><label>Mode<select aria-label="Reconstruction mode" value={documentModel.mode} onChange={async event => { if (busy) return; const mode = event.target.value; setBusy(true); try { checkpoint.current = (await client.current.call<{ bytes: Uint8Array }>('save')).bytes; const state = await client.current.call<WorkerState>('analyze', { mode }); await refresh(state); setStatus(`Switched to ${mode}. Locks and manual edits retained.`); } catch (error) { setStatus(error instanceof Error ? error.message : 'Mode change failed.'); } finally { setBusy(false); } }}><option value="appearance">Appearance first</option><option value="animation-ready">Animation ready</option></select></label>
-          <label><input aria-label="Infer hidden continuations" type="checkbox" checked={requestedInference ?? documentModel.settings.inferHiddenGeometry} disabled={busy || documentModel.mode !== 'animation-ready'} onChange={event => void setHiddenContinuations(event.target.checked)}/> Propose hidden continuations</label>
+        {documentModel && <><label>Mode<select aria-label="Reconstruction mode" value={pendingRegeneration?.impact.mode ?? requestedMode ?? documentModel.mode} disabled={busy || Boolean(pendingRegeneration)} onChange={event => { const mode = event.target.value as DecompositionMode; setRequestedMode(mode); void planRegeneration(`Switch to ${mode}`, { kind: 'analysis', mode }); }}><option value="appearance">Appearance first</option><option value="animation-ready">Animation ready</option></select></label>
+          <label><input aria-label="Infer hidden continuations" type="checkbox" checked={pendingRegeneration?.impact.settings.inferHiddenGeometry ?? requestedInference ?? documentModel.settings.inferHiddenGeometry} disabled={busy || Boolean(pendingRegeneration) || documentModel.mode !== 'animation-ready'} onChange={event => void setHiddenContinuations(event.target.checked)}/> Propose hidden continuations</label>
           <p className="hint">Animation ready only. Enclosed opaque overlaps may support a conservative unseen piece beneath a front region. The inferred shape and color remain uncertain; pinned edits survive when automatic proposals are turned off.</p>
-          <label>Color granularity <input aria-label="Color granularity" type="range" min="8" max="96" value={documentModel.settings.colorStep} onChange={event => setDocumentModel({ ...documentModel, settings: { ...documentModel.settings, colorStep: Number(event.target.value) } })}/><span>{documentModel.settings.colorStep}</span></label>
-          <label>Path tolerance <input aria-label="Path tolerance" type="range" min="0" max="8" step="0.25" value={documentModel.settings.pathTolerance} onChange={event => setDocumentModel({ ...documentModel, settings: { ...documentModel.settings, pathTolerance: Number(event.target.value) } })}/><span>{documentModel.settings.pathTolerance}</span></label>
-          <button disabled={busy} onClick={async () => { if (!documentModel) return; setBusy(true); try { checkpoint.current = (await client.current.call<{ bytes: Uint8Array }>('save')).bytes; const state = await client.current.call<WorkerState>('analyze', { settings: documentModel.settings }); await refresh(state); setStatus('Reconstruction settings applied; locked edits retained.'); } catch (error) { setStatus(error instanceof Error ? error.message : 'Reanalysis failed.'); } finally { setBusy(false); } }}>Apply settings</button>
-          <button disabled={busy} onClick={() => void analyzeAgain()}>Regenerate first pass</button>
+          <label>Color granularity <input aria-label="Color granularity" type="range" min="8" max="96" value={(draftSettings ?? documentModel.settings).colorStep} disabled={busy || Boolean(pendingRegeneration)} onChange={event => setDraftSettings({ ...(draftSettings ?? documentModel.settings), colorStep: Number(event.target.value) })}/><span>{(draftSettings ?? documentModel.settings).colorStep}</span></label>
+          <label>Path tolerance <input aria-label="Path tolerance" type="range" min="0" max="8" step="0.25" value={(draftSettings ?? documentModel.settings).pathTolerance} disabled={busy || Boolean(pendingRegeneration)} onChange={event => setDraftSettings({ ...(draftSettings ?? documentModel.settings), pathTolerance: Number(event.target.value) })}/><span>{(draftSettings ?? documentModel.settings).pathTolerance}</span></label>
+          {draftSettings && JSON.stringify(draftSettings) !== JSON.stringify(documentModel.settings) && <p className="hint">Settings are staged. Preview their impact before applying.</p>}
+          <button disabled={busy || Boolean(pendingRegeneration)} onClick={() => void planRegeneration('Apply settings', { kind: 'analysis', settings: draftSettings ?? documentModel.settings })}>Preview settings impact</button>
+          <button disabled={busy || Boolean(pendingRegeneration)} onClick={() => void planRegeneration('Regenerate first pass', { kind: 'analysis', mode: documentModel.mode, settings: draftSettings ?? documentModel.settings })}>Regenerate first pass</button>
+          {pendingRegeneration && <section className="regeneration-preview" aria-label="Regeneration impact preview">
+            <strong>{pendingRegeneration.label} · proposed</strong>
+            <p>The current document and masks are unchanged. Confirm to apply this result at revision {pendingRegeneration.impact.baseRevision}.</p>
+            <p>{pendingRegeneration.impact.beforeActiveCount} current → {pendingRegeneration.impact.afterActiveCount} proposed active regions · {pendingRegeneration.impact.diagnosticCount} proposed diagnostics.</p>
+            <p>Target: {pendingRegeneration.impact.mode === 'animation-ready' ? 'Animation ready' : 'Appearance first'} · color step {pendingRegeneration.impact.settings.colorStep} · path tolerance {pendingRegeneration.impact.settings.pathTolerance} · hidden proposals {pendingRegeneration.impact.settings.inferHiddenGeometry ? 'on' : 'off'}.</p>
+            <p>{Object.keys(pendingRegeneration.impact.remapped).length} region IDs matched to the current document. Unmatched old and new IDs are listed below; no uncertain ID mapping is assumed.</p>
+            <div className="impact-list"><b>At-risk unlocked · {pendingRegeneration.impact.changedUnlockedIds.length + pendingRegeneration.impact.removedUnlockedIds.length}</b><small>{pendingRegeneration.impact.changedUnlockedIds.length} will change; {pendingRegeneration.impact.removedUnlockedIds.length} will be removed.</small>{[...pendingRegeneration.impact.changedUnlockedIds.map(id => `Change ${id}`), ...pendingRegeneration.impact.removedUnlockedIds.map(id => `Remove ${id}`)].slice(0, 8).map(item => <code key={item}>{item}</code>)}</div>
+            <div className="impact-list"><b>Retained unlocked · {pendingRegeneration.impact.retainedUnlockedIds.length}</b>{pendingRegeneration.impact.retainedUnlockedIds.slice(0, 6).map(id => <code key={id}>{id}</code>)}</div>
+            <div className="impact-list"><b>New candidates · {pendingRegeneration.impact.addedIds.length}</b>{pendingRegeneration.impact.addedIds.slice(0, 8).map(id => <code key={id}>{id}</code>)}</div>
+            <div className="impact-list"><b>User-edited or locked regions retained · {pendingRegeneration.impact.retainedProtectedIds.length}</b>{pendingRegeneration.impact.retainedProtectedIds.slice(0, 6).map(id => <code key={id}>{id}</code>)}</div>
+            {(pendingRegeneration.impact.changedProtectedIds.length > 0 || pendingRegeneration.impact.removedProtectedIds.length > 0) && <p className="impact-conflict">Cannot apply: {pendingRegeneration.impact.changedProtectedIds.length} protected regions would change and {pendingRegeneration.impact.removedProtectedIds.length} would be removed. Adjust the selection or settings and preview again.</p>}
+            <div className="inline-actions"><button disabled={busy} onClick={() => { setPendingRegeneration(undefined); setStatus('Regeneration preview canceled. Current document is unchanged.'); }}>Cancel preview</button><button className="accent" disabled={busy || pendingRegeneration.impact.changedProtectedIds.length > 0 || pendingRegeneration.impact.removedProtectedIds.length > 0} onClick={() => void applyPlannedRegeneration()}>Confirm regeneration</button></div>
+          </section>}
         </>}
         <div className="divider"/>
         <h2>Selected region</h2>{selectedRegion ? <div className="inspector"><p className="identity">{selectedRegion.id}</p><p>{selectedRegion.bounds.width} × {selectedRegion.bounds.height} at {selectedRegion.bounds.x}, {selectedRegion.bounds.y} · {selectedRegion.geometry.quality.pathPointCount} anchors</p>{selectedRegion.geometry.status === 'inferred' && <div className="inferred-callout"><strong>Unseen continuation · uncertain</strong><span>This amber contour is estimated beneath the foreground. Its hidden appearance is not visible in the source. Isolate and edit it before articulating the part.</span><button disabled={busy || Boolean(selectedRegion.geometry.manualPath)} onClick={() => void perform([{ op: 'region.setPath', regionId: selectedRegion.id, path: selectedRegion.geometry.generatedPath }])}>{selectedRegion.geometry.manualPath ? 'Contour pinned as manual edit' : 'Pin current hidden contour'}</button></div>}<p className="hint">Evidence: {selectedRegion.confidence.reasons.join('; ')}</p>
@@ -572,7 +612,7 @@ export default function App() {
           </div>}
           <div className="inline-actions"><button disabled={busy} onClick={() => void perform([{ op: 'region.split', regionId: selectedRegion.id, axis: 'x', coordinate: selectedRegion.bounds.x + selectedRegion.bounds.width / 2 }])}>Split vertical</button><button disabled={busy} onClick={() => void perform([{ op: 'region.split', regionId: selectedRegion.id, axis: 'y', coordinate: selectedRegion.bounds.y + selectedRegion.bounds.height / 2 }])}>Split horizontal</button></div>
           <label>Merge with<select aria-label="Merge target" value={mergeTarget ?? ''} onChange={event => setMergeTarget(event.target.value)}><option value="">Choose region</option>{visibleRegions.filter(item => item.id !== selectedRegion.id).map(item => <option key={item.id} value={item.id}>{item.id}</option>)}</select></label><button disabled={!mergeTarget || busy} onClick={() => { if (mergeTarget) void perform([{ op: 'region.merge', firstId: selectedRegion.id, secondId: mergeTarget }]); }}>Merge selected</button>
-          <button disabled={busy} onClick={() => void perform([{ op: 'regenerate.selected', regionIds: [selectedRegion.id] }])}>Regenerate selected path</button>
+          <button disabled={busy || Boolean(pendingRegeneration)} onClick={() => void planRegeneration('Regenerate selected path', { kind: 'selected', regionIds: [selectedRegion.id] })}>Regenerate selected path</button>
           <label>Front of<select aria-label="Layer target" value={relationTarget ?? ''} onChange={event => setRelationTarget(event.target.value)}><option value="">Choose region</option>{visibleRegions.filter(item => item.id !== selectedRegion.id).map(item => <option key={item.id} value={item.id}>{item.id}</option>)}</select></label><button disabled={!relationTarget || busy} onClick={() => { if (relationTarget) void perform([{ op: 'layer.setRelation', frontRegionId: selectedRegion.id, backRegionId: relationTarget, approved: true }]); }}>Approve front relation</button>
           {alternateRegions.length > 0 && primaryRegions.some(item => item.id === selectedRegion.id) && <><label>Match alternate region<select aria-label="Alternate match" value={matchTarget ?? ''} onChange={event => setMatchTarget(event.target.value)}><option value="">Choose region</option>{alternateRegions.map(item => <option key={item.id} value={item.id}>{item.id}</option>)}</select></label><button disabled={!matchTarget || busy} onClick={() => { const other = alternateRegions.find(item => item.id === matchTarget); if (other) void perform([{ op: 'reference.correspond', correspondence: { id: `${selectedRegion.id}_manual_${other.id}`, sourceIds: [selectedRegion.sourceId, other.sourceId], regionIds: [selectedRegion.id, other.id], kind: 'same-part', origin: 'manual', evidence: ['user confirmed'], accepted: true } }]); }}>Confirm match</button></>}
         </div> : selectedSuppressedRegion ? <div className="inspector"><p className="identity">{selectedSuppressedRegion.id}</p><p className="hint">This inferred region is suppressed. Its original mask and path remain in the editable source document.</p><button disabled={busy} onClick={() => void perform([{ op: 'region.setSuppressed', regionId: selectedSuppressedRegion.id, suppressed: false }])}>Restore inferred region</button></div> : <p className="hint">Select a region on the canvas or in the outliner.</p>}

@@ -7,6 +7,7 @@ import { decodeDecompositionDocument, encodeDecompositionDocument, sha256, valid
 import { exportNativeDecomposition } from './export';
 import type { HydeDecompositionExport, HydeDecompositionExportOptions } from './export';
 import { proposeHiddenContinuations } from './hidden';
+import { proposeJunctionLayers } from './junction';
 import { decodeSource } from './image';
 import type { DecodedImage } from './image';
 import { defaultSettings } from './types';
@@ -321,6 +322,11 @@ export class DecompositionSession {
       matched.add(region.id);
     }
     const primary = candidate.sources.find(source => source.role === 'primary')!;
+    for (const source of candidate.sources) {
+      const junctions = proposeJunctionLayers(candidate, masks, source.id);
+      candidate.layers.push(...junctions.layers);
+      candidate.diagnostics.push(...junctions.diagnostics);
+    }
     if (mode === 'animation-ready' && settings.inferHiddenGeometry) {
       const proposed = proposeHiddenContinuations(candidate, masks, this.images.get(primary.id)!.rgba);
       const previousById = new Map(previous.regions.map(region => [region.id, region]));
@@ -395,11 +401,15 @@ export class DecompositionSession {
     const liveIds = new Set(candidate.regions.filter(active).map(region => region.id));
     const storedIds = new Set(candidate.regions.map(region => region.id));
     const suppressedIds = new Set(candidate.regions.filter(region => region.suppressed).map(region => region.id));
+    const pairKey = (first: string, second: string) => [first, second].sort().join(':');
+    const manualPairs = new Set(previous.layers.filter(layer => layer.origin === 'manual')
+      .map(layer => pairKey(layer.frontRegionId, layer.backRegionId)));
+    const notManuallyOverridden = (layer: LayerRecord) => !manualPairs.has(pairKey(layer.frontRegionId, layer.backRegionId));
     candidate.layers = [
-      ...candidate.layers.filter(layer => !previous.layers.some(old => old.origin === 'manual' && old.id === layer.id)),
+      ...candidate.layers.filter(notManuallyOverridden),
       ...previous.layers.filter(layer => layer.origin === 'manual' && liveIds.has(layer.frontRegionId) && liveIds.has(layer.backRegionId)),
-      ...previous.layers.filter(layer => (retainedHidden.has(layer.frontRegionId) || retainedHidden.has(layer.backRegionId)) && layer.origin === 'automatic' && liveIds.has(layer.frontRegionId) && liveIds.has(layer.backRegionId) && !candidate.layers.some(current => current.id === layer.id)),
-      ...previous.layers.filter(layer => (suppressedIds.has(layer.frontRegionId) || suppressedIds.has(layer.backRegionId)) && storedIds.has(layer.frontRegionId) && storedIds.has(layer.backRegionId) && !candidate.layers.some(current => current.id === layer.id)),
+      ...previous.layers.filter(layer => (retainedHidden.has(layer.frontRegionId) || retainedHidden.has(layer.backRegionId)) && layer.origin === 'automatic' && liveIds.has(layer.frontRegionId) && liveIds.has(layer.backRegionId) && notManuallyOverridden(layer) && !candidate.layers.some(current => current.id === layer.id)),
+      ...previous.layers.filter(layer => (suppressedIds.has(layer.frontRegionId) || suppressedIds.has(layer.backRegionId)) && storedIds.has(layer.frontRegionId) && storedIds.has(layer.backRegionId) && notManuallyOverridden(layer) && !candidate.layers.some(current => current.id === layer.id)),
     ];
     candidate.correspondences = previous.correspondences.filter(item => item.origin === 'manual');
     const manualCorrespondenceIds = new Set(candidate.correspondences.map(item => item.id));
@@ -614,7 +624,11 @@ export class DecompositionSession {
           region(edit.frontRegionId); region(edit.backRegionId); if (edit.frontRegionId === edit.backRegionId) fail('A region cannot layer in front of itself.');
           const id = `${edit.frontRegionId}_front_${edit.backRegionId}`;
           const relation: LayerRecord = { id, frontRegionId: edit.frontRegionId, backRegionId: edit.backRegionId, origin: 'manual', evidence: ['user-authored layer relation'], status: edit.approved ? 'approved' : 'proposed' };
-          candidate.layers = candidate.layers.filter(item => item.id !== id); candidate.layers.push(relation); changed.add(id);
+          candidate.layers = candidate.layers.filter(item => !(
+            item.frontRegionId === edit.frontRegionId && item.backRegionId === edit.backRegionId ||
+            item.frontRegionId === edit.backRegionId && item.backRegionId === edit.frontRegionId
+          ));
+          candidate.layers.push(relation); changed.add(id);
         } else if (edit.op === 'reference.correspond') {
           candidate.correspondences = candidate.correspondences.filter(item => item.id !== edit.correspondence.id);
           candidate.correspondences.push({ ...structuredClone(edit.correspondence), origin: 'manual' }); changed.add(edit.correspondence.id);

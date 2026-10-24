@@ -158,6 +158,8 @@ describe('authoring transactions in Node', () => {
     expect(opacity).toMatchObject({ ok: false, revision: 1, errors: [{ code: 'INVALID_ARGUMENT', commandIndex: 0, targetId: 'visible-piece', field: 'opacity' }] });
     expect(session.inspect({ target: 'element', id })).toMatchObject({ revision: 1, error: { code: 'TARGET_NOT_FOUND', targetId: id } });
     expect(session.inspect({ target: 'assembly', id })).toMatchObject({ revision: 1, error: { code: 'TARGET_NOT_FOUND', targetId: id } });
+    expect(session.inspect({ target: 'tree', sceneId: 'missing-scene' })).toMatchObject({ revision: 1, error: { code: 'TARGET_NOT_FOUND', targetId: 'missing-scene', field: 'sceneId' } });
+    expect(session.inspect({ target: 'unknown' as never })).toMatchObject({ revision: 1, error: { code: 'OPERATION_UNSUPPORTED' } });
     expect(await session.execute({ protocolVersion: 1, expectedRevision: Number.NaN, commands: [] })).toMatchObject({ ok: false, errors: [{ field: 'expectedRevision', code: 'INVALID_ARGUMENT' }] });
     expect(await session.execute({ protocolVersion: 1, expectedRevision: 1, commands: [null as never] })).toMatchObject({ ok: false, errors: [{ code: 'INVALID_ARGUMENT', commandIndex: 0 }] });
     expect(session.snapshot().elements).toHaveLength(1);

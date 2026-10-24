@@ -60,11 +60,14 @@ The current registered command catalog is available from `HYDE_OPERATIONS` and t
 ```sh
 node dist/cli/hyde.mjs project new --name Example --output example.hyde --json
 node dist/cli/hyde.mjs project apply example.hyde --commands edits.json --output revised.hyde --json
+node dist/cli/hyde.mjs project inspect revised.hyde --target tree --scene SCENE_ID --depth 2 --json
+node dist/cli/hyde.mjs project inspect revised.hyde --target timeline --scene SCENE_ID --time-start 0 --time-end 2 --json
+node dist/cli/hyde.mjs project inspect revised.hyde --target element --id ELEMENT_ID --fields id,name --json
 node dist/cli/hyde.mjs project preview revised.hyde --time 1 --output frame.png --json
 node dist/cli/hyde.mjs project export revised.hyde --format web --output story-web.zip --json
 ```
 
-`edits.json` can be an array of commands or a request object with `commands` and `stagedAssets` file declarations. The CLI writes temporary files and keeps a backup when replacing an existing explicit output. JSON transaction failures retain revision, command index, target/field details and warnings. Exit codes distinguish invalid arguments (2), schema/archive errors (3), revision conflicts (4), unavailable capabilities (5), internal/browser failures (6), and cancellation (7). Preview/render use a private Chromium page, Hyde's renderer/export stack, and no local HTTP server. Codec availability is probed at runtime; an unsupported MP4/WebM request fails rather than emitting substitute bytes.
+`edits.json` can be an array of commands or a request object with `commands` and `stagedAssets` file declarations. `project inspect` accepts the SDK targets `project`, `scenes`, `scene`, `elements`, `element`, `assets`, `asset`, `changes`, `tree`, `timeline`, and `assembly`. Use `--id` for a single scene, element, asset, or assembly root; `--scene` (or `--scene-id`) filters a scene tree, element list, or timeline. `--limit`/`--cursor`, `--depth`, and `--time-start`/`--time-end` bound queries. `--fields` projects native fields for project, element, asset, and list entries while retaining the revision wrapper. The CLI writes temporary files and keeps a backup when replacing an existing explicit output. JSON transaction failures retain revision, command index, target/field details and warnings. Exit codes distinguish invalid arguments (2), schema/archive errors (3), revision conflicts (4), unavailable capabilities (5), internal/browser failures (6), and cancellation (7). Preview/render use a private Chromium page, Hyde's renderer/export stack, and no local HTTP server. Codec availability is probed at runtime; an unsupported MP4/WebM request fails rather than emitting substitute bytes.
 
 ## Live editor bridge
 

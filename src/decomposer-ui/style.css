@@ -32,6 +32,7 @@ h3 { font-size: 13px; margin: 0; }
 .row.selected { border-color: #39d3bb; background: #254a4c; }
 .row.inferred-row { border-left: 3px solid #ffcb70; }
 .row.suppressed-row { opacity: .72; border-left: 3px solid #876c45; }
+.row.regeneration-affected { border-right: 3px solid #efa56d; background: #443831; }
 .attachment-proposal { border-color: #6dbfb1; }
 .row span { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row small { font-size: 10px; color: #aac1c0; }
@@ -85,6 +86,13 @@ h3 { font-size: 13px; margin: 0; }
 .inspector .identity { color: #74dcca; font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
 .inferred-callout { display: grid; gap: 7px; margin: 10px 0; padding: 10px; border: 1px solid #ad8456; border-radius: 7px; background: #3e332d; color: #ffe3b1; font-size: 11px; line-height: 1.45; }
 .inferred-callout button { font-size: 11px; }
+.regeneration-preview { display: grid; gap: 8px; margin: 12px 0; padding: 11px; border: 1px solid #efa56d; border-radius: 8px; background: #352d29; color: #f6e1ca; font-size: 11px; line-height: 1.45; }
+.regeneration-preview > strong { font-size: 12px; }
+.regeneration-preview p { margin: 0; }
+.impact-list { display: grid; gap: 3px; min-width: 0; padding: 6px 8px; border: 1px solid #786050; border-radius: 5px; background: #2c2929; }
+.impact-list small { color: #dabfa4; }
+.impact-list code { overflow-wrap: anywhere; color: #e7f2e8; font-size: 10px; }
+.impact-conflict { color: #ffc4b9; font-weight: 600; }
 .path-controls { margin: 12px 0; padding: 9px; border: 1px solid #416268; border-radius: 7px; background: #132b32; }
 .path-controls strong { display: block; font-size: 11px; margin-bottom: 4px; }
 .path-controls span { display: block; color: #a9c8c4; font-size: 11px; margin-bottom: 7px; }
