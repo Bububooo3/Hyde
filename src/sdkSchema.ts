@@ -59,7 +59,7 @@ const mediaTransform = object({
 }, ['x', 'y', 'scaleX', 'scaleY', 'rotation']);
 const sourceFrame = object({ x: number, y: number, width: positive, height: positive }, ['x', 'y', 'width', 'height']);
 const placement = object({
-  start: nonnegative, duration: positive, sourceIn: nonnegative, sourceOut: nonnegative,
+  start: nonnegative, duration: positive, speed: { type: 'number', minimum: 0.01, maximum: 100 }, sourceIn: nonnegative, sourceOut: nonnegative,
   muted: boolean, mutedSourceClipIds: array(ref), frame: sourceFrame,
   frameFit: fit, frameRotation: number, opacity: fraction,
 });

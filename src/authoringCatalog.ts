@@ -8,7 +8,7 @@ import { materializeScenePlacements, validateSceneLinks } from './scenePlacement
 import { setPivotWithoutMovingArt } from './stageGeometry';
 
 type Ref = string;
-type PlacementPatch = Partial<Pick<Sequence, 'start' | 'duration' | 'sourceIn' | 'sourceOut' | 'muted' | 'mutedSourceClipIds' | 'frame' | 'frameFit' | 'frameRotation' | 'opacity'>>;
+type PlacementPatch = Partial<Pick<Sequence, 'start' | 'duration' | 'sourceIn' | 'sourceOut' | 'muted' | 'mutedSourceClipIds' | 'frame' | 'frameFit' | 'frameRotation' | 'opacity'>> & { speed?: number };
 type CaptionPatch = Partial<Pick<Caption, 'text' | 'start' | 'end' | 'sceneId'>>;
 
 /** Commands not owned by the foundation, timeline, or media adapters. */
@@ -165,10 +165,14 @@ function trimScene(project: Project, sceneId: string, edge: 'start' | 'end', tim
   return next;
 }
 function placement(project: Project, sequence: Sequence, patch: PlacementPatch): Project {
-  record(patch, ['start', 'duration', 'sourceIn', 'sourceOut', 'muted', 'mutedSourceClipIds', 'frame', 'frameFit', 'frameRotation', 'opacity'], 'Placement');
+  record(patch, ['start', 'duration', 'speed', 'sourceIn', 'sourceOut', 'muted', 'mutedSourceClipIds', 'frame', 'frameFit', 'frameRotation', 'opacity'], 'Placement');
   if (!sequence.sourceSceneId) fail('Scene placement controls require a linked scene.');
   if (patch.start !== undefined) finite(patch.start, 'Placement start', 0);
   if (patch.duration !== undefined) finite(patch.duration, 'Placement duration', 1 / project.fps);
+  if (patch.speed !== undefined) {
+    finite(patch.speed, 'Placement speed', .01, 100);
+    if (patch.duration !== undefined) fail('Specify placement speed or duration, not both.');
+  }
   if (patch.sourceIn !== undefined) finite(patch.sourceIn, 'Source in', 0);
   if (patch.sourceOut !== undefined) finite(patch.sourceOut, 'Source out', 0);
   if (patch.frameRotation !== undefined) finite(patch.frameRotation, 'Frame rotation');
@@ -188,10 +192,15 @@ function placement(project: Project, sequence: Sequence, patch: PlacementPatch):
   }
   const next = structuredClone(project), target = next.sequences.find(item => item.id === sequence.id)!;
   const delta = (patch.start ?? target.start) - target.start;
-  Object.assign(target, structuredClone(patch));
+  const { speed, ...nativePatch } = patch;
+  Object.assign(target, structuredClone(nativePatch));
   const source = next.sequences.find(item => item.id === target.sourceSceneId)!;
   const sourceIn = target.sourceIn ?? 0, sourceOut = target.sourceOut ?? source.duration;
   if (!(sourceOut > sourceIn && sourceOut <= source.duration)) fail('The linked scene source range is invalid.', 'INVALID_TIMING');
+  if (speed !== undefined) {
+    target.duration = (sourceOut - sourceIn) / speed;
+    if (target.duration < 1 / project.fps - 1e-8) fail('Placement speed makes the scene shorter than one project frame.', 'INVALID_TIMING');
+  }
   if (delta) {
     for (const item of next.elements) if (item.sceneId === target.id) item.start += delta;
     for (const item of next.captions) if (item.sceneId === target.id) { item.start += delta; item.end += delta; }

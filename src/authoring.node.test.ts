@@ -4,6 +4,23 @@ import { HydeAuthoringSession } from './authoring';
 import { decodeProjectBytes } from './archive';
 
 describe('authoring transactions in Node', () => {
+  it('authors linked-scene speed through native duration and inspects the effective speed after archive reopen', async () => {
+    const session = HydeAuthoringSession.create('Speed');
+    const sourceId = session.snapshot().sequences[0].id;
+    const created = await session.execute({ protocolVersion: 1, expectedRevision: 0, commands: [
+      { op: 'scene.link', args: { sourceId, start: 8, alias: '$placed' } },
+      { op: 'scene.setPlacement', args: { id: '$placed', placement: { sourceIn: 1, sourceOut: 7, speed: 3 } } },
+    ] });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    const placedId = created.idMap.$placed;
+    expect(session.inspect({ target: 'scene', id: placedId })).toMatchObject({ scene: { id: placedId, duration: 2, speed: 3 } });
+    expect(session.inspect({ target: 'scenes', fields: 'id,speed' })).toMatchObject({ items: expect.arrayContaining([{ id: placedId, speed: 3 }]) });
+    const opened = HydeAuthoringSession.open(session.exportProject());
+    expect(opened.snapshot().sequences.find(scene => scene.id === placedId)).not.toHaveProperty('speed');
+    expect(opened.inspect({ target: 'scene', id: placedId })).toMatchObject({ scene: { speed: 3 } });
+  });
+
   it('configures a new project with project.create and refuses archive replacement', async () => {
     const session = HydeAuthoringSession.create();
     const result = await session.execute({ protocolVersion: 1, expectedRevision: 0, commands: [

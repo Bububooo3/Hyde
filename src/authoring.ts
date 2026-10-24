@@ -244,6 +244,13 @@ function projectFields(value: Record<string, unknown>, fields?: string[] | strin
   if (!Array.isArray(selected) || selected.length > 40 || selected.some(field => typeof field !== 'string' || field.length > 100)) throw new Error('Inspection fields must contain at most 40 field names.');
   return Object.fromEntries(Object.entries(value).filter(([field]) => selected.includes(field)));
 }
+function inspectedScene(project: Project, scene: Project['sequences'][number]) {
+  const source = scene.sourceSceneId && project.sequences.find(item => item.id === scene.sourceSceneId);
+  return {
+    ...structuredClone(scene),
+    ...(source && scene.duration > 0 ? { speed: ((scene.sourceOut ?? source.duration) - (scene.sourceIn ?? 0)) / scene.duration } : {}),
+  };
+}
 
 export class HydeAuthoringSession {
   private project: Project;
@@ -321,7 +328,7 @@ export class HydeAuthoringSession {
     if (query.target === 'scene') {
       const scene = this.project.sequences.find(item => item.id === query.id);
       if (!scene) return { revision: this.revision, error: { ...diagnostic('TARGET_NOT_FOUND', 'Scene does not exist.'), targetId: query.id } };
-      return { revision: this.revision, scene: structuredClone(scene), elements: this.project.elements.filter(item => item.sceneId === scene.id).slice(cursor, cursor + limit).map(item => structuredClone(item)), nextCursor: cursor + limit < this.project.elements.filter(item => item.sceneId === scene.id).length ? cursor + limit : undefined };
+      return { revision: this.revision, scene: inspectedScene(this.project, scene), elements: this.project.elements.filter(item => item.sceneId === scene.id).slice(cursor, cursor + limit).map(item => structuredClone(item)), nextCursor: cursor + limit < this.project.elements.filter(item => item.sceneId === scene.id).length ? cursor + limit : undefined };
     }
     if (query.target === 'tree' || query.target === 'assembly') {
       const assemblyRoot = query.target === 'assembly' ? this.project.elements.find(item => item.id === query.id) : undefined;
@@ -338,7 +345,7 @@ export class HydeAuthoringSession {
       const items = this.project.elements.filter(item => (query.sceneId === undefined || item.sceneId === query.sceneId) && item.start < end && item.start + item.duration >= start).sort((a, b) => a.id.localeCompare(b.id));
       return { revision: this.revision, range: { start, end }, items: items.slice(cursor, cursor + limit).map(item => ({ id: item.id, name: item.name, kind: item.kind, sceneId: item.sceneId, start: item.start, duration: item.duration, tracks: item.tracks.map(track => ({ property: track.property, keyframes: track.keyframes.filter(key => key.time >= start - item.start && key.time <= end - item.start).slice(0, 100) })), motionBehaviors: item.motionBehaviors?.map(behavior => ({ id: behavior.id, type: behavior.type })), assemblyClips: item.assemblyClips?.map(clip => ({ id: clip.id, name: clip.name, duration: clip.duration })), clipInstances: item.clipInstances?.map(instance => ({ id: instance.id, clipId: instance.clipId, start: instance.start, duration: instance.duration })) })), captions: this.project.captions.filter(caption => (query.sceneId === undefined || caption.sceneId === query.sceneId) && caption.start < end && caption.end >= start).slice(0, 100).map(caption => ({ id: caption.id, text: caption.text, start: caption.start, end: caption.end })), nextCursor: cursor + limit < items.length ? cursor + limit : undefined };
     }
-    const list = query.target === 'scenes' ? this.project.sequences : query.target === 'assets'
+    const list = query.target === 'scenes' ? this.project.sequences.map(scene => inspectedScene(this.project, scene)) : query.target === 'assets'
       ? this.project.assets.map(({ dataUrl: _bytes, ...metadata }) => metadata)
       : this.project.elements.filter(item => query.sceneId === undefined || item.sceneId === query.sceneId).map(({ tracks, assemblyClips, clipInstances, motionBehaviors, shapePath, ...summary }) => ({ ...summary, trackCount: tracks.length, clipCount: assemblyClips?.length ?? 0, instanceCount: clipInstances?.length ?? 0, motionCount: motionBehaviors?.length ?? 0, pathPointCount: shapePath?.points.length ?? 0 }));
     const ordered = [...list].sort((a, b) => a.id.localeCompare(b.id));

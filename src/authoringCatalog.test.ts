@@ -55,6 +55,12 @@ describe('remaining authoring command catalog', () => {
     expect(next.sequences.find(scene => scene.id === source.id)).toEqual(source);
     expect(next.sequences.find(scene => scene.id === linked.sceneId)).toMatchObject({ start: 12, duration: 3, sourceIn: 1, sourceOut: 7, frameRotation: 12, opacity: 0.7 });
     validateDocument(next, false);
+    const sped = h.apply(next, { op: 'scene.setPlacement', args: { id: linked.sceneId, placement: { speed: 3 } } });
+    expect(sped.sequences.find(scene => scene.id === linked.sceneId)).toMatchObject({ duration: 2, sourceIn: 1, sourceOut: 7 });
+    expect(sped.sequences.find(scene => scene.id === linked.sceneId)).not.toHaveProperty('speed');
+    expect(() => h.apply(next, { op: 'scene.setPlacement', args: { id: linked.sceneId, placement: { speed: 2, duration: 3 } } })).toThrow(/speed or duration/);
+    expect(() => h.apply(next, { op: 'scene.setPlacement', args: { id: linked.sceneId, placement: { speed: 0 } } })).toThrow(/Placement speed/);
+    validateDocument(sped, false);
     expect(() => h.apply(next, { op: 'scene.setPlacement', args: { id: linked.sceneId, placement: { sourceOut: 20 } } })).toThrow();
   });
 
