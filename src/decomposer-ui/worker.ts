@@ -41,9 +41,26 @@ function regenerationImpact(before: DecompositionDocumentV1, after: Decompositio
       (protectedRegion ? retainedProtectedIds : retainedUnlockedIds).push(id);
     else (protectedRegion ? changedProtectedIds : changedUnlockedIds).push(id);
   }
+  const proposed = [
+    ...[...removedUnlockedIds, ...removedProtectedIds].map(id => ({ region: oldRegions.get(id)!, kind: 'removed' as const })),
+    ...[...changedUnlockedIds, ...changedProtectedIds].map(id => ({ region: oldRegions.get(id)!, kind: 'before' as const })),
+    ...addedIds.map(id => ({ region: newRegions.get(id)!, kind: 'after' as const })),
+    ...[...changedUnlockedIds, ...changedProtectedIds].map(id => ({ region: newRegions.get(id)!, kind: 'after' as const })),
+  ];
+  const previewContours: { id: string; sourceId: string; bounds: RegionRecord['bounds']; path: RegionRecord['geometry']['generatedPath']; kind: 'removed' | 'before' | 'after' }[] = [];
+  let previewPoints = 0, omittedPreviewContours = 0;
+  for (const item of proposed) {
+    const path = item.region.geometry.manualPath ?? item.region.geometry.generatedPath;
+    if (path.points.length < 3) continue;
+    const pointCount = path.points.length + (path.holes ?? []).reduce((sum, hole) => sum + hole.points.length, 0);
+    if (previewContours.length >= 64 || previewPoints + pointCount > 8192) { omittedPreviewContours++; continue; }
+    previewContours.push({ id: item.region.id, sourceId: item.region.sourceId, bounds: item.region.bounds, path, kind: item.kind });
+    previewPoints += pointCount;
+  }
   return { mode: after.mode, settings: after.settings, beforeActiveCount: oldRegions.size, afterActiveCount: newRegions.size,
     addedIds, changedUnlockedIds, removedUnlockedIds, retainedUnlockedIds,
-    retainedProtectedIds, changedProtectedIds, removedProtectedIds, diagnosticCount: after.diagnostics.length };
+    retainedProtectedIds, changedProtectedIds, removedProtectedIds, diagnosticCount: after.diagnostics.length,
+    previewContours, omittedPreviewContours };
 }
 
 self.onmessage = async (event: MessageEvent<Request>) => {

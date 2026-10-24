@@ -15,7 +15,9 @@ type RegenerationRequest = { kind: 'analysis'; mode?: DecompositionMode; setting
 type RegenerationImpact = { baseRevision: number; kind: RegenerationRequest['kind']; mode: DecompositionMode; settings: ReconstructionSettings;
   beforeActiveCount: number; afterActiveCount: number; addedIds: string[]; changedUnlockedIds: string[];
   removedUnlockedIds: string[]; retainedUnlockedIds: string[]; retainedProtectedIds: string[];
-  changedProtectedIds: string[]; removedProtectedIds: string[]; diagnosticCount: number; remapped: Record<string, string> };
+  changedProtectedIds: string[]; removedProtectedIds: string[]; diagnosticCount: number; remapped: Record<string, string>;
+  previewContours: { id: string; sourceId: string; bounds: RegionRecord['bounds']; path: ShapePath; kind: 'removed' | 'before' | 'after' }[];
+  omittedPreviewContours: number };
 type NativeQualityReport = Omit<ReconstructionQualityReport, 'residualOverlayPng'>;
 const color = (hex: string): [number, number, number] => [1, 3, 5].map(at => parseInt(hex.slice(at, at + 2), 16)) as [number, number, number];
 const current = (region: RegionRecord) => region.generationStatus !== 'historical';
@@ -54,6 +56,27 @@ function drawPath(ctx: CanvasRenderingContext2D, region: RegionRecord, path: Sha
     ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(hx, hy); ctx.stroke();
     ctx.fillStyle = side === 'in' ? '#ff8b86' : '#ffce74';
     ctx.beginPath(); ctx.arc(hx, hy, 1.1, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawRegenerationContour(ctx: CanvasRenderingContext2D, item: RegenerationImpact['previewContours'][number]): void {
+  const { bounds, path } = item;
+  ctx.save(); ctx.strokeStyle = item.kind === 'removed' ? '#ff5e78' : item.kind === 'before' ? '#ffbd64' : '#00ead3';
+  ctx.lineWidth = 1.4; ctx.setLineDash([3, 2]);
+  for (const contour of [path, ...(path.holes ?? [])]) {
+    const points = contour.points; if (points.length < 3) continue;
+    ctx.beginPath(); ctx.moveTo(bounds.x + points[0].x * bounds.width, bounds.y + points[0].y * bounds.height);
+    for (let index = 0; index < points.length; index++) {
+      const from = points[index], to = points[(index + 1) % points.length];
+      const x = bounds.x + to.x * bounds.width, y = bounds.y + to.y * bounds.height;
+      if (from.out || to.in) {
+        const a = from.out ?? from, b = to.in ?? to;
+        ctx.bezierCurveTo(bounds.x + a.x * bounds.width, bounds.y + a.y * bounds.height,
+          bounds.x + b.x * bounds.width, bounds.y + b.y * bounds.height, x, y);
+      } else ctx.lineTo(x, y);
+    }
+    ctx.closePath(); ctx.stroke();
   }
   ctx.restore();
 }
@@ -388,6 +411,7 @@ export default function App() {
         ctx.strokeStyle = '#20ead1'; ctx.lineWidth = 1;
         ctx.beginPath(); ctx.arc(pendingLandmark.x, pendingLandmark.y, 3, 0, Math.PI * 2); ctx.stroke();
       }
+      for (const item of pendingRegeneration?.impact.previewContours ?? []) if (item.sourceId === source.id) drawRegenerationContour(ctx, item);
     };
     drawOriginal(originalCanvas.current);
     const canvas = reconstructionCanvas.current; if (!canvas) return;
@@ -444,11 +468,12 @@ export default function App() {
       context.beginPath(); context.moveTo(selectedPart.pivot.x - 7, selectedPart.pivot.y); context.lineTo(selectedPart.pivot.x + 7, selectedPart.pivot.y);
       context.moveTo(selectedPart.pivot.x, selectedPart.pivot.y - 7); context.lineTo(selectedPart.pivot.x, selectedPart.pivot.y + 7); context.stroke(); context.restore();
     }
+    for (const item of pendingRegeneration?.impact.previewContours ?? []) if (item.sourceId === source.id) drawRegenerationContour(context, item);
     if (pointer.current?.tool.startsWith('paint')) {
       context.save(); context.strokeStyle = pointer.current.tool === 'paint-add' ? '#06f0aa' : '#ff6378'; context.lineWidth = Math.max(1, brushRadius * 2); context.lineCap = 'round';
       context.beginPath(); pointer.current.points.forEach((point, index) => index ? context.lineTo(point.x, point.y) : context.moveTo(point.x, point.y)); context.stroke(); context.restore();
     }
-  }, [source?.id, source?.width, source?.height, visibleRegions, inferredRegions, documentModel?.parts, documentModel?.correspondences, masks, selectedRegion, selectedRegionId, selectedPart, view, overlayAlpha, isolate, showInferred, selectedPoint, draftPoint, draftHandle, pendingLandmark, tool, brushRadius, renderVersion]);
+  }, [source?.id, source?.width, source?.height, visibleRegions, inferredRegions, documentModel?.parts, documentModel?.correspondences, masks, selectedRegion, selectedRegionId, selectedPart, view, overlayAlpha, isolate, showInferred, selectedPoint, draftPoint, draftHandle, pendingLandmark, pendingRegeneration, tool, brushRadius, renderVersion]);
 
   const pointFromEvent = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     if (!source) return { x: 0, y: 0 };
@@ -624,6 +649,7 @@ export default function App() {
             <strong>{pendingRegeneration.label} · proposed</strong>
             <p>The current document and masks are unchanged. Confirm to apply this result at revision {pendingRegeneration.impact.baseRevision}.</p>
             <p>{pendingRegeneration.impact.beforeActiveCount} current → {pendingRegeneration.impact.afterActiveCount} proposed active regions · {pendingRegeneration.impact.diagnosticCount} proposed diagnostics.</p>
+            <p>Canvas contours: <span style={{ color: '#ffbd64' }}>amber current</span> · <span style={{ color: '#00ead3' }}>teal proposed</span> · <span style={{ color: '#ff5e78' }}>red removed</span>. {pendingRegeneration.impact.previewContours.length} shown{pendingRegeneration.impact.omittedPreviewContours ? `; ${pendingRegeneration.impact.omittedPreviewContours} omitted by the preview budget` : ''}.</p>
             <p>Target: {pendingRegeneration.impact.mode === 'animation-ready' ? 'Animation ready' : 'Appearance first'} · color step {pendingRegeneration.impact.settings.colorStep} · path tolerance {pendingRegeneration.impact.settings.pathTolerance} · hidden proposals {pendingRegeneration.impact.settings.inferHiddenGeometry ? 'on' : 'off'}.</p>
             <p>{Object.keys(pendingRegeneration.impact.remapped).length} region IDs matched to the current document. Unmatched old and new IDs are listed below; no uncertain ID mapping is assumed.</p>
             <div className="impact-list"><b>At-risk unlocked · {pendingRegeneration.impact.changedUnlockedIds.length + pendingRegeneration.impact.removedUnlockedIds.length}</b><small>{pendingRegeneration.impact.changedUnlockedIds.length} will change; {pendingRegeneration.impact.removedUnlockedIds.length} will be removed.</small>{[...pendingRegeneration.impact.changedUnlockedIds.map(id => `Change ${id}`), ...pendingRegeneration.impact.removedUnlockedIds.map(id => `Remove ${id}`)].slice(0, 8).map(item => <code key={item}>{item}</code>)}</div>
@@ -638,7 +664,7 @@ export default function App() {
         <h2>Selected region</h2>{selectedRegion ? <div className="inspector"><p className="identity">{selectedRegion.id}</p><p>{selectedRegion.bounds.width} × {selectedRegion.bounds.height} at {selectedRegion.bounds.x}, {selectedRegion.bounds.y} · {selectedRegion.geometry.quality.pathPointCount} anchors</p>{selectedRegion.geometry.status === 'inferred' && <div className="inferred-callout"><strong>Unseen continuation · uncertain</strong><span>This amber contour is estimated beneath the foreground. Its hidden appearance is not visible in the source. Isolate and edit it before articulating the part.</span><button disabled={busy || Boolean(selectedRegion.geometry.manualPath)} onClick={() => void perform([{ op: 'region.setPath', regionId: selectedRegion.id, path: selectedRegion.geometry.generatedPath }])}>{selectedRegion.geometry.manualPath ? 'Contour pinned as manual edit' : 'Pin current hidden contour'}</button></div>}<p className="hint">Evidence: {selectedRegion.confidence.reasons.join('; ')}</p>
           {selectedRegion.geometry.status === 'inferred' && <button disabled={busy} onClick={() => void perform([{ op: 'region.setSuppressed', regionId: selectedRegion.id, suppressed: true }])}>Suppress inferred region</button>}
           <label>Assign to part<select aria-label="Assign to part" value={selectedRegion.partId ?? ''} onChange={event => { if (event.target.value) void perform([{ op: 'part.assignRegion', regionId: selectedRegion.id, partId: event.target.value }]); }}><option value="">Unassigned</option>{documentModel?.parts.map(part => <option key={part.id} value={part.id}>{part.name}</option>)}</select></label>
-          <p className="hint">Brush and seed edits stay within this region’s current bounds. Brush hardness stores editable soft coverage inside binary contour topology; source alpha remains separate. Split or merge to change topology.</p>
+          <p className="hint">The add brush can extend a generated contour within the source image. Seed edits stay bounded and split or merge changes topology. Brush hardness stores editable soft coverage beside binary contour topology; source alpha remains separate.</p>
           <div className="inferred-callout"><strong>Feather outside the contour</strong><span>This user-authored edit extends the mask into free neighboring pixels and regenerates its editable outer path. It keeps the original source mask for undo and recovery.</span><label>Radius <input aria-label="Outward feather radius" type="range" min="1" max="12" value={featherRadius} onChange={event => setFeatherRadius(Number(event.target.value))}/>{featherRadius} px</label><label>Strength <input aria-label="Outward feather strength" type="range" min="0.1" max="1" step="0.05" value={featherStrength} onChange={event => setFeatherStrength(Number(event.target.value))}/>{Math.round(featherStrength * 100)}%</label><button disabled={busy || selectedRegion.locked.mask || selectedRegion.locked.geometry || Boolean(selectedRegion.geometry.manualPath)} onClick={() => void perform([{ op: 'region.featherOutside', regionId: selectedRegion.id, radius: featherRadius, strength: featherStrength }])}>Apply outward feather</button>{selectedRegion.geometry.manualPath && <small>Unlock the path and switch to its generated contour before applying outward feather.</small>}</div>
           <label><input type="checkbox" checked={selectedRegion.locked.mask} onChange={event => void perform([{ op: 'annotation.lock', regionId: selectedRegion.id, target: 'mask', locked: event.target.checked }])}/> Lock mask</label>
           <label><input type="checkbox" checked={selectedRegion.locked.geometry} onChange={event => void perform([{ op: 'annotation.lock', regionId: selectedRegion.id, target: 'geometry', locked: event.target.checked }])}/> Lock path</label>

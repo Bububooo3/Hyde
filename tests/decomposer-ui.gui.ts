@@ -118,8 +118,17 @@ test('animation-ready attachment proposal can be reviewed and accepted in the ed
   await page.goto('/decomposer.html');
   await page.getByLabel('Import images').setInputFiles({ name: 'articulated-character.png', mimeType: 'image/png', buffer: Buffer.from(art.bytes) });
   await expect(page.getByRole('status')).toContainText('Automatic first pass');
+  const beforePreview = await page.locator('canvas.interactive-canvas').evaluate(canvas => (canvas as HTMLCanvasElement).toDataURL());
   await page.getByLabel('Reconstruction mode').selectOption('animation-ready');
-  await expect(page.getByLabel('Regeneration impact preview')).toBeVisible();
+  const review = page.getByLabel('Regeneration impact preview');
+  await expect(review).toBeVisible();
+  await expect(review).toContainText(/Canvas contours:.*[1-9]\d* shown/);
+  const proposedPreview = await page.locator('canvas.interactive-canvas').evaluate(canvas => (canvas as HTMLCanvasElement).toDataURL());
+  expect(proposedPreview).not.toBe(beforePreview);
+  await page.getByRole('button', { name: 'Cancel preview' }).click();
+  expect(await page.locator('canvas.interactive-canvas').evaluate(canvas => (canvas as HTMLCanvasElement).toDataURL())).toBe(beforePreview);
+  await page.getByLabel('Reconstruction mode').selectOption('animation-ready');
+  await expect(review).toBeVisible();
   await page.getByRole('button', { name: 'Confirm regeneration' }).click();
   await expect(page.getByRole('status')).toContainText('Switch to animation-ready applied');
   const suggested = page.locator('.left-pane .scroll-list').nth(1).locator('.row').filter({ hasText: 'hinge proposed' }).first();
