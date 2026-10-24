@@ -156,17 +156,27 @@ function scorePair(primary: Descriptor, alternate: Descriptor, options: Correspo
 export function rankReferenceCorrespondences(primary: RegionRecord[], alternate: RegionRecord[], options: CorrespondenceOptions = {}): CorrespondenceRanking {
   const result: CorrespondenceRanking = { candidates: [], diagnostics: [] };
   if (!primary.length || !alternate.length) return result;
+  // A mask guide is annotation evidence, not another depiction of a part.
+  if (options.alternateSource?.role === 'mask-guide') return result;
   if (primary.length * alternate.length > MAX_PAIRS) {
     result.diagnostics.push({ code: 'RESOURCE_LIMIT', severity: 'warning', sourceId: alternate[0].sourceId,
       message: 'Automatic correspondence would compare too many fragmented region pairs.', suggestion: 'Group meaningful regions or provide manual matches.' });
     return result;
   }
-  const manual = options.manual?.filter(item => item.origin === 'manual' && item.regionIds) ?? [];
-  const manualPairs = new Set(manual.map(item => `${item.regionIds![0]}:${item.regionIds![1]}`));
+  const primaryIds = new Set(primary.map(region => region.id));
+  const alternateIds = new Set(alternate.map(region => region.id));
+  // Existing manual pairs may have been recorded with either source first.
+  const manual = (options.manual ?? []).filter(item => item.origin === 'manual' && item.regionIds).flatMap(item => {
+    const [first, second] = item.regionIds!;
+    if (primaryIds.has(first) && alternateIds.has(second)) return [{ primaryId: first, alternateId: second, accepted: item.accepted }];
+    if (primaryIds.has(second) && alternateIds.has(first)) return [{ primaryId: second, alternateId: first, accepted: item.accepted }];
+    return [];
+  });
+  const manualPairs = new Set(manual.map(item => `${item.primaryId}:${item.alternateId}`));
   const acceptedPrimary = new Set<string>(), acceptedAlternate = new Set<string>(), anchors = new Map<string, string>();
   for (const item of manual) if (item.accepted) {
-    acceptedPrimary.add(item.regionIds![0]); acceptedAlternate.add(item.regionIds![1]);
-    anchors.set(item.regionIds![1], item.regionIds![0]);
+    acceptedPrimary.add(item.primaryId); acceptedAlternate.add(item.alternateId);
+    anchors.set(item.alternateId, item.primaryId);
   }
   const p = descriptors(primary.filter(region => region.generationStatus !== 'historical' && region.geometry.status === 'visible' && !acceptedPrimary.has(region.id)));
   const a = descriptors(alternate.filter(region => region.generationStatus !== 'historical' && region.geometry.status === 'visible' && !acceptedAlternate.has(region.id)));
@@ -189,7 +199,7 @@ export function rankReferenceCorrespondences(primary: RegionRecord[], alternate:
     if (ambiguous) result.diagnostics.push({ code: 'CORRESPONDENCE_AMBIGUOUS', severity: 'info', sourceId: alt.region.sourceId, regionId: alt.region.id,
       message: 'Several primary regions have similar shape, color and neighborhood evidence for this reference region.', suggestion: 'Inspect the ranked candidates and confirm or reject the intended part correspondence.' });
     for (const [index, item] of choices.slice(0, limit).entries()) {
-      const unique = index === 0 && !ambiguous && margin >= (item.position === undefined ? .14 : .05)
+      const unique = options.alternateSource?.role !== 'detail' && index === 0 && !ambiguous && margin >= (item.position === undefined ? .14 : .05)
         && reciprocal.get(item.primary.region.id)?.[0] === item && item.score <= .12
         && item.color < .08 && item.shape < .16 && item.area < .3 && item.aspect < .3 && item.neighborhood < .35
         && item.anchors.contradicted === 0;

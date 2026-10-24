@@ -86,6 +86,25 @@ describe('multi-reference correspondence ranking', () => {
     const accepted: CorrespondenceRecord = { ...initial.candidates[1], origin: 'manual', accepted: true };
     const afterAcceptance = rankReferenceCorrespondences(primary, alternate, { manual: [rejected, accepted] });
     expect(afterAcceptance.candidates.every(item => item.regionIds![0] !== accepted.regionIds![0] && item.regionIds![1] !== accepted.regionIds![1])).toBe(true);
+    const reverse = (item: CorrespondenceRecord): CorrespondenceRecord => ({ ...item,
+      sourceIds: [item.sourceIds[1], item.sourceIds[0]], regionIds: [item.regionIds![1], item.regionIds![0]] });
+    const afterReverse = rankReferenceCorrespondences(primary, alternate, { manual: [reverse(rejected), reverse(accepted)] });
+    expect(afterReverse.candidates.map(item => item.id)).toEqual(afterAcceptance.candidates.map(item => item.id));
+    await session.close();
+  });
+
+  it('does not infer part identity from a detail or mask-guide source role', async () => {
+    const red: Color = [200, 60, 50], blue: Color = [40, 120, 200];
+    const first = raster('front.png', (_, rect, disk) => { disk(16, 22, 8, red); rect(47, 12, 62, 32, blue); }, 'primary');
+    const second = raster('detail.png', (_, rect, disk) => { disk(55, 22, 8, red); rect(9, 12, 24, 32, blue); }, 'alternate-pose');
+    const { session, document, primary, alternate } = await analyze(first, second);
+    const detail = rankReferenceCorrespondences(primary, alternate, { primarySource: document.sources[0],
+      alternateSource: { ...document.sources[1], role: 'detail' } });
+    expect(detail.candidates.length).toBeGreaterThanOrEqual(2);
+    expect(detail.candidates.every(item => item.kind === 'possible-match' && !item.accepted)).toBe(true);
+    const guide = rankReferenceCorrespondences(primary, alternate, { primarySource: document.sources[0],
+      alternateSource: { ...document.sources[1], role: 'mask-guide' } });
+    expect(guide.candidates).toEqual([]);
     await session.close();
   });
 

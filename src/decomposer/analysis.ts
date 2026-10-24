@@ -57,12 +57,15 @@ function simplify(points: Point[], tolerance: number, maxPoints: number): Point[
     return result;
   };
   let error = Math.max(0, tolerance);
-  while (true) {
+  for (let attempt = 0; attempt < 64; attempt++) {
     const current = [...arc(first, opposite, error).slice(0, -1), ...arc(opposite, first, error).slice(0, -1)];
     if (current.length >= 3 && current.length <= maxPoints) return current;
-    error = error ? error * 1.5 : 0.25;
-    if (error > 128) throw new Error('PATH_TOO_COMPLEX');
+    // A narrow contour can collapse to two vertices at the requested tolerance.
+    // Increasing the error further can never recover a valid closed path.
+    error = current.length < 3 ? error / 2 : error ? error * 1.5 : 0.25;
+    if (error > 128 || error < 1e-6) break;
   }
+  throw new Error('PATH_TOO_COMPLEX');
 }
 function contours(mask: RegionMask, offsetX: number, offsetY: number): Point[][] {
   const { width, height, bytes } = mask;
@@ -283,6 +286,16 @@ export function analyzeImage(image: DecodedImage, source: SourceReference, mode:
     for (const [id, other] of [[a, b], [b, a]]) {
       const list = neighborMap.get(id) ?? []; list.push({ other, shared: evidence.shared }); neighborMap.set(id, list);
     }
+  }
+  // Supersampled paint commonly makes one- or two-pixel transition colors at
+  // silhouettes and paint boundaries. Keep high-contrast isolated marks as
+  // possible real line art; moderate-color specks join a substantive neighbor.
+  for (const component of components) {
+    if (component.count >= settings.minRegionPixels) continue;
+    const choice = (neighborMap.get(component.id) ?? [])
+      .filter(item => components[item.other].count >= settings.minRegionPixels)
+      .sort((a, b) => rgbDistance(component, components[a.other]) - rgbDistance(component, components[b.other]) || b.shared - a.shared || a.other - b.other)[0];
+    if (choice && (component.partialAlpha === component.count || rgbDistance(component, components[choice.other]) <= settings.colorStep * 3)) parent[root(component.id)] = root(choice.other);
   }
   for (const component of components) {
     if (component.count >= settings.minRegionPixels) continue;

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { decodeAssemblyBytes, decodeProjectBytes, encodeProjectBytes, validateDocument } from './archive';
+import { decodeAssemblyBytes, decodeProjectBytes, encodeProjectBytes, HydeSchemaUnsupportedError, validateDocument } from './archive';
 import { HydeAuthoringSession } from './authoring';
 import { BrowserHostError, probeBrowserHost, runBrowserTask } from './cliBrowserRunner';
 import type { ExecuteRequest, HydeCommand, HydeDiagnostic } from './authoring';
@@ -69,6 +69,7 @@ async function projectFrom(path: string): Promise<Project> {
   try { return decodeProjectBytes(await readBytes(path)); }
   catch (error) {
     if (error instanceof CliFailure) throw error;
+    if (error instanceof HydeSchemaUnsupportedError) throw new CliFailure(error.code, error.message, 3);
     throw new CliFailure('INVALID_PROJECT', error instanceof Error ? error.message : 'Invalid Hyde project.', 3);
   }
 }
@@ -76,6 +77,7 @@ async function assemblyFrom(path: string): Promise<Assembly> {
   try { return decodeAssemblyBytes(await readBytes(path)); }
   catch (error) {
     if (error instanceof CliFailure) throw error;
+    if (error instanceof HydeSchemaUnsupportedError) throw new CliFailure(error.code, error.message, 3);
     throw new CliFailure('INVALID_PROJECT', error instanceof Error ? error.message : 'Invalid Hyde assembly.', 3);
   }
 }

@@ -37,6 +37,7 @@ await session.close();
 | --- | --- |
 | `hyde.createProject(options)`, `hyde.openProject(bytes)` | Create/open a native v1 project. The opened archive remains untouched until explicitly written. |
 | `hyde.openAssembly(bytes)` | Validate a `.hyproj`; inspect metadata or re-export its bytes. |
+| `hyde.migrateArchive(bytes, archiveType, targetVersion?)` | Validate a detached v1 archive and return unchanged bytes for an explicit write. Unsupported future schema versions fail with `HydeSchemaUnsupportedError`; no v2 conversion is claimed. |
 | `session.execute(request)` | Apply 1–1000 commands atomically with `expectedRevision`; `dryRun` returns proposed IDs/changes without committing. |
 | `session.inspect(query)` | Bounded project, scene, object, tree, assembly, timeline, asset or revision-change query; asset bytes are excluded. |
 | `session.evaluate(timeSeconds)` | Hyde evaluator output and active camera, without rendering pixels or changing authoring state. |
@@ -73,7 +74,7 @@ In Story Studio, open **View → Automation access**, choose scopes, then enable
 
 | Component | Current compatibility |
 | --- | --- |
-| Hyde archive | Native project/assembly schema v1, `.hyde`/`.hy` and `.hyproj`; unknown safe optional fields round-trip. |
+| Hyde archive | Native project/assembly schema v1, `.hyde`/`.hy` and `.hyproj`; unknown safe optional fields round-trip. The migration API is a byte-preserving v1 identity with typed future-version rejection until a new native schema is defined. |
 | Command protocol | v1, session revisions begin at 0 and are separate from archive version. |
 | Node runtime | Node 20+ with WebCrypto; authoring and archives work without a browser. |
 | Browser runtime | DOM/WebGL required for frame rendering; export formats depend on browser codecs. |

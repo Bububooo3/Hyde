@@ -1,4 +1,5 @@
-import { decodeAssemblyBytes, encodeAssemblyBytes, validateDocument } from './archive';
+import { decodeAssemblyBytes, encodeAssemblyBytes, migrateArchiveBytes, validateDocument } from './archive';
+import type { ArchiveMigrationResult } from './archive';
 import { unzipSync } from 'fflate';
 import { HydeAuthoringSession } from './authoring';
 import type { ExecuteRequest, ExecuteResult, HydeDiagnostic } from './authoring';
@@ -11,6 +12,8 @@ export type { HydeCommand, ExecuteRequest, ExecuteResult, HydeDiagnostic } from 
 export { HYDE_OPERATIONS, HYDE_COMMAND_KEYS } from './authoring';
 export { HYDE_EXECUTE_SCHEMA_V1, HYDE_INSPECT_SCHEMA_V1 } from './sdkSchema';
 export type { RenderFrameOptions, RenderedFrame } from './browserHost';
+export { HydeSchemaUnsupportedError, HYDE_ARCHIVE_VERSION } from './archive';
+export type { ArchiveMigrationResult } from './archive';
 
 /** Digest of the content emitted by Hyde's native archive codec. ZIP metadata,
  * entry order, and compression do not affect this value. */
@@ -114,6 +117,9 @@ export class HydeSDK {
   }
   async openProject(bytes: Uint8Array): Promise<HydeSession> { return new HydeSession(HydeAuthoringSession.open(bytes)); }
   async openAssembly(bytes: Uint8Array): Promise<HydeAssemblyHandle> { return new HydeAssemblyHandle(decodeAssemblyBytes(bytes)); }
+  async migrateArchive(bytes: Uint8Array, archiveType: 'project' | 'assembly', targetVersion = 1): Promise<ArchiveMigrationResult> {
+    return migrateArchiveBytes(bytes, archiveType, targetVersion);
+  }
   async connectBrowser(source: HydeSession | (() => Project)): Promise<HydeRenderHost> {
     const { HydeRenderHost } = await import('./browserHost');
     return HydeRenderHost.connect(typeof source === 'function' ? source : () => source.snapshot());

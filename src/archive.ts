@@ -13,8 +13,28 @@ const MAX_EXPANDED = 768 * 1024 * 1024;
 const MAX_MANIFEST = 16 * 1024 * 1024;
 const MAX_ENTRIES = 10000;
 const MANIFEST = 'manifest.xml';
+export const HYDE_ARCHIVE_VERSION = 1 as const;
 type DocumentModel = Project | Assembly;
 export type RecordValue = Record<string, unknown>;
+
+export class HydeSchemaUnsupportedError extends Error {
+  readonly code = 'SCHEMA_UNSUPPORTED' as const;
+  constructor(readonly archiveType: 'project' | 'assembly', readonly source: 'manifest' | 'model' | 'target',
+    readonly actualVersion: number) {
+    super(`Hyde: Unsupported ${archiveType} ${source === 'target' ? 'target ' : ''}archive schema version ${actualVersion}; supported version is ${HYDE_ARCHIVE_VERSION}.`);
+    this.name = 'HydeSchemaUnsupportedError';
+  }
+}
+
+/** A validated, detached archive for an explicit file write by the caller.
+ * No migration path beyond v1 exists until a newer native schema is defined. */
+export interface ArchiveMigrationResult {
+  archiveType: 'project' | 'assembly';
+  sourceVersion: number;
+  targetVersion: typeof HYDE_ARCHIVE_VERSION;
+  changed: boolean;
+  bytes: Uint8Array;
+}
 
 function fail(message: string): never { throw new Error(`Hyde: ${message}`); }
 export function record(value: unknown): value is RecordValue { return !!value && typeof value === 'object' && !Array.isArray(value); }
@@ -33,7 +53,8 @@ function uniqueId(value: unknown, used: Set<string>, label: string): asserts val
 export function validateDocument(model: unknown, assembly: boolean): asserts model is DocumentModel {
   check(record(model), 'The manifest is not an object.');
   check(model.format === (assembly ? 'hyde-assembly' : 'hyde'), 'Wrong document type.');
-  check(model.version === 1, 'Unsupported document version.');
+  check(Number.isSafeInteger(model.version) && Number(model.version) > 0, 'Invalid document version.');
+  if (model.version !== HYDE_ARCHIVE_VERSION) throw new HydeSchemaUnsupportedError(assembly ? 'assembly' : 'project', 'model', Number(model.version));
   string(model.name, 'Name');
   check(Array.isArray(model.elements) && Array.isArray(model.assets), 'Elements and assets must be arrays.');
   const assetIds = new Set<string>(), visualAssetIds = new Set<string>();
@@ -685,7 +706,10 @@ function unpack(bytes: Uint8Array, assembly: boolean): DocumentModel {
   const document = parser.parseFromString(xml, 'application/xml') as Document;
   check(document.getElementsByTagName('parsererror').length === 0, 'Malformed XML manifest.');
   const root = document.documentElement;
-  check(root.tagName === 'hyde-document' && root.getAttribute('version') === '1', 'Unsupported archive format or version.');
+  check(root.tagName === 'hyde-document', 'Unsupported archive format.');
+  const version = root.getAttribute('version');
+  check(version !== null && /^[1-9]\d*$/.test(version) && Number.isSafeInteger(Number(version)), 'Invalid archive schema version.');
+  if (Number(version) !== HYDE_ARCHIVE_VERSION) throw new HydeSchemaUnsupportedError(assembly ? 'assembly' : 'project', 'manifest', Number(version));
   check(root.getAttribute('type') === (assembly ? 'assembly' : 'project'), 'Wrong archive type.');
   const rootChildren = elementChildren(root);
   check(rootChildren.length === 1, 'Invalid manifest contents.');
@@ -716,3 +740,14 @@ export function encodeProjectBytes(project: Project): Uint8Array { return pack(p
 export function decodeProjectBytes(bytes: Uint8Array): Project { return unpack(bytes, false) as Project; }
 export function encodeAssemblyBytes(assembly: Assembly): Uint8Array { return pack(assembly, true); }
 export function decodeAssemblyBytes(bytes: Uint8Array): Assembly { return unpack(bytes, true) as Assembly; }
+
+/** Validate a temporary copy before handing it to a caller for an explicit
+ * write. Version 1 is a byte-preserving identity; unsupported versions are
+ * refused rather than interpreted or downgraded. */
+export function migrateArchiveBytes(bytes: Uint8Array, archiveType: 'project' | 'assembly', targetVersion: number = HYDE_ARCHIVE_VERSION): ArchiveMigrationResult {
+  const detached = Uint8Array.from(bytes);
+  unpack(detached, archiveType === 'assembly');
+  check(Number.isSafeInteger(targetVersion) && targetVersion > 0, 'Invalid target archive schema version.');
+  if (targetVersion !== HYDE_ARCHIVE_VERSION) throw new HydeSchemaUnsupportedError(archiveType, 'target', targetVersion);
+  return { archiveType, sourceVersion: HYDE_ARCHIVE_VERSION, targetVersion: HYDE_ARCHIVE_VERSION, changed: false, bytes: detached };
+}

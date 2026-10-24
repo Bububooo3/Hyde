@@ -1,9 +1,9 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { createElement, createProject } from './model';
-import { decodeAssemblyBytes, decodeProjectBytes, encodeAssemblyBytes, encodeProjectBytes } from './archive';
+import { decodeAssemblyBytes, decodeProjectBytes, encodeAssemblyBytes, encodeProjectBytes, HydeSchemaUnsupportedError, migrateArchiveBytes } from './archive';
 import type { Assembly } from './model';
-import { zipSync } from 'fflate';
+import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { createPrimaryShowcase } from './showcase';
 
 const bytesUrl = (mime: string, bytes: Uint8Array) => `data:${mime};base64,${Buffer.from(bytes).toString('base64')}`;
@@ -11,6 +11,11 @@ function archiveWithAsset(mime: string, kind: 'image' | 'video' | 'audio' | 'fon
   const project = createProject('Import safety');
   project.assets.push({ id: 'asset', name: 'reference', kind, mime, dataUrl: bytesUrl(mime, bytes) });
   return encodeProjectBytes(project);
+}
+function changeManifest(bytes: Uint8Array, edit: (xml: string) => string): Uint8Array {
+  const files = unzipSync(bytes);
+  files['manifest.xml'] = strToU8(edit(strFromU8(files['manifest.xml'])));
+  return zipSync(files);
 }
 
 describe('portable archive bytes in Node', () => {
@@ -33,7 +38,41 @@ describe('portable archive bytes in Node', () => {
     expect(decodeAssemblyBytes(encodeAssemblyBytes(assembly))).toEqual(assembly);
     expect(() => decodeProjectBytes(encodeAssemblyBytes(assembly))).toThrow(/Wrong archive type/);
     const future = { ...createProject(), version: 2 };
-    expect(() => encodeProjectBytes(future as never)).toThrow(/Unsupported document version/);
+    expect(() => encodeProjectBytes(future as never)).toThrow(HydeSchemaUnsupportedError);
+  });
+
+  it('validates a detached migration result and explicitly rejects future schema versions', () => {
+    const project = createProject('Safe migration boundary') as ReturnType<typeof createProject> & { optionalProducer?: { note: string } };
+    project.optionalProducer = { note: 'preserved' };
+    const original = encodeProjectBytes(project);
+    const source = Uint8Array.from(original);
+    const current = migrateArchiveBytes(source, 'project');
+    expect(current).toMatchObject({ archiveType: 'project', sourceVersion: 1, targetVersion: 1, changed: false });
+    expect(current.bytes).toEqual(original);
+    expect(current.bytes).not.toBe(source);
+    expect((decodeProjectBytes(current.bytes) as typeof project).optionalProducer).toEqual({ note: 'preserved' });
+    current.bytes[0] ^= 1;
+    expect(source).toEqual(original);
+
+    const futureManifest = changeManifest(original, xml => xml.replace('<hyde-document type="project" version="1">', '<hyde-document type="project" version="2">'));
+    const futureCopy = Uint8Array.from(futureManifest);
+    expect(() => migrateArchiveBytes(futureManifest, 'project')).toThrowError(HydeSchemaUnsupportedError);
+    expect(() => decodeProjectBytes(futureManifest)).toThrowError(HydeSchemaUnsupportedError);
+    expect(futureManifest).toEqual(futureCopy);
+    try { migrateArchiveBytes(futureManifest, 'project'); }
+    catch (error) { expect(error).toMatchObject({ code: 'SCHEMA_UNSUPPORTED', archiveType: 'project', source: 'manifest', actualVersion: 2 }); }
+
+    const futureModel = changeManifest(original, xml => xml.replace('<field name="version"><number>1</number></field>', '<field name="version"><number>2</number></field>'));
+    expect(() => migrateArchiveBytes(futureModel, 'project')).toThrowError(HydeSchemaUnsupportedError);
+    try { decodeProjectBytes(futureModel); }
+    catch (error) { expect(error).toMatchObject({ code: 'SCHEMA_UNSUPPORTED', source: 'model', actualVersion: 2 }); }
+    expect(() => migrateArchiveBytes(original, 'project', 2)).toThrowError(HydeSchemaUnsupportedError);
+    expect(source).toEqual(original);
+
+    const assembly: Assembly = { format: 'hyde-assembly', version: 1, name: 'Parts', elements: [createElement('ellipse')], assets: [] };
+    const assemblyBytes = encodeAssemblyBytes(assembly);
+    expect(migrateArchiveBytes(assemblyBytes, 'assembly').bytes).toEqual(assemblyBytes);
+    expect(() => migrateArchiveBytes(assemblyBytes, 'project')).toThrow(/Wrong archive type/);
   });
 
   it('rejects extreme ZIP expansion before allocating the inflated asset', () => {
