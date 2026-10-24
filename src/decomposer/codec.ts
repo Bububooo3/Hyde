@@ -81,7 +81,9 @@ export function validateDecompositionDocument(document: unknown, sourceBytes?: M
     }
     if (item.attachmentProposalRejected !== undefined && typeof item.attachmentProposalRejected !== 'boolean') throw new Error('Invalid attachment proposal rejection state.');
   }
-  for (const item of document.layers) if (!regionIds.has(item.frontRegionId) || !regionIds.has(item.backRegionId)) throw new Error('Layer relation has a missing region.');
+  for (const item of document.layers) if (!regionIds.has(item.frontRegionId) || !regionIds.has(item.backRegionId) ||
+    !['proposed', 'approved', 'rejected', 'conflict'].includes(item.status) || !['automatic', 'manual'].includes(item.origin) ||
+    item.status === 'rejected' && item.origin !== 'manual') throw new Error('Layer relation is malformed or has a missing region.');
   const approved = new Map<string, string[]>();
   for (const item of document.layers.filter(item => item.status === 'approved')) {
     const neighbors = approved.get(item.frontRegionId) ?? []; neighbors.push(item.backRegionId); approved.set(item.frontRegionId, neighbors);

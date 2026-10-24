@@ -129,7 +129,7 @@ export interface LayerRecord {
   backRegionId: string;
   origin: 'automatic' | 'manual';
   evidence: string[];
-  status: 'proposed' | 'approved' | 'conflict';
+  status: 'proposed' | 'approved' | 'rejected' | 'conflict';
 }
 
 export interface HydeExportMapping {

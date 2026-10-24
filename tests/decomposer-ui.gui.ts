@@ -18,7 +18,7 @@ test('import, edit, save/reopen and export native editable assembly', async ({ p
   await expect(page.getByRole('status')).toContainText('Automatic first pass found 2 editable regions.');
   await expect(page.locator('.left-pane .scroll-list').first().locator('.row')).toHaveCount(2);
   await page.locator('.left-pane .scroll-list').first().locator('.row').first().click();
-  await expect(page.getByText('Selected region')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Selected region' })).toBeVisible();
   const name = page.getByLabel('Part name');
   await name.fill('Handle'); await name.blur();
   await expect(page.getByRole('status')).toContainText('part.rename saved');
@@ -354,6 +354,32 @@ test('hidden proposals can be inspected, disabled and pinned without losing the 
   await suppressedRow.click();
   await page.getByRole('button', { name: 'Restore inferred region' }).click();
   await expect(inferredRow).toHaveCount(1);
+});
+
+test('reviewed layer evidence can be rejected and stays rejected in the source document', async ({ page }) => {
+  const art = makeSyntheticFixture('occlusion');
+  await page.goto('/decomposer.html');
+  await page.getByLabel('Import images').setInputFiles({ name: 'occlusion.png', mimeType: 'image/png', buffer: Buffer.from(art.bytes) });
+  await expect(page.getByRole('status')).toContainText('Automatic first pass');
+  await page.getByLabel('Reconstruction mode').selectOption('animation-ready');
+  await page.getByRole('button', { name: 'Confirm regeneration' }).click();
+  await page.locator('.left-pane .inferred-row').click();
+  const proposal = page.getByLabel('Layer proposal');
+  await expect(proposal).toBeVisible();
+  await expect(proposal).toContainText('Evidence:');
+  await proposal.getByRole('button', { name: 'Reject layer proposal' }).click();
+  await expect(page.getByRole('status')).toContainText('layer.rejectProposal saved');
+  await expect(proposal).toHaveCount(0);
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Save source' }).click();
+  const download = await downloadPromise;
+  const bytes = new Uint8Array(await readFile(await download.path()));
+  const saved = await decodeDecompositionDocument(bytes);
+  expect(saved.document.layers.some(item => item.status === 'rejected' && item.origin === 'manual')).toBe(true);
+  await page.getByLabel('Open .hydecomp').setInputFiles({ name: 'rejected.hydecomp', mimeType: 'application/zip', buffer: Buffer.from(bytes) });
+  await expect(page.getByRole('status')).toContainText('Opened rejected.hydecomp');
+  await page.locator('.left-pane .inferred-row').click();
+  await expect(proposal).toHaveCount(0);
 });
 
 test('settings and selected-path regeneration require review and preserve undo and source round trips', async ({ page }) => {

@@ -34,6 +34,7 @@ export type DecompositionEdit =
   | { op: 'part.acceptAttachmentProposal'; partId: string }
   | { op: 'part.rejectAttachmentProposal'; partId: string }
   | { op: 'layer.setRelation'; frontRegionId: string; backRegionId: string; approved: boolean }
+  | { op: 'layer.rejectProposal'; frontRegionId: string; backRegionId: string }
   | { op: 'reference.correspond'; correspondence: CorrespondenceRecord }
   | { op: 'reference.setTransform'; sourceId: string; transformToPrimary?: [number, number, number, number, number, number] }
   | { op: 'reference.alignFromLandmarks'; sourceId: string; landmarkIds: string[] }
@@ -700,6 +701,14 @@ export class DecompositionSession {
             item.frontRegionId === edit.backRegionId && item.backRegionId === edit.frontRegionId
           ));
           candidate.layers.push(relation); changed.add(id);
+        } else if (edit.op === 'layer.rejectProposal') {
+          region(edit.frontRegionId); region(edit.backRegionId);
+          const proposal = candidate.layers.find(item => item.frontRegionId === edit.frontRegionId && item.backRegionId === edit.backRegionId && item.origin === 'automatic' && item.status === 'proposed');
+          if (!proposal) fail('TARGET_NOT_FOUND: Automatic layer proposal does not exist.');
+          candidate.layers = candidate.layers.filter(item => item.id !== proposal!.id);
+          const rejected: LayerRecord = { id: `${edit.frontRegionId}_rejected_front_${edit.backRegionId}`, frontRegionId: edit.frontRegionId,
+            backRegionId: edit.backRegionId, origin: 'manual', status: 'rejected', evidence: [...proposal!.evidence, 'user rejected this automatic layer proposal'] };
+          candidate.layers.push(rejected); changed.add(rejected.id);
         } else if (edit.op === 'reference.correspond') {
           candidate.correspondences = candidate.correspondences.filter(item => item.id !== edit.correspondence.id);
           candidate.correspondences.push({ ...structuredClone(edit.correspondence), origin: 'manual' }); changed.add(edit.correspondence.id);

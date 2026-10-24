@@ -84,7 +84,7 @@ function orderedRegions(document: DecompositionDocumentV1, regions: RegionRecord
   const sort = (includeProposals: boolean): RegionRecord[] | null => {
     const frontByBack = new Map<string, Set<string>>(), indegree = new Map(base.map(region => [region.id, 0]));
     for (const layer of document.layers) {
-      if (layer.status === 'conflict' || !includeProposals && layer.status !== 'approved' || !byId.has(layer.frontRegionId) || !byId.has(layer.backRegionId)) continue;
+      if (layer.status === 'conflict' || layer.status === 'rejected' || !includeProposals && layer.status !== 'approved' || !byId.has(layer.frontRegionId) || !byId.has(layer.backRegionId)) continue;
       const fronts = frontByBack.get(layer.backRegionId) ?? new Set<string>();
       if (!fronts.has(layer.frontRegionId)) { fronts.add(layer.frontRegionId); indegree.set(layer.frontRegionId, (indegree.get(layer.frontRegionId) ?? 0) + 1); }
       frontByBack.set(layer.backRegionId, fronts);

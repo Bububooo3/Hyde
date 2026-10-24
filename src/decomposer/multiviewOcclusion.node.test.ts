@@ -41,7 +41,19 @@ it('uses an explicitly matched and aligned alternate still as reviewable occlusi
   expect(layer!.evidence.some(item => item.includes('manual-red-identity'))).toBe(true);
   expect(analyzed.diagnostics.some(item => item.code === 'OCCLUSION_UNDERCONSTRAINED' && item.evidence?.some(value => value.includes('aligned pixels')))).toBe(true);
   expect(analyzed.regions.filter(item => item.geometry.status === 'inferred' && item.generationStatus !== 'historical')).toHaveLength(0);
+  const rejected = await session.execute({ expectedRevision: session.revision, edits: [
+    { op: 'layer.rejectProposal', frontRegionId: front.id, backRegionId: back.id },
+  ] });
+  expect(rejected.ok, JSON.stringify(rejected)).toBe(true);
+  await session.analyze();
+  expect(session.snapshot().layers.find(item => item.frontRegionId === front.id && item.backRegionId === back.id)?.status).toBe('rejected');
   const reopened = await DecompositionSession.openDocument(await session.saveDocument());
-  expect(reopened.snapshot().layers.some(item => item.frontRegionId === front.id && item.backRegionId === back.id)).toBe(true);
+  expect(reopened.snapshot().layers.find(item => item.frontRegionId === front.id && item.backRegionId === back.id)?.status).toBe('rejected');
+  const approval = await reopened.execute({ expectedRevision: reopened.revision, edits: [
+    { op: 'layer.setRelation', frontRegionId: front.id, backRegionId: back.id, approved: true },
+  ] });
+  expect(approval.ok, JSON.stringify(approval)).toBe(true);
+  await reopened.analyze();
+  expect(reopened.snapshot().layers.find(item => item.frontRegionId === front.id && item.backRegionId === back.id)?.status).toBe('approved');
   await reopened.close(); await session.close();
 });
