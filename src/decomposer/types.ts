@@ -27,6 +27,8 @@ export interface DecompositionDiagnostic {
 
 export interface ReconstructionSettings {
   colorStep: number;
+  /** Larger values preserve weaker paint boundaries; absent in older v1 documents means 1. */
+  edgeSensitivity?: number;
   alphaThreshold: number;
   minRegionPixels: number;
   pathTolerance: number;
@@ -188,6 +190,7 @@ export interface RegionMask {
 export function defaultSettings(mode: DecompositionMode): ReconstructionSettings {
   return {
     colorStep: mode === 'appearance' ? 24 : 40,
+    edgeSensitivity: 1,
     alphaThreshold: 32,
     minRegionPixels: 4,
     pathTolerance: mode === 'appearance' ? 0.65 : 1.25,

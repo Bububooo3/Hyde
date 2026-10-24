@@ -277,6 +277,8 @@ export class DecompositionSession {
     const mode = options.mode ?? this.document.mode;
     const previous = this.document, priorMasks = this.masks;
     let settings = { ...(options.mode && options.mode !== previous.mode ? defaultSettings(mode) : previous.settings), ...options.settings };
+    if (settings.edgeSensitivity !== undefined && (!Number.isFinite(settings.edgeSensitivity) || settings.edgeSensitivity < .25 || settings.edgeSensitivity > 2))
+      throw new Error('INVALID_ARGUMENT: Edge sensitivity must be between 0.25 and 2.');
     let complexityNote: { sourceId: string; before: number; after: number } | undefined;
     let firstPass: { sourceId: string; fingerprint: string; result: ReturnType<typeof analyzeImage> } | undefined;
     // One first-pass retry is allowed only when the ordinary appearance pass

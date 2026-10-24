@@ -464,6 +464,7 @@ export function analyzeImage(image: DecodedImage, source: SourceReference, mode:
   const { width, height, rgba } = image, total = width * height;
   const diagnostics: DecompositionDiagnostic[] = [];
   const foreground = backgroundMask(image, settings, diagnostics, source.id);
+  const edgeSensitivity = settings.edgeSensitivity ?? 1;
   const labels = new Int32Array(total); labels.fill(-1);
   const queue = new Int32Array(total);
   const components: Component[] = [];
@@ -528,7 +529,7 @@ export function analyzeImage(image: DecodedImage, source: SourceReference, mode:
   };
   const strongMarkBoundary = (id: number, other: number) => {
     const edge = adjacency.get(`${Math.min(id, other)}:${Math.max(id, other)}`);
-    return edge !== undefined && edge.contrast / edge.shared >= Math.max(10, settings.colorStep * .6);
+    return edge !== undefined && edge.contrast / edge.shared >= Math.max(10, settings.colorStep * .6) / edgeSensitivity;
   };
   // Supersampled paint commonly makes one- or two-pixel transition colors at
   // silhouettes and paint boundaries. Keep high-contrast isolated marks as
@@ -565,8 +566,8 @@ export function analyzeImage(image: DecodedImage, source: SourceReference, mode:
     const first = components[a], second = components[b];
     const interior = Math.max(interiorEdges[a] ? interiorContrast[a] / interiorEdges[a] : 0, interiorEdges[b] ? interiorContrast[b] / interiorEdges[b] : 0);
     const contrast = edge.contrast / edge.shared;
-    if (contrast > Math.max(4, interior * 2.5 + 3) || contrast > settings.colorStep * .8) continue;
-    if (edge.coarse2 / edge.shared > settings.colorStep * .8 || edge.coarse4 / edge.shared > settings.colorStep * .8) continue;
+    if (contrast > Math.max(4, interior * 2.5 + 3) / edgeSensitivity || contrast > settings.colorStep * .8 / edgeSensitivity) continue;
+    if (edge.coarse2 / edge.shared > settings.colorStep * .8 / edgeSensitivity || edge.coarse4 / edge.shared > settings.colorStep * .8 / edgeSensitivity) continue;
     if (rgbDistance(first, second) > settings.colorStep * 2.5) continue;
     // Single-pixel strokes and tiny islands carry actual contour evidence.
     if (settings.preserveThinLines !== false && Math.min(first.maxX - first.minX + 1, first.maxY - first.minY + 1, second.maxX - second.minX + 1, second.maxY - second.minY + 1) <= 2 && interior < .5) continue;

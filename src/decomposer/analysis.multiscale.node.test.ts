@@ -43,6 +43,26 @@ describe('deterministic multi-scale color segmentation and path fidelity', () =>
     await session.close();
   });
 
+  it('lets edge sensitivity keep or join a subtle quantized paint boundary without losing source pixels', async () => {
+    const input = source(64, 32, (x, y) => x >= 4 && x < 60 && y >= 4 && y < 28
+      ? x < 32 ? [70, 70, 70, 255] : [80, 70, 70, 255]
+      : [0, 0, 0, 0]);
+    const detailed = await DecompositionSession.importSources([input], { settings: { edgeSensitivity: 2 } });
+    await detailed.analyze();
+    expect(detailed.snapshot().regions).toHaveLength(2);
+    const grouped = await DecompositionSession.importSources([input], { settings: { edgeSensitivity: .25 } });
+    await grouped.analyze();
+    expect(grouped.snapshot().regions).toHaveLength(1);
+    expect(grouped.snapshot().regions[0].pixelCount).toBe(56 * 24);
+    expect(grouped.snapshot().regions[0].geometry.quality.maskIoU).toBe(1);
+    const revision = grouped.revision;
+    await expect(grouped.analyze({ settings: { edgeSensitivity: 0 } })).rejects.toThrow(/Edge sensitivity/);
+    expect(grouped.revision).toBe(revision);
+    const reopened = await DecompositionSession.openDocument(await grouped.saveDocument());
+    expect(reopened.snapshot().settings.edgeSensitivity).toBe(.25);
+    await reopened.close(); await grouped.close(); await detailed.close();
+  });
+
   it('fits the character head and retains independently editable interior holes', async () => {
     const character = makeSyntheticFixture('articulated-character');
     const session = await DecompositionSession.importSources([character.input], { mode: 'animation-ready' });
