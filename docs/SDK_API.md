@@ -57,6 +57,8 @@ The current registered command catalog is available from `HYDE_OPERATIONS` and t
 
 `asset.add` supports opt-in `reuseExisting: true`. If an existing asset has identical staged bytes, MIME, kind and font license notice, its native ID is returned through the batch alias and no duplicate asset is added. Its existing display name is retained. Omit the option to create a distinct logical asset; `reuseExisting` cannot be combined with an explicit native ID.
 
+Inspection limits are 1–100 items per page, cursors are nonnegative integers, and tree depth is 0–8. Invalid pagination, field lists or timeline bounds return `INVALID_ARGUMENT` with a `field` name. A single-scene query applies `fields` to its scene record; its paged child elements remain available separately.
+
 `text.captureStaticLayout` runs Hyde's shape-aware text layout in a browser after `document.fonts.ready`. Set the text's around/inside shape target and static layout first, then capture at an explicit project time in the same transaction. The resulting editable text and line arrangement persist in `.hyde`. Headless Node returns `CAPABILITY_UNAVAILABLE` with a font/browser requirement; it does not approximate font metrics.
 
 ## CLI

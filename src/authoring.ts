@@ -301,13 +301,26 @@ export class HydeAuthoringSession {
   exportAssembly(rootId: string, timeSeconds?: number): Uint8Array { return encodeAssemblyBytes(makeAssembly(this.project, [rootId], timeSeconds)); }
   evaluate(timeSeconds: number): StoryElement[] { return evaluateProject(this.project, timeSeconds).map(item => structuredClone(item)); }
   inspect(query: InspectRequest) {
+    const invalid = (field: string, message: string) => ({ revision: this.revision, error: { ...diagnostic('INVALID_ARGUMENT', message), field } });
+    if (!query || typeof query !== 'object' || Array.isArray(query)) return invalid('query', 'Inspection query must be an object.');
     if (!['project', 'scenes', 'scene', 'elements', 'element', 'assets', 'asset', 'changes', 'tree', 'timeline', 'assembly'].includes(query.target))
       return { revision: this.revision, error: diagnostic('OPERATION_UNSUPPORTED', 'Inspection target is unsupported.') };
+    if (query.limit !== undefined && (!Number.isSafeInteger(query.limit) || query.limit < 1 || query.limit > 100)) return invalid('limit', 'Inspection limit must be an integer from 1 to 100.');
+    if (query.cursor !== undefined && (!Number.isSafeInteger(query.cursor) || query.cursor < 0)) return invalid('cursor', 'Inspection cursor must be a nonnegative integer.');
+    if (query.depth !== undefined && (!Number.isSafeInteger(query.depth) || query.depth < 0 || query.depth > 8)) return invalid('depth', 'Inspection depth must be an integer from 0 to 8.');
+    if (query.fields !== undefined) {
+      const fields = typeof query.fields === 'string' ? query.fields.split(',').map(part => part.trim()).filter(Boolean) : query.fields;
+      if (!Array.isArray(fields) || !fields.length || fields.length > 40 || fields.some(field => typeof field !== 'string' || !field || field.length > 100))
+        return invalid('fields', 'Inspection fields must contain 1 to 40 nonempty field names.');
+    }
+    if (query.sinceRevision !== undefined && (!Number.isSafeInteger(query.sinceRevision) || query.sinceRevision < 0)) return invalid('sinceRevision', 'sinceRevision must be a nonnegative integer.');
+    if (query.timeStart !== undefined && (!Number.isFinite(query.timeStart) || query.timeStart < 0)) return invalid('timeStart', 'Timeline start must be finite and nonnegative.');
+    if (query.timeEnd !== undefined && (!Number.isFinite(query.timeEnd) || query.timeEnd < 0)) return invalid('timeEnd', 'Timeline end must be finite and nonnegative.');
+    if (query.timeStart !== undefined && query.timeEnd !== undefined && query.timeEnd < query.timeStart) return invalid('timeEnd', 'Timeline end must not precede start.');
     if (query.sceneId !== undefined && !this.project.sequences.some(scene => scene.id === query.sceneId))
       return { revision: this.revision, error: { ...diagnostic('TARGET_NOT_FOUND', 'Scene does not exist.'), targetId: query.sceneId, field: 'sceneId' } };
-    const limit = Math.min(100, Math.max(1, query.limit ?? 25));
-    const cursor = Math.max(0, Math.floor(query.cursor ?? 0));
-    if (!Number.isFinite(limit) || !Number.isFinite(cursor)) throw new Error('Inspection limit and cursor must be finite.');
+    const limit = query.limit ?? 25;
+    const cursor = query.cursor ?? 0;
     if (query.target === 'project') return { revision: this.revision, project: projectFields({ id: this.project.id, name: this.project.name, width: this.project.width, height: this.project.height, fps: this.project.fps, duration: this.project.duration, sceneCount: this.project.sequences.length, elementCount: this.project.elements.length, assetCount: this.project.assets.length, captionCount: this.project.captions.length, folderCount: this.project.folders?.length ?? 0 }, query.fields), warnings: [] as HydeDiagnostic[] };
     if (query.target === 'changes') {
       const from = query.sinceRevision ?? this.revision;
@@ -328,20 +341,20 @@ export class HydeAuthoringSession {
     if (query.target === 'scene') {
       const scene = this.project.sequences.find(item => item.id === query.id);
       if (!scene) return { revision: this.revision, error: { ...diagnostic('TARGET_NOT_FOUND', 'Scene does not exist.'), targetId: query.id } };
-      return { revision: this.revision, scene: inspectedScene(this.project, scene), elements: this.project.elements.filter(item => item.sceneId === scene.id).slice(cursor, cursor + limit).map(item => structuredClone(item)), nextCursor: cursor + limit < this.project.elements.filter(item => item.sceneId === scene.id).length ? cursor + limit : undefined };
+      return { revision: this.revision, scene: projectFields(inspectedScene(this.project, scene), query.fields), elements: this.project.elements.filter(item => item.sceneId === scene.id).slice(cursor, cursor + limit).map(item => structuredClone(item)), nextCursor: cursor + limit < this.project.elements.filter(item => item.sceneId === scene.id).length ? cursor + limit : undefined };
     }
     if (query.target === 'tree' || query.target === 'assembly') {
       const assemblyRoot = query.target === 'assembly' ? this.project.elements.find(item => item.id === query.id) : undefined;
       if (query.target === 'assembly' && !assemblyRoot) return { revision: this.revision, error: { ...diagnostic('TARGET_NOT_FOUND', 'Assembly root does not exist.'), targetId: query.id } };
       const roots = assemblyRoot ? [assemblyRoot] : this.project.elements.filter(item => (query.sceneId === undefined || item.sceneId === query.sceneId) && !item.parentId);
-      const maxDepth = Math.min(8, Math.max(0, Math.floor(query.depth ?? 3)));
+      const maxDepth = query.depth ?? 3;
       const visit = (item: StoryElement, depth: number): Record<string, unknown> => ({ id: item.id, name: item.name, kind: item.kind, sceneId: item.sceneId, parentId: item.parentId, attachment: item.attachment, childCount: this.project.elements.filter(child => child.parentId === item.id).length, ...(depth < maxDepth ? { children: this.project.elements.filter(child => child.parentId === item.id).sort((a, b) => a.id.localeCompare(b.id)).slice(0, 100).map(child => visit(child, depth + 1)) } : {}) });
       const ordered = [...roots].sort((a, b) => a.id.localeCompare(b.id));
       return { revision: this.revision, items: ordered.slice(cursor, cursor + limit).map(root => visit(root, 0)), nextCursor: cursor + limit < ordered.length ? cursor + limit : undefined };
     }
     if (query.target === 'timeline') {
       const start = query.timeStart ?? 0, end = query.timeEnd ?? this.project.duration;
-      if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) throw new Error('Timeline range is invalid.');
+      if (end < start) return invalid('timeEnd', 'Timeline end must not precede start.');
       const items = this.project.elements.filter(item => (query.sceneId === undefined || item.sceneId === query.sceneId) && item.start < end && item.start + item.duration >= start).sort((a, b) => a.id.localeCompare(b.id));
       return { revision: this.revision, range: { start, end }, items: items.slice(cursor, cursor + limit).map(item => ({ id: item.id, name: item.name, kind: item.kind, sceneId: item.sceneId, start: item.start, duration: item.duration, tracks: item.tracks.map(track => ({ property: track.property, keyframes: track.keyframes.filter(key => key.time >= start - item.start && key.time <= end - item.start).slice(0, 100) })), motionBehaviors: item.motionBehaviors?.map(behavior => ({ id: behavior.id, type: behavior.type })), assemblyClips: item.assemblyClips?.map(clip => ({ id: clip.id, name: clip.name, duration: clip.duration })), clipInstances: item.clipInstances?.map(instance => ({ id: instance.id, clipId: instance.clipId, start: instance.start, duration: instance.duration })) })), captions: this.project.captions.filter(caption => (query.sceneId === undefined || caption.sceneId === query.sceneId) && caption.start < end && caption.end >= start).slice(0, 100).map(caption => ({ id: caption.id, text: caption.text, start: caption.start, end: caption.end })), nextCursor: cursor + limit < items.length ? cursor + limit : undefined };
     }

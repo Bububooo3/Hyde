@@ -39,10 +39,26 @@ describe('authoring transactions in Node', () => {
     if (!created.ok) return;
     const placedId = created.idMap.$placed;
     expect(session.inspect({ target: 'scene', id: placedId })).toMatchObject({ scene: { id: placedId, duration: 2, speed: 3 } });
+    expect(session.inspect({ target: 'scene', id: placedId, fields: 'id,speed' })).toMatchObject({ scene: { id: placedId, speed: 3 } });
+    expect((session.inspect({ target: 'scene', id: placedId, fields: 'id,speed' }) as { scene: Record<string, unknown> }).scene).not.toHaveProperty('duration');
     expect(session.inspect({ target: 'scenes', fields: 'id,speed' })).toMatchObject({ items: expect.arrayContaining([{ id: placedId, speed: 3 }]) });
     const opened = HydeAuthoringSession.open(session.exportProject());
     expect(opened.snapshot().sequences.find(scene => scene.id === placedId)).not.toHaveProperty('speed');
     expect(opened.inspect({ target: 'scene', id: placedId })).toMatchObject({ scene: { speed: 3 } });
+  });
+
+  it('returns target-specific diagnostics for malformed bounded inspection requests', () => {
+    const session = HydeAuthoringSession.create();
+    for (const [field, query] of [
+      ['limit', { target: 'scenes', limit: 0 }],
+      ['cursor', { target: 'elements', cursor: -1 }],
+      ['depth', { target: 'tree', depth: 9 }],
+      ['fields', { target: 'project', fields: [] }],
+      ['timeEnd', { target: 'timeline', timeStart: 3, timeEnd: 2 }],
+    ] as const) {
+      expect(session.inspect(query as never)).toMatchObject({ revision: 0, error: { code: 'INVALID_ARGUMENT', field } });
+    }
+    expect(session.inspect({ target: 'scenes', limit: 1, cursor: 0 })).toMatchObject({ items: expect.any(Array) });
   });
 
   it('configures a new project with project.create and refuses archive replacement', async () => {
