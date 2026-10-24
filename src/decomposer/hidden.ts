@@ -19,7 +19,7 @@ const MAX_HIDDEN_PIXELS = 500_000;
 const DIRECTIONS = [[-1, 0], [1, 0], [0, -1], [0, 1]] as const;
 const EIGHT_NEIGHBORS = [-1, 0, 1] as const;
 
-function stableId(back: string, front: string): string {
+export function stableId(back: string, front: string): string {
   let value = 0xcbf29ce484222325n;
   for (const code of `${back}/${front}`) value = (value ^ BigInt(code.charCodeAt(0))) * 0x100000001b3n & 0xffffffffffffffffn;
   return `hidden_${value.toString(16).padStart(16, '0')}`;
@@ -94,7 +94,7 @@ function opaqueAndEnclosed(front: RegionRecord, frontMask: RegionMask, back: Reg
   return { contact: contact / perimeter };
 }
 
-function erodedInterior(front: RegionRecord, mask: RegionMask, rgba: Uint8Array, imageWidth: number): { bounds: Box; mask: RegionMask; count: number } | null {
+export function erodedInterior(front: RegionRecord, mask: RegionMask, rgba: Uint8Array, imageWidth: number): { bounds: Box; mask: RegionMask; count: number } | null {
   const { width, height } = mask;
   let current = Uint8Array.from(mask.bytes);
   for (let pass = 0; pass < 2; pass++) {
@@ -135,7 +135,7 @@ function connected(mask: RegionMask, count: number): boolean {
 }
 
 /** Raster-center containment plus two-pixel inset limits any exported hidden path to pixels covered by the front path. */
-function coveredInSourcePose(hidden: RegionRecord, front: RegionRecord, frontMask: RegionMask, rgba: Uint8Array, imageWidth: number): boolean {
+export function coveredInSourcePose(hidden: RegionRecord, front: RegionRecord, frontMask: RegionMask, rgba: Uint8Array, imageWidth: number): boolean {
   const frontPath = pathPoints(front), hiddenPath = pathPoints(hidden);
   if (!frontPath || !hiddenPath) return false;
   const { bounds } = hidden;

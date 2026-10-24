@@ -1,6 +1,8 @@
 // @vitest-environment node
 import { expect, it } from 'vitest';
-import { encodePng } from './image';
+import { runBrowserTask } from '../cliBrowserRunner';
+import { decodePng, encodePng } from './image';
+import { compareNativeRender } from './quality';
 import { DecompositionSession } from './session';
 
 const width = 48, height = 40;
@@ -40,13 +42,25 @@ it('uses an explicitly matched and aligned alternate still as reviewable occlusi
   expect(layer).toBeTruthy();
   expect(layer!.evidence.some(item => item.includes('manual-red-identity'))).toBe(true);
   expect(analyzed.diagnostics.some(item => item.code === 'OCCLUSION_UNDERCONSTRAINED' && item.evidence?.some(value => value.includes('aligned pixels')))).toBe(true);
-  expect(analyzed.regions.filter(item => item.geometry.status === 'inferred' && item.generationStatus !== 'historical')).toHaveLength(0);
+  const hidden = analyzed.regions.filter(item => item.geometry.status === 'inferred' && item.generationStatus !== 'historical');
+  expect(hidden).toHaveLength(1);
+  expect(hidden[0].partId).toBe(back.partId);
+  expect(hidden[0].confidence.reasons.some(item => item.includes('uncertain'))).toBe(true);
+  expect(analyzed.layers.some(item => item.frontRegionId === front.id && item.backRegionId === hidden[0].id && item.status === 'proposed')).toBe(true);
+  if (process.env.HYDE_TEST_BROWSER) {
+    const native = await session.exportHyde({ format: 'hyde' });
+    const frame = await runBrowserTask(native.project, { kind: 'preview', options: { timeSeconds: 0, width, height, format: 'png' } });
+    const quality = compareNativeRender(decodePng(still(true)), frame.bytes, analyzed);
+    expect(quality.silhouette.iou).toBeGreaterThan(.99);
+    expect(quality.color.meanAbsoluteSrgbChannelError!).toBeLessThan(.02);
+  }
   const rejected = await session.execute({ expectedRevision: session.revision, edits: [
     { op: 'layer.rejectProposal', frontRegionId: front.id, backRegionId: back.id },
   ] });
   expect(rejected.ok, JSON.stringify(rejected)).toBe(true);
   await session.analyze();
   expect(session.snapshot().layers.find(item => item.frontRegionId === front.id && item.backRegionId === back.id)?.status).toBe('rejected');
+  expect(session.snapshot().regions.filter(item => item.geometry.status === 'inferred' && item.generationStatus !== 'historical')).toHaveLength(0);
   const reopened = await DecompositionSession.openDocument(await session.saveDocument());
   expect(reopened.snapshot().layers.find(item => item.frontRegionId === front.id && item.backRegionId === back.id)?.status).toBe('rejected');
   const approval = await reopened.execute({ expectedRevision: reopened.revision, edits: [
@@ -55,5 +69,6 @@ it('uses an explicitly matched and aligned alternate still as reviewable occlusi
   expect(approval.ok, JSON.stringify(approval)).toBe(true);
   await reopened.analyze();
   expect(reopened.snapshot().layers.find(item => item.frontRegionId === front.id && item.backRegionId === back.id)?.status).toBe('approved');
+  expect(reopened.snapshot().regions.filter(item => item.geometry.status === 'inferred' && item.generationStatus !== 'historical')).toHaveLength(1);
   await reopened.close(); await session.close();
 });

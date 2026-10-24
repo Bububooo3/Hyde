@@ -373,8 +373,17 @@ export class DecompositionSession {
       candidate.layers.push(...junctions.layers);
       candidate.diagnostics.push(...junctions.diagnostics);
     }
+    const crossView = proposeCrossViewOcclusion(candidate, masks, previous.correspondences.filter(item => item.origin === 'manual'),
+      this.images.get(primary.id)!.rgba, previous.layers);
+    const crossHiddenIds = new Set(crossView.regions.map(region => region.id));
+    candidate.layers.push(...crossView.layers.filter(layer => !crossHiddenIds.has(layer.backRegionId)));
+    candidate.diagnostics.push(...crossView.diagnostics.filter(item => !item.regionId || !crossHiddenIds.has(item.regionId)));
     if (mode === 'animation-ready' && settings.inferHiddenGeometry) {
       const proposed = proposeHiddenContinuations(candidate, masks, this.images.get(primary.id)!.rgba);
+      proposed.regions.push(...crossView.regions);
+      for (const [id, mask] of crossView.masks) proposed.masks.set(id, mask);
+      proposed.layers.push(...crossView.layers.filter(layer => crossHiddenIds.has(layer.backRegionId)));
+      proposed.diagnostics.push(...crossView.diagnostics.filter(item => item.regionId && crossHiddenIds.has(item.regionId)));
       const previousById = new Map(previous.regions.map(region => [region.id, region]));
       const hasEditedDescendant = (root: RegionRecord): boolean => {
         const pending = [...root.lineage.children], visited = new Set<string>();
@@ -444,9 +453,6 @@ export class DecompositionSession {
     const attachments = proposePartAttachments(candidate, masks);
     for (const part of candidate.parts) if (!part.attachmentLocked) part.attachmentProposal = attachments.proposals.get(part.id);
     candidate.diagnostics.push(...attachments.diagnostics);
-    const crossView = proposeCrossViewOcclusion(candidate, masks, previous.correspondences.filter(item => item.origin === 'manual'));
-    candidate.layers.push(...crossView.layers);
-    candidate.diagnostics.push(...crossView.diagnostics);
     const liveIds = new Set(candidate.regions.filter(active).map(region => region.id));
     const storedIds = new Set(candidate.regions.map(region => region.id));
     const suppressedIds = new Set(candidate.regions.filter(region => region.suppressed).map(region => region.id));
