@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, PointerEvent as ReactPointerEvent } from 'react';
-import type { DecompositionDocumentV1, DecompositionEdit, DecompositionMode, PartRecord, ReconstructionSettings, RegionMask, RegionRecord } from '../decomposer';
+import type { DecompositionDocumentV1, DecompositionEdit, DecompositionMode, HydeDecompositionExport, PartRecord, ReconstructionSettings, RegionMask, RegionRecord } from '../decomposer';
 import { poseNativeDecomposition } from '../decomposer/pose';
 import type { ReconstructionQualityReport } from '../decomposer/quality';
-import type { Project, ShapePath } from '../model';
+import type { ShapePath } from '../model';
 import { removePathPoint, setPathHandle, splitPathSegment } from '../shapePath';
 import { DecomposerWorkerClient } from './client';
 
@@ -249,7 +249,7 @@ export default function App() {
     if (!documentModel || busy) return;
     setBusy(true); setStatus(preview ? 'Rendering the native Hyde project…' : `Exporting editable .${exportFormat}…`);
     try {
-      const result = await client.current.call<{ bytes: Uint8Array; project: Project; mapping: { partIds: Record<string, string>; regionIds: Record<string, string> }; warnings: { message: string }[] }>('export', { options: { format: preview ? 'hyde' : exportFormat, allowHoleApproximation } });
+      const result = await client.current.call<HydeDecompositionExport>('export', { options: { format: preview ? 'hyde' : exportFormat, allowHoleApproximation } });
       if (preview) {
         clearNativePreview();
         const posed = pose ? poseNativeDecomposition(result, pose.partId, pose.value) : undefined;

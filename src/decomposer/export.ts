@@ -2,9 +2,10 @@ import { HydeAuthoringSession } from '../authoring';
 import type { HydeCommand } from '../authoring';
 import type { Project, ShapePath } from '../model';
 import { decodeAssemblyBytes, decodeProjectBytes } from '../archive';
+import { sha256 } from './codec';
 import { encodePng } from './image';
 import type { DecodedImage } from './image';
-import type { DecompositionDiagnostic, DecompositionDocumentV1, PartRecord, RegionMask, RegionRecord } from './types';
+import type { DecompositionDiagnostic, DecompositionDocumentV1, HydeExportMapping, PartRecord, RegionMask, RegionRecord } from './types';
 
 export interface HydeDecompositionExportOptions {
   format: 'hyproj' | 'hyde';
@@ -19,7 +20,7 @@ export interface HydeDecompositionExportOptions {
 export interface HydeDecompositionExport {
   bytes: Uint8Array;
   warnings: DecompositionDiagnostic[];
-  mapping: { partIds: Record<string, string>; regionIds: Record<string, string> };
+  mapping: HydeExportMapping;
   project: Project;
 }
 
@@ -136,7 +137,7 @@ export async function exportNativeDecomposition(document: DecompositionDocumentV
   ];
   const rootId = `hc_${document.id}_root`;
   commands.push({ op: 'element.create', args: { id: rootId, kind: 'group', properties: { name: `${projectName} assembly`, x: 0, y: 0, width: 0, height: 0, pivotX: 0, pivotY: 0, fill: 'transparent', start: 0, duration } } });
-  const partIds: Record<string, string> = {}, regionIds: Record<string, string> = {};
+  const partIds: Record<string, string> = {}, regionIds: Record<string, string> = {}, geometryIds: Record<string, string> = {};
   const parts: PartRecord[] = document.parts.filter(part => part.regionIds.some(id => activeIds.has(id)));
   for (const part of parts) {
     const id = `hc_${part.id}`; partIds[part.id] = id;
@@ -152,7 +153,7 @@ export async function exportNativeDecomposition(document: DecompositionDocumentV
   for (const region of ordered) {
     const mask = masks.get(region.maskId);
     if (!mask) throw new Error(`Region ${region.id} mask is missing.`);
-    const id = `hc_${region.id}`; regionIds[region.id] = id;
+    const id = `hc_${region.id}`; regionIds[region.id] = id; geometryIds[region.geometry.id] = id;
     const part = partById.get(region.partId ?? '');
     const texture = region.geometry.texture === 'source-crop' || region.holeCount > (regionPath(region).holes?.length ?? 0) || Boolean(mask.alpha);
     let assetId: string | undefined;
@@ -180,5 +181,17 @@ export async function exportNativeDecomposition(document: DecompositionDocumentV
   const bytes = options.format === 'hyproj' ? sdk.exportAssembly(rootId, 0) : sdk.exportProject();
   // Read through the native codec as an extra adapter boundary check.
   if (options.format === 'hyproj') decodeAssemblyBytes(bytes); else decodeProjectBytes(bytes);
-  return { bytes, warnings, mapping: { partIds, regionIds }, project: sdk.snapshot() };
+  const sourceSnapshot = structuredClone(document);
+  delete sourceSnapshot.exportMapping;
+  const maskHashes = [];
+  for (const [id, mask] of [...masks].sort(([a], [b]) => a.localeCompare(b)))
+    maskHashes.push([id, await sha256(mask.bytes), mask.alpha ? await sha256(mask.alpha) : null]);
+  const sourceFingerprint = await sha256(new TextEncoder().encode(JSON.stringify({ document: sourceSnapshot, maskHashes })));
+  const mapping: HydeExportMapping = {
+    sdkVersion: sdk.capabilities().sdkVersion, nativeSchemaVersion: 1, format: options.format,
+    partIds, regionIds, geometryIds,
+    options: { name: projectName, width, height, duration, allowHoleApproximation: Boolean(options.allowHoleApproximation) },
+    warnings: warnings.map(item => item.code), sourceFingerprint, outputFingerprint: await sha256(bytes),
+  };
+  return { bytes, warnings, mapping, project: sdk.snapshot() };
 }

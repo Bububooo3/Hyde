@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
+import { decodeDecompositionDocument } from '../src/decomposer/codec';
 import { encodePng } from '../src/decomposer/image';
 import { makeSyntheticFixture } from './decomposerSyntheticFixtures';
 
@@ -30,11 +31,18 @@ test('import, edit, save/reopen and export native editable assembly', async ({ p
   const saved = await savePromise;
   expect(saved.suggestedFilename()).toMatch(/\.hydecomp$/);
   const sourceBytes = await readFile(await saved.path());
+  expect(sourceBytes.subarray(0, 2).toString()).toBe('PK');
   const exportPromise = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Export', exact: true }).click();
   const exported = await exportPromise;
   expect(exported.suggestedFilename()).toMatch(/\.hyproj$/);
   expect((await readFile(await exported.path())).subarray(0, 2).toString()).toBe('PK');
+  const mappedSave = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Save source' }).click();
+  const mappedBytes = new Uint8Array(await readFile(await (await mappedSave).path()));
+  const mapped = await decodeDecompositionDocument(mappedBytes);
+  expect(mapped.document.exportMapping).toMatchObject({ format: 'hyproj', sdkVersion: '0.1.0' });
+  expect(Object.keys(mapped.document.exportMapping!.regionIds)).toHaveLength(2);
   await page.getByRole('button', { name: 'Preview in Hyde' }).click();
   await expect(page.getByAltText('Native Hyde render of current export')).toBeVisible();
   const metrics = page.getByLabel('Native quality metrics');
@@ -50,7 +58,7 @@ test('import, edit, save/reopen and export native editable assembly', async ({ p
   await page.getByLabel('Show residual overlay').uncheck();
   await expect(residual).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath('decomposer-ui.png'), fullPage: true });
-  await page.getByLabel('Open .hydecomp').setInputFiles({ name: 'restored.hydecomp', mimeType: 'application/zip', buffer: sourceBytes });
+  await page.getByLabel('Open .hydecomp').setInputFiles({ name: 'restored.hydecomp', mimeType: 'application/zip', buffer: Buffer.from(mappedBytes) });
   await expect(page.getByRole('status')).toContainText('Opened restored.hydecomp');
   await expect(page.locator('.left-pane .scroll-list').first().locator('.row')).toHaveCount(2);
   await expect(page.getByText('Handle', { exact: true }).first()).toBeVisible();

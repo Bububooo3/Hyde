@@ -107,6 +107,25 @@ export function validateDecompositionDocument(document: unknown, sourceBytes?: M
     } else if (pair.landmarkPoints !== undefined) throw new Error('Only landmark correspondences can store source-space point pairs.');
     correspondenceIds.add(String(item.id));
   }
+  if (document.exportMapping !== undefined) {
+    const mapping = document.exportMapping;
+    const digest = (value: unknown) => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
+    const options = record(mapping) && record(mapping.options) ? mapping.options : undefined;
+    if (!record(mapping) || typeof mapping.sdkVersion !== 'string' || mapping.sdkVersion.length > 64 ||
+      mapping.nativeSchemaVersion !== 1 || !['hyde', 'hyproj'].includes(String(mapping.format)) ||
+      !digest(mapping.sourceFingerprint) || !digest(mapping.outputFingerprint) || !options ||
+      typeof options.name !== 'string' || options.name.length > 512 ||
+      !['width', 'height', 'duration'].every(key => typeof options[key] === 'number' && Number.isFinite(options[key]) && Number(options[key]) > 0) ||
+      typeof options.allowHoleApproximation !== 'boolean' ||
+      !Array.isArray(mapping.warnings) || mapping.warnings.length > 20_000 || mapping.warnings.some(value => typeof value !== 'string' || value.length > 128))
+      throw new Error('Invalid native export mapping.');
+    const geometryIds = new Set((document as unknown as DecompositionDocumentV1).regions.map(region => region.geometry.id));
+    for (const [field, known] of [['partIds', partIds], ['regionIds', regionIds], ['geometryIds', geometryIds]] as const) {
+      const values = mapping[field];
+      if (!record(values) || Object.keys(values).length > 20_000 || Object.entries(values).some(([key, value]) =>
+        !known.has(key) || !safeId(key) || !safeId(String(value)))) throw new Error('Invalid native export mapping IDs.');
+    }
+  }
 }
 
 interface Manifest {

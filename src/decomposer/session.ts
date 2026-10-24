@@ -303,6 +303,7 @@ export class DecompositionSession {
     }
     const fingerprint = await sha256(new TextEncoder().encode(JSON.stringify(settings)));
     const candidate = structuredClone(previous), masks = cloneMaskMap(priorMasks);
+    delete candidate.exportMapping;
     candidate.algorithmVersion = ALGORITHM_VERSION;
     candidate.mode = mode; candidate.settings = settings; candidate.regions = []; candidate.parts = []; candidate.layers = []; candidate.diagnostics = [];
     if (complexityNote) candidate.diagnostics.push({ code: 'AUTO_COMPLEXITY_REDUCTION', severity: 'info', sourceId: complexityNote.sourceId,
@@ -506,7 +507,12 @@ export class DecompositionSession {
     return encodeDecompositionDocument(this.document, this.sourceBytes, this.masks, new Map([...this.images].map(([id, image]) => [id, image.rgba])));
   }
   async exportHyde(options: HydeDecompositionExportOptions): Promise<HydeDecompositionExport> {
-    this.ensureOpen(); return exportNativeDecomposition(this.document, this.masks, this.images, options);
+    this.ensureOpen();
+    const result = await exportNativeDecomposition(this.document, this.masks, this.images, options);
+    // A successful export records provenance for the next .hydecomp save. This
+    // derived metadata does not change the authoring revision or undo stack.
+    this.document.exportMapping = structuredClone(result.mapping);
+    return result;
   }
   private saveUndo() { this.undoStack.push({ document: structuredClone(this.document), masks: cloneMaskMap(this.masks) }); if (this.undoStack.length > 64) this.undoStack.shift(); this.redoStack = []; }
   undo(expectedRevision: number): boolean {
@@ -532,6 +538,7 @@ export class DecompositionSession {
     if (request.expectedRevision !== this.currentRevision) return { ok: false, revision: this.revision, error: { code: 'DOCUMENT_CONFLICT', message: 'Expected revision differs from the current document.' } };
     if (!request.edits.length || request.edits.length > 1000) return { ok: false, revision: this.revision, error: { code: 'RESOURCE_LIMIT', message: 'A batch needs 1 to 1000 edits.' } };
     const candidate = structuredClone(this.document), masks = cloneMaskMap(this.masks), changed = new Set<string>();
+    delete candidate.exportMapping;
     const region = (id: string) => candidate.regions.find(item => item.id === id && active(item)) ?? fail(`Region ${id} does not exist.`);
     const part = (id: string) => candidate.parts.find(item => item.id === id) ?? fail(`Part ${id} does not exist.`);
     try {

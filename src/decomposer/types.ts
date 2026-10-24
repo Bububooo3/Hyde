@@ -132,6 +132,19 @@ export interface LayerRecord {
   status: 'proposed' | 'approved' | 'conflict';
 }
 
+export interface HydeExportMapping {
+  sdkVersion: string;
+  nativeSchemaVersion: number;
+  format: 'hyde' | 'hyproj';
+  partIds: Record<string, string>;
+  regionIds: Record<string, string>;
+  geometryIds: Record<string, string>;
+  options: { name: string; width: number; height: number; duration: number; allowHoleApproximation: boolean };
+  warnings: string[];
+  sourceFingerprint: string;
+  outputFingerprint: string;
+}
+
 export interface DecompositionDocumentV1 {
   format: 'hyde-decomposition';
   schemaVersion: 1;
@@ -148,7 +161,7 @@ export interface DecompositionDocumentV1 {
   correspondences: CorrespondenceRecord[];
   layers: LayerRecord[];
   diagnostics: DecompositionDiagnostic[];
-  exportMapping?: { sdkVersion: string; partIds: Record<string, string>; regionIds: Record<string, string>; warnings: string[]; fingerprint: string };
+  exportMapping?: HydeExportMapping;
   history: { revision: number; operation: string; at: string; affectedIds: string[] }[];
 }
 
