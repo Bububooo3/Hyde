@@ -134,7 +134,7 @@ export function makeSyntheticFixture(name: SyntheticFixtureName): SyntheticFixtu
       art = new Raster(64, 64);
       art.rect(9, 9, 55, 55, [194, 79, 61]);
       art.rect(23, 18, 43, 42, [61, 125, 196]);
-      limitation = 'A flat enclosed front patch does not reveal hidden back geometry; the obscured area is a native-path hole approximation.';
+      limitation = 'A flat enclosed front patch does not reveal hidden back geometry; its visible opening can be a native editable hole.';
       break;
     case 'gradient-texture':
       art = new Raster(48, 48);

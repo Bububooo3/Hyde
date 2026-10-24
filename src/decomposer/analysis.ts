@@ -718,6 +718,10 @@ export function analyzeImage(image: DecodedImage, source: SourceReference, mode:
   if (regions.length > 300 && regions.filter(region => region.pixelCount < settings.minRegionPixels).length / regions.length >= .7)
     diagnostics.push({ code: 'INSUFFICIENT_STRUCTURE', severity: 'error', sourceId: source.id, message: `The first pass made ${regions.length} mostly tiny fragments, which are not useful native parts.`, suggestion: 'Crop to the intended subject, raise color step, or merge annotated regions before native export.', evidence: ['more than 300 regions', 'at least 70% are smaller than the configured minimum region size'] });
   if (mode === 'animation-ready' && parts.length > 1) diagnostics.push({ code: 'OCCLUSION_UNDERCONSTRAINED', severity: 'info', sourceId: source.id, message: 'A single view does not justify hidden surfaces or moving joints; parts remain independent until confirmed.', suggestion: 'Adjust pivots and attachments or add another reference.' });
+  if (mode === 'animation-ready' && parts.length > 1 && Math.min(width, height) < 96)
+    diagnostics.push({ code: 'LOW_SOURCE_RESOLUTION', severity: 'warning', sourceId: source.id,
+      message: `${width}×${height} source pixels can leave visible stair steps when a recovered part rotates.`,
+      suggestion: 'Use a larger antialiased reference or smooth editable path anchors before posing the part.' });
   if (source.mime !== 'image/png') diagnostics.push({ code: 'COLOR_SPACE_WARNING', severity: 'info', sourceId: source.id, message: 'JPEG/WebP decoding can differ by browser color management; the canonical decoded RGBA is saved in the working document.' });
   return { regions, parts, masks, layers, diagnostics };
 }
