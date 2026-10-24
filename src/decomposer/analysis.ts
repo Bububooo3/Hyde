@@ -522,6 +522,14 @@ export function analyzeImage(image: DecodedImage, source: SourceReference, mode:
       const list = neighborMap.get(id) ?? []; list.push({ other, shared: evidence.shared }); neighborMap.set(id, list);
     }
   }
+  const narrowMark = (item: Component) => {
+    const width = item.maxX - item.minX + 1, height = item.maxY - item.minY + 1;
+    return Math.min(width, height) <= 2 && Math.max(width, height) >= 3;
+  };
+  const strongMarkBoundary = (id: number, other: number) => {
+    const edge = adjacency.get(`${Math.min(id, other)}:${Math.max(id, other)}`);
+    return edge !== undefined && edge.contrast / edge.shared >= Math.max(10, settings.colorStep * .6);
+  };
   // Supersampled paint commonly makes one- or two-pixel transition colors at
   // silhouettes and paint boundaries. Keep high-contrast isolated marks as
   // possible real line art; moderate-color specks join a substantive neighbor.
@@ -530,7 +538,8 @@ export function analyzeImage(image: DecodedImage, source: SourceReference, mode:
     const choice = (neighborMap.get(component.id) ?? [])
       .filter(item => components[item.other].count >= settings.minRegionPixels)
       .sort((a, b) => rgbDistance(component, components[a.other]) - rgbDistance(component, components[b.other]) || b.shared - a.shared || a.other - b.other)[0];
-    if (choice && (component.partialAlpha === component.count || rgbDistance(component, components[choice.other]) <= settings.colorStep * 3)) parent[root(component.id)] = root(choice.other);
+    if (choice && !(settings.preserveThinLines !== false && narrowMark(component) && strongMarkBoundary(component.id, choice.other))
+      && (component.partialAlpha === component.count || rgbDistance(component, components[choice.other]) <= settings.colorStep * 3)) parent[root(component.id)] = root(choice.other);
   }
   for (const component of components) {
     if (component.count >= settings.minRegionPixels) continue;
@@ -539,7 +548,8 @@ export function analyzeImage(image: DecodedImage, source: SourceReference, mode:
       return { other, shared, distance: rgbDistance(component, components[other]), contrast: edge.contrast / edge.shared };
     })
       .sort((a, b) => b.shared - a.shared || a.distance - b.distance || a.other - b.other);
-    if (choices[0] && choices[0].distance <= settings.colorStep * 2.5 && choices[0].contrast <= Math.max(8, settings.colorStep * .8)) parent[root(component.id)] = root(choices[0].other);
+    if (choices[0] && !(settings.preserveThinLines !== false && narrowMark(component) && strongMarkBoundary(component.id, choices[0].other))
+      && choices[0].distance <= settings.colorStep * 2.5 && choices[0].contrast <= Math.max(8, settings.colorStep * .8)) parent[root(component.id)] = root(choices[0].other);
   }
   // Quantization can cut a smooth painted field into bands. At each candidate
   // seam compare original pixel contrast with variation *inside* both bands,
@@ -559,7 +569,7 @@ export function analyzeImage(image: DecodedImage, source: SourceReference, mode:
     if (edge.coarse2 / edge.shared > settings.colorStep * .8 || edge.coarse4 / edge.shared > settings.colorStep * .8) continue;
     if (rgbDistance(first, second) > settings.colorStep * 2.5) continue;
     // Single-pixel strokes and tiny islands carry actual contour evidence.
-    if (Math.min(first.maxX - first.minX + 1, first.maxY - first.minY + 1, second.maxX - second.minX + 1, second.maxY - second.minY + 1) <= 2 && interior < .5) continue;
+    if (settings.preserveThinLines !== false && Math.min(first.maxX - first.minX + 1, first.maxY - first.minY + 1, second.maxX - second.minX + 1, second.maxY - second.minY + 1) <= 2 && interior < .5) continue;
     parent[Math.max(root(a), root(b))] = Math.min(root(a), root(b));
   }
   const grouped = new Map<number, Component>();

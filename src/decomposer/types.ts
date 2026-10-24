@@ -33,6 +33,8 @@ export interface ReconstructionSettings {
   maxPathPoints: number;
   preserveTexture: boolean;
   inferHiddenGeometry: boolean;
+  /** Keep narrow, high-contrast source marks distinct during small-island cleanup. Missing in older v1 documents means enabled. */
+  preserveThinLines?: boolean;
   groupingStrength: number;
 }
 
@@ -192,6 +194,7 @@ export function defaultSettings(mode: DecompositionMode): ReconstructionSettings
     maxPathPoints: 512,
     preserveTexture: true,
     inferHiddenGeometry: mode === 'animation-ready',
+    preserveThinLines: true,
     groupingStrength: mode === 'appearance' ? 0.35 : 0.65,
   };
 }

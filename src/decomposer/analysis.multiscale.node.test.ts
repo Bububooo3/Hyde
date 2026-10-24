@@ -89,4 +89,25 @@ describe('deterministic multi-scale color segmentation and path fidelity', () =>
     expect(withoutTexture.snapshot().diagnostics.map(item => item.code)).toContain('TEXTURE_APPROXIMATION');
     await withoutTexture.close();
   });
+
+  it('lets the artist preserve a narrow high-contrast mark during small-island cleanup', async () => {
+    const input = source(48, 40, (x, y) => {
+      if (x >= 4 && x < 28 && y >= 4 && y < 32) return [70, 70, 70, 255];
+      if (x >= 28 && x < 40 && y === 18) return [90, 70, 70, 255];
+      return [0, 0, 0, 0];
+    });
+    const kept = await DecompositionSession.importSources([input], { settings: { minRegionPixels: 16, preserveThinLines: true } });
+    await kept.analyze();
+    expect(kept.snapshot().regions).toHaveLength(2);
+    expect(kept.snapshot().regions.some(region => region.pixelCount === 12)).toBe(true);
+    const saved = await kept.saveDocument();
+    const reopened = await DecompositionSession.openDocument(saved);
+    expect(reopened.snapshot().settings.preserveThinLines).toBe(true);
+    await reopened.close(); await kept.close();
+    const merged = await DecompositionSession.importSources([input], { settings: { minRegionPixels: 16, preserveThinLines: false } });
+    await merged.analyze();
+    expect(merged.snapshot().regions).toHaveLength(1);
+    expect(merged.snapshot().regions[0].pixelCount).toBe(24 * 28 + 12);
+    await merged.close();
+  });
 });
