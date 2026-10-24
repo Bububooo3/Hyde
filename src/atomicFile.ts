@@ -9,10 +9,11 @@ async function exists(path: string): Promise<boolean> {
 }
 
 /** Commit a complete file, retaining the previous destination as a recoverable backup. */
-export async function atomicWrite(destination: string, bytes: Uint8Array, overwrite: 'backup' | 'fail' = 'backup'): Promise<{ output: string; backup?: string }> {
+export async function atomicWrite(destination: string, bytes: Uint8Array, overwrite: 'backup' | 'fail' = 'backup',
+  hooks?: { beforeCommit?: () => Promise<void> | void }): Promise<{ output: string; backup?: string }> {
   const target = resolve(destination), folder = dirname(target);
   const temporary = resolve(folder, `.${basename(target)}.${randomUUID()}.tmp`);
-  let backup: string | undefined, movedPrevious = false;
+  let backup: string | undefined;
   try {
     if (overwrite === 'fail' && await exists(target)) throw new Error(`OUTPUT_EXISTS: ${basename(target)} already exists.`);
     await writeFile(temporary, bytes, { flag: 'wx' });
@@ -34,13 +35,25 @@ export async function atomicWrite(destination: string, bytes: Uint8Array, overwr
     }
     if (await exists(target)) {
       backup = resolve(folder, `${basename(target)}.${randomUUID()}.bak`);
-      await rename(target, backup);
-      movedPrevious = true;
+      // Copy first so an interrupted write leaves the previous document at its
+      // ordinary path. The final rename replaces it only after the new bytes
+      // and recoverable backup are complete.
+      await copyFile(target, backup, constants.COPYFILE_EXCL);
     }
+    await hooks?.beforeCommit?.();
     try { await rename(temporary, target); }
     catch (error) {
-      if (movedPrevious && backup) await rename(backup, target);
-      throw error;
+      // Windows filesystems can reject rename-over-existing. Keep the copied
+      // backup and use a short guarded replacement only on those filesystems.
+      if (!backup || !['EPERM', 'EACCES', 'EEXIST'].includes((error as NodeJS.ErrnoException).code ?? '') || !await exists(target)) throw error;
+      const displaced = resolve(folder, `.${basename(target)}.${randomUUID()}.previous`);
+      await rename(target, displaced);
+      try { await rename(temporary, target); }
+      catch (commitError) {
+        try { await rename(displaced, target); } catch { /* The backup and displaced file remain recoverable. */ }
+        throw commitError;
+      }
+      await rm(displaced, { force: true }).catch(() => undefined);
     }
     return { output: basename(target), ...(backup ? { backup: basename(backup) } : {}) };
   } finally { await rm(temporary, { force: true }).catch(() => undefined); }
