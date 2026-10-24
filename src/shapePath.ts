@@ -1,4 +1,4 @@
-import type { PathPoint, ShapePath, StoryElement } from './model';
+import type { PathPoint, ShapeContour, ShapePath, StoryElement } from './model';
 
 export type PathCommand =
   | { type: 'move' | 'line'; x: number; y: number }
@@ -38,9 +38,15 @@ export function withEditablePath(element: StoryElement): StoryElement {
 }
 
 /** Moving an anchor carries its handles, preserving its local tangent shape. */
-export function movePathAnchor(path: ShapePath, index: number, x: number, y: number): ShapePath {
-  if (!path.points[index]) throw new RangeError('Path point does not exist.');
-  const next = structuredClone(path), point = next.points[index];
+function selectedContour(path: ShapePath, contourIndex: number): ShapeContour {
+  const contour = contourIndex === 0 ? path : path.holes?.[contourIndex - 1];
+  if (!Number.isSafeInteger(contourIndex) || contourIndex < 0 || !contour) throw new RangeError('Path contour does not exist.');
+  return contour;
+}
+
+export function movePathAnchor(path: ShapePath, index: number, x: number, y: number, contourIndex = 0): ShapePath {
+  const next = structuredClone(path), contour = selectedContour(next, contourIndex), point = contour.points[index];
+  if (!point) throw new RangeError('Path point does not exist.');
   const dx = x - point.x, dy = y - point.y;
   point.x = x; point.y = y;
   if (point.in) { point.in.x += dx; point.in.y += dy; }
@@ -49,22 +55,22 @@ export function movePathAnchor(path: ShapePath, index: number, x: number, y: num
 }
 
 /** Setting a handle curves the adjacent edge; removing it can restore a line. */
-export function setPathHandle(path: ShapePath, index: number, side: 'in' | 'out', position?: {x:number;y:number}): ShapePath {
-  if (!path.points[index]) throw new RangeError('Path point does not exist.');
-  const next = structuredClone(path);
-  if (position) next.points[index][side] = { ...position };
-  else delete next.points[index][side];
+export function setPathHandle(path: ShapePath, index: number, side: 'in' | 'out', position?: {x:number;y:number}, contourIndex = 0): ShapePath {
+  const next = structuredClone(path), contour = selectedContour(next, contourIndex);
+  if (!contour.points[index]) throw new RangeError('Path point does not exist.');
+  if (position) contour.points[index][side] = { ...position };
+  else delete contour.points[index][side];
   return next;
 }
 
 /** Insert a point on a closed edge. Cubic edges use de Casteljau subdivision,
  * so the visible curve is unchanged until the new handles are edited. */
-export function splitPathSegment(path: ShapePath, index: number, fraction = .5): ShapePath {
-  if (!path.points[index]) throw new RangeError('Path segment does not exist.');
+export function splitPathSegment(path: ShapePath, index: number, fraction = .5, contourIndex = 0): ShapePath {
   if (!(fraction > 0 && fraction < 1)) throw new RangeError('Split fraction must be inside the segment.');
-  const next = structuredClone(path), from = next.points[index], to = next.points[(index + 1) % next.points.length];
+  const next = structuredClone(path), contour = selectedContour(next, contourIndex), from = contour.points[index], to = contour.points[(index + 1) % contour.points.length];
+  if (!from) throw new RangeError('Path segment does not exist.');
   if (!from.out && !to.in) {
-    next.points.splice(index + 1, 0, mix(from, to, fraction));
+    contour.points.splice(index + 1, 0, mix(from, to, fraction));
     return next;
   }
   const a = mix(from, from.out ?? from, fraction);
@@ -72,15 +78,15 @@ export function splitPathSegment(path: ShapePath, index: number, fraction = .5):
   const c = mix(to.in ?? to, to, fraction);
   const d = mix(a, b, fraction), e = mix(b, c, fraction), midpoint = mix(d, e, fraction);
   from.out = a; to.in = c;
-  next.points.splice(index + 1, 0, { ...midpoint, in: d, out: e });
+  contour.points.splice(index + 1, 0, { ...midpoint, in: d, out: e });
   return next;
 }
 
-export function removePathPoint(path:ShapePath,index:number):ShapePath{
-  if(path.points.length<=3)throw new Error('A closed path needs at least three points.');
-  if(!path.points[index])throw new RangeError('Path point does not exist.');
-  const next=structuredClone(path);
-  next.points.splice(index,1);
+export function removePathPoint(path:ShapePath,index:number,contourIndex=0):ShapePath{
+  const next=structuredClone(path), contour=selectedContour(next,contourIndex);
+  if(contour.points.length<=3)throw new Error('A closed path needs at least three points.');
+  if(!contour.points[index])throw new RangeError('Path point does not exist.');
+  contour.points.splice(index,1);
   return next;
 }
 
@@ -104,7 +110,7 @@ export function worldToPathPoint(element: Pick<StoryElement, 'x' | 'y' | 'width'
 }
 
 /** One coordinate mapping feeds the Pixi renderer and SVG editor guides. */
-export function shapePathCommands(path: ShapePath, width: number, height: number): PathCommand[] {
+export function shapePathCommands(path: ShapeContour, width: number, height: number): PathCommand[] {
   const points = path.points;
   if (points.length < 3) return [];
   const scaled = (point: Pick<PathPoint, 'x' | 'y'>) => ({ x: point.x * width, y: point.y * height });
@@ -123,7 +129,7 @@ export function shapePathCommands(path: ShapePath, width: number, height: number
 }
 
 export function shapePathSvg(path: ShapePath, width: number, height: number): string {
-  return shapePathCommands(path, width, height).map(command => {
+  return [path, ...(path.holes ?? [])].flatMap(contour => shapePathCommands(contour, width, height)).map(command => {
     if (command.type === 'close') return 'Z';
     if (command.type === 'cubic') return `C ${command.x1} ${command.y1} ${command.x2} ${command.y2} ${command.x} ${command.y}`;
     return `${command.type === 'move' ? 'M' : 'L'} ${command.x} ${command.y}`;
@@ -132,7 +138,7 @@ export function shapePathSvg(path: ShapePath, width: number, height: number): st
 
 /** Hit testing shares the renderer's path commands, including curved edges.
  * Subdivision is limited to the local edge rather than depending on canvas state. */
-export function pointInShapePath(path:ShapePath,width:number,height:number,x:number,y:number):boolean{
+function pointInContour(path: ShapeContour, width: number, height: number, x: number, y: number): boolean {
   const outline:{x:number;y:number}[]=[];
   let previous={x:0,y:0};
   for(const command of shapePathCommands(path,width,height)){
@@ -153,4 +159,8 @@ export function pointInShapePath(path:ShapePath,width:number,height:number,x:num
     if((a.y>y)!==(b.y>y)&&x<(b.x-a.x)*(y-a.y)/(b.y-a.y)+a.x)inside=!inside;
   }
   return inside;
+}
+
+export function pointInShapePath(path:ShapePath,width:number,height:number,x:number,y:number):boolean{
+  return pointInContour(path,width,height,x,y) && !(path.holes ?? []).some(hole=>pointInContour(hole,width,height,x,y));
 }

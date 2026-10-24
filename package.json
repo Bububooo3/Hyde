@@ -3,13 +3,26 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "exports": {
+    "./sdk": {
+      "types": "./dist/sdk/types/sdk.d.ts",
+      "import": "./dist/sdk/hyde-sdk.mjs"
+    }
+  },
+  "bin": {
+    "hyde": "./dist/cli/hyde.mjs",
+    "hyde-decompose": "./dist/decomposer-cli/hyde-decompose.mjs"
+  },
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc -b && vite build && vite build --config vite.portable.config.ts",
     "preview": "vite preview --host 127.0.0.1",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "cli:build": "vite build --config vite.cli.config.ts && vite build --config vite.cli-browser.config.ts && vite build --config vite.portable.config.ts",
+    "sdk:build": "vite build --config vite.sdk.config.ts && tsc --project tsconfig.sdk.json",
+    "decomposer:build": "npm run cli:build && vite build --config vite.decomposer.config.ts && vite build --config vite.decomposer-cli.config.ts"
   },
   "dependencies": {
     "@chenglou/pretext": "latest",
@@ -21,12 +34,14 @@
     "@fontsource/oswald": "5.3.0",
     "@fontsource/playfair-display": "5.3.0",
     "@fontsource/space-grotesk": "5.3.0",
+    "@xmldom/xmldom": "^0.8.15",
     "fflate": "^0.8.2",
     "gifenc": "^1.0.3",
     "idb": "^8.0.3",
     "lucide-react": "latest",
     "mediabunny": "^1.61.6",
     "pixi.js": "^8.0.0",
+    "playwright": "1.64.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "signalsmith-stretch": "^1.3.2"

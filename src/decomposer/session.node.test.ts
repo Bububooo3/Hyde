@@ -1,0 +1,278 @@
+// @vitest-environment node
+import { describe, expect, it } from 'vitest';
+import { decodeAssemblyBytes, decodeProjectBytes } from '../archive';
+import { evaluateProject } from '../engine';
+import { encodePng, decodePng } from './image';
+import { DecompositionSession } from './session';
+
+function propPng(): Uint8Array {
+  const width = 40, height = 32, rgba = new Uint8Array(width * height * 4);
+  const rectangle = (x0: number, y0: number, x1: number, y1: number, color: [number, number, number]) => {
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) rgba.set([...color, 255], (y * width + x) * 4);
+  };
+  // An original small, multicolor prop: two touching but independently useful pieces.
+  rectangle(4, 9, 20, 23, [181, 54, 39]);
+  rectangle(20, 4, 33, 27, [30, 111, 188]);
+  return encodePng({ width, height, rgba });
+}
+
+function texturedPng(withHole = false): Uint8Array {
+  const width = 24, height = 24, rgba = new Uint8Array(width * height * 4);
+  for (let y = 3; y < 21; y++) for (let x = 3; x < 21; x++) {
+    if (withHole && x >= 9 && x < 15 && y >= 9 && y < 15) continue;
+    const value = (x + y) % 2 ? 168 : 190;
+    rgba.set([value, value, value, 255], (y * width + x) * 4);
+  }
+  return encodePng({ width, height, rgba });
+}
+
+describe('deterministic decomposition and native Hyde export', () => {
+  it('groups adjacent paint into one editable part while retaining separate region paths', async () => {
+    const width = 20, height = 12, rgba = new Uint8Array(width * height * 4);
+    for (let y = 2; y < 10; y++) for (let x = 3; x < 17; x++)
+      rgba.set(x < 10 ? [169, 80, 40, 255] : [206, 80, 40, 255], (y * width + x) * 4);
+    const bytes = encodePng({ width, height, rgba });
+    const session = await DecompositionSession.importSources([{ bytes, name: 'paint-panels.png', mime: 'image/png' }], { mode: 'appearance' });
+    await session.analyze();
+    const document = session.snapshot();
+    expect(document.regions.filter(item => item.generationStatus !== 'historical')).toHaveLength(2);
+    expect(document.parts).toHaveLength(1);
+    expect(document.parts[0].regionIds).toEqual(document.regions.map(item => item.id));
+    const native = decodeProjectBytes((await session.exportHyde({ format: 'hyde' })).bytes);
+    expect(native.elements.filter(item => item.kind === 'polygon')).toHaveLength(2);
+    await session.close();
+  });
+
+  it('reconstructs distinct editable regions, exports both native formats and reopens source evidence', async () => {
+    const bytes = propPng();
+    expect(decodePng(bytes).rgba.length).toBe(40 * 32 * 4);
+    const input = { bytes, name: 'two-piece-prop.png', mime: 'image/png' };
+    const first = await DecompositionSession.importSources([input], { mode: 'animation-ready' });
+    const second = await DecompositionSession.importSources([input], { mode: 'animation-ready' });
+    const result = await first.analyze(); await second.analyze();
+    expect(result.regionCount).toBe(2);
+    const document = first.snapshot(), again = second.snapshot();
+    expect(document.regions.map(item => ({ id: item.id, path: item.geometry.generatedPath }))).toEqual(again.regions.map(item => ({ id: item.id, path: item.geometry.generatedPath })));
+    expect(document.regions.every(item => item.geometry.quality.maskIoU > .9)).toBe(true);
+    expect(document.regions.every(item => item.geometry.generatedPath.points.length >= 4)).toBe(true);
+    expect(document.parts).toHaveLength(2);
+    const projectResult = await first.exportHyde({ format: 'hyde' });
+    const project = decodeProjectBytes(projectResult.bytes);
+    expect(project.elements.filter(item => item.shapePath)).toHaveLength(2);
+    const pose = evaluateProject(project, 0);
+    for (const region of document.regions) {
+      const element = pose.find(item => item.id === projectResult.mapping.regionIds[region.id]);
+      expect(element?.x).toBeCloseTo(region.bounds.x + region.bounds.width / 2);
+      expect(element?.y).toBeCloseTo(region.bounds.y + region.bounds.height / 2);
+    }
+    expect(project.elements.every(item => !item.tracks.length && !(item.assemblyClips?.length) && !(item.motionBehaviors?.length))).toBe(true);
+    const assemblyResult = await first.exportHyde({ format: 'hyproj' });
+    const assembly = decodeAssemblyBytes(assemblyResult.bytes);
+    expect(assembly.elements.filter(item => item.shapePath)).toHaveLength(2);
+    expect(assembly.elements.filter(item => item.kind === 'group').length).toBeGreaterThanOrEqual(2);
+    const archive = await first.saveDocument();
+    const reopened = await DecompositionSession.openDocument(archive);
+    expect(reopened.snapshot().regions).toEqual(document.regions);
+    expect(reopened.sourceBytesFor(document.sources[0].id)).toEqual(bytes);
+    expect((await reopened.exportHyde({ format: 'hyde' })).project.elements.filter(item => item.shapePath)).toHaveLength(2);
+  });
+
+  it('keeps manual geometry, pivots and lineage through edits, undo and regeneration', async () => {
+    const session = await DecompositionSession.importSources([{ bytes: propPng(), name: 'prop.png', mime: 'image/png' }]);
+    await session.analyze();
+    const before = session.snapshot(), first = before.regions[0], second = before.regions[1], part = before.parts[0];
+    const path = structuredClone(first.geometry.generatedPath);
+    path.points[0].x += .01;
+    const edit = await session.execute({ expectedRevision: session.revision, edits: [
+      { op: 'region.setPath', regionId: first.id, path },
+      { op: 'part.rename', partId: part.id, name: 'Handle' },
+      { op: 'part.setPivot', partId: part.id, x: 17, y: 15 },
+      { op: 'annotation.lock', partId: part.id, target: 'pivot', locked: true },
+    ] });
+    expect(edit.ok).toBe(true);
+    const changed = session.snapshot();
+    expect(changed.regions[0].geometry.manualPath).toEqual(path);
+    expect(changed.parts[0].pivot).toEqual({ x: 17, y: 15 });
+    const split = await session.execute({ expectedRevision: session.revision, edits: [{ op: 'region.split', regionId: second.id, axis: 'y', coordinate: second.bounds.y + 8 }] });
+    expect(split.ok, JSON.stringify(split)).toBe(true);
+    const splitDoc = session.snapshot();
+    expect(splitDoc.regions.filter(item => item.lineage.parents.includes(second.id))).toHaveLength(2);
+    expect(splitDoc.regions.find(item => item.id === second.id)?.generationStatus).toBe('historical');
+    expect(session.undo(session.revision)).toBe(true);
+    expect(session.snapshot().regions.filter(item => item.generationStatus !== 'historical')).toHaveLength(2);
+    await session.analyze({ settings: { pathTolerance: 1.2 } });
+    const regenerated = session.snapshot();
+    expect(regenerated.regions.find(item => item.id === first.id)?.geometry.manualPath).toEqual(path);
+    expect(regenerated.parts.find(item => item.id === part.id)?.pivot).toEqual({ x: 17, y: 15 });
+    expect(regenerated.regions.find(item => item.id === first.id)?.partId).toBe(part.id);
+    const reopened = await DecompositionSession.openDocument(await session.saveDocument());
+    expect(reopened.snapshot().regions.find(item => item.id === first.id)?.geometry.manualPath).toEqual(path);
+    expect(reopened.snapshot().parts.find(item => item.id === part.id)?.pivotLocked).toBe(true);
+    const blocked = await reopened.execute({ expectedRevision: reopened.revision, edits: [{ op: 'region.clearManualPath', regionId: first.id }] });
+    expect(blocked.ok).toBe(false);
+    const cleared = await reopened.execute({ expectedRevision: reopened.revision, edits: [
+      { op: 'annotation.lock', regionId: first.id, target: 'geometry', locked: false },
+      { op: 'region.clearManualPath', regionId: first.id },
+    ] });
+    expect(cleared.ok).toBe(true);
+    expect(reopened.snapshot().regions.find(item => item.id === first.id)?.geometry.manualPath).toBeUndefined();
+    expect(reopened.undo(reopened.revision)).toBe(true);
+    expect(reopened.snapshot().regions.find(item => item.id === first.id)?.geometry.manualPath).toEqual(path);
+  });
+
+  it('preserves last complete candidate on cancellation and reports incomplete structure', async () => {
+    const session = await DecompositionSession.importSources([{ bytes: propPng(), name: 'prop.png', mime: 'image/png' }]);
+    await session.analyze();
+    const previous = session.snapshot(), revision = session.revision;
+    const controller = new AbortController(); controller.abort();
+    await expect(session.analyze({ signal: controller.signal })).rejects.toThrow('CANCELED');
+    expect(session.revision).toBe(revision);
+    expect(session.snapshot()).toEqual(previous);
+    const empty = encodePng({ width: 8, height: 8, rgba: new Uint8Array(8 * 8 * 4) });
+    const blank = await DecompositionSession.importSources([{ bytes: empty, name: 'blank.png', mime: 'image/png' }]);
+    await blank.analyze();
+    expect(blank.snapshot().diagnostics.map(item => item.code)).toContain('INSUFFICIENT_STRUCTURE');
+    await expect(blank.exportHyde({ format: 'hyde' })).rejects.toThrow('INSUFFICIENT_STRUCTURE');
+  });
+
+  it('keeps alternate pose references as correspondence evidence without motion', async () => {
+    const first = propPng(), second = propPng();
+    const session = await DecompositionSession.importSources([
+      { bytes: first, name: 'front.png', mime: 'image/png', role: 'primary' },
+      { bytes: second, name: 'other-pose.png', mime: 'image/png', role: 'alternate-pose' },
+    ]);
+    await session.analyze();
+    expect(session.snapshot().correspondences.length).toBeGreaterThan(0);
+    expect(session.snapshot().correspondences.some(item => item.kind === 'same-part' && item.accepted === true)).toBe(true);
+    expect(session.snapshot().correspondences.every(item => item.kind === 'same-part' || item.kind === 'possible-match')).toBe(true);
+    const proposal = session.snapshot().correspondences[0];
+    const rejected = await session.execute({ expectedRevision: session.revision, edits: [{ op: 'reference.correspond', correspondence: { ...proposal, accepted: false, origin: 'manual', evidence: ['visually rejected by the user'] } }] });
+    expect(rejected.ok).toBe(true);
+    await session.analyze();
+    expect(session.snapshot().correspondences.filter(item => item.id === proposal.id)).toEqual([{ ...proposal, accepted: false, origin: 'manual', evidence: ['visually rejected by the user'] }]);
+    const native = await session.exportHyde({ format: 'hyde' });
+    expect(native.project.elements.every(item => item.tracks.length === 0)).toBe(true);
+  });
+
+  it('stores manual cross-reference landmarks and explicit source alignment without fabricating a pose transform', async () => {
+    const bytes = propPng();
+    const session = await DecompositionSession.importSources([
+      { bytes, name: 'front.png', mime: 'image/png', role: 'primary' },
+      { bytes, name: 'side.png', mime: 'image/png', role: 'alternate-view' },
+    ]);
+    await session.analyze();
+    const [primary, alternate] = session.snapshot().sources;
+    const landmark = { id: 'manual_landmark_1', sourceIds: [alternate.id, primary.id] as [string, string],
+      kind: 'landmark' as const, origin: 'manual' as const, evidence: ['user paired two visible points'],
+      landmarkPoints: [{ x: 10, y: 12 }, { x: 13, y: 12 }] as [{ x: number; y: number }, { x: number; y: number }] };
+    const aligned = await session.execute({ expectedRevision: session.revision, edits: [
+      { op: 'reference.correspond', correspondence: landmark },
+      { op: 'reference.setTransform', sourceId: alternate.id, transformToPrimary: [1, 0, 0, 1, 3, 0] },
+    ] });
+    expect(aligned.ok, JSON.stringify(aligned)).toBe(true);
+    const reopened = await DecompositionSession.openDocument(await session.saveDocument());
+    expect(reopened.snapshot().correspondences.find(item => item.id === landmark.id)?.landmarkPoints).toEqual(landmark.landmarkPoints);
+    expect(reopened.snapshot().sources.find(item => item.id === alternate.id)?.transformToPrimary).toEqual([1, 0, 0, 1, 3, 0]);
+    const second = { ...landmark, id: 'manual_landmark_2', landmarkPoints: [{ x: 20, y: 12 }, { x: 13, y: 22 }] as typeof landmark.landmarkPoints };
+    const guided = await reopened.execute({ expectedRevision: reopened.revision, edits: [
+      { op: 'reference.correspond', correspondence: second },
+      { op: 'reference.alignFromLandmarks', sourceId: alternate.id, landmarkIds: [landmark.id, second.id] },
+    ] });
+    expect(guided.ok, JSON.stringify(guided)).toBe(true);
+    expect(reopened.snapshot().sources.find(item => item.id === alternate.id)?.transformToPrimary).toEqual([0, 1, -1, 0, 25, 2]);
+    const invalid = await reopened.execute({ expectedRevision: reopened.revision, edits: [
+      { op: 'reference.setTransform', sourceId: alternate.id, transformToPrimary: [0, 0, 0, 0, 0, 0] },
+    ] });
+    expect(invalid.ok).toBe(false);
+    expect(reopened.snapshot().sources.find(item => item.id === alternate.id)?.transformToPrimary).toEqual([0, 1, -1, 0, 25, 2]);
+    await reopened.close(); await session.close();
+  });
+
+  it('retains authentic texture and editable native hole contours', async () => {
+    const textured = await DecompositionSession.importSources([{ bytes: texturedPng(), name: 'textured.png', mime: 'image/png' }]);
+    await textured.analyze();
+    const regions = textured.snapshot().regions.filter(item => item.generationStatus !== 'historical');
+    expect(regions).toHaveLength(1);
+    expect(regions[0].geometry.texture).toBe('source-crop');
+    const native = await textured.exportHyde({ format: 'hyde' });
+    const parsed = decodeProjectBytes(native.bytes);
+    expect(parsed.assets).toHaveLength(1);
+    expect(parsed.elements.find(item => item.shapePath)?.assetId).toBe(parsed.assets[0].id);
+    const hole = await DecompositionSession.importSources([{ bytes: texturedPng(true), name: 'hole.png', mime: 'image/png' }]);
+    await hole.analyze();
+    expect(hole.snapshot().regions[0].holeCount).toBe(1);
+    expect(hole.snapshot().regions[0].geometry.generatedPath.holes).toHaveLength(1);
+    const withHole = await hole.exportHyde({ format: 'hyde' });
+    expect(withHole.warnings.map(item => item.code)).not.toContain('HOLE_NOT_REPRESENTABLE');
+    expect(withHole.project.elements.find(item => item.shapePath)?.shapePath?.holes).toHaveLength(1);
+    expect(withHole.project.elements.find(item => item.shapePath)?.assetId).toBeTruthy();
+  });
+
+  it('merges adjacent pieces with lineage and preserves their colors as a masked texture', async () => {
+    const session = await DecompositionSession.importSources([{ bytes: propPng(), name: 'prop.png', mime: 'image/png' }]);
+    await session.analyze();
+    const [a, b] = session.snapshot().regions;
+    const joinedPart = await session.execute({ expectedRevision: session.revision, edits: [{ op: 'part.assignRegion', regionId: b.id, partId: a.partId! }] });
+    expect(joinedPart.ok).toBe(true);
+    const merged = await session.execute({ expectedRevision: session.revision, edits: [{ op: 'region.merge', firstId: a.id, secondId: b.id }] });
+    expect(merged.ok, JSON.stringify(merged)).toBe(true);
+    const surviving = session.snapshot().regions.find(item => item.generationStatus !== 'historical');
+    expect(surviving?.lineage.parents).toEqual([a.id, b.id]);
+    expect(surviving?.geometry.texture).toBe('source-crop');
+    expect((await session.exportHyde({ format: 'hyde' })).project.assets).toHaveLength(1);
+  });
+
+  it('keeps the original evidence mask after a manual mask refinement and archive reopen', async () => {
+    const session = await DecompositionSession.importSources([{ bytes: propPng(), name: 'prop.png', mime: 'image/png' }]);
+    await session.analyze();
+    const region = session.snapshot().regions[0];
+    const original = session.maskFor(region.maskId);
+    const refined = { ...original, bytes: Uint8Array.from(original.bytes) };
+    refined.bytes[0] = refined.bytes[0] ? 0 : 1;
+    const handle = session.stageMask(refined);
+    const edit = await session.execute({ expectedRevision: session.revision, edits: [{ op: 'region.refineMask', regionId: region.id, handle }] });
+    expect(edit.ok, JSON.stringify(edit)).toBe(true);
+    const current = session.snapshot().regions.find(item => item.id === region.id)!;
+    expect(current.originalMaskId).toBe(region.maskId);
+    await session.analyze({ settings: { pathTolerance: 1.1 } });
+    const regenerated = session.snapshot().regions.find(item => item.id === region.id)!;
+    expect(regenerated.originalMaskId).toBe(region.maskId);
+    expect(session.maskFor(regenerated.maskId)).toEqual(refined);
+    const reopened = await DecompositionSession.openDocument(await session.saveDocument());
+    expect(reopened.maskFor(regenerated.originalMaskId!)).toEqual(original);
+    expect(reopened.maskFor(regenerated.maskId)).toEqual(refined);
+  });
+
+  it('uses bounded color seeds for undoable local mask correction without changing other regions', async () => {
+    const session = await DecompositionSession.importSources([{ bytes: propPng(), name: 'seeded-prop.png', mime: 'image/png' }]);
+    await session.analyze();
+    const red = session.snapshot().regions.find(item => item.color === '#b53627')!;
+    const blue = session.snapshot().regions.find(item => item.id !== red.id)!;
+    const original = session.maskFor(red.maskId), other = session.maskFor(blue.maskId);
+    const cut = { ...original, bytes: Uint8Array.from(original.bytes) };
+    for (let y = 0; y < cut.height; y++) cut.bytes[y * cut.width + cut.width - 1] = 0;
+    const handle = session.stageMask(cut);
+    expect((await session.execute({ expectedRevision: session.revision, edits: [{ op: 'region.refineMask', regionId: red.id, handle }] })).ok).toBe(true);
+    const beforeSeed = session.snapshot(), revision = session.revision;
+    const added = await session.execute({ expectedRevision: revision, edits: [
+      { op: 'region.seedMask', regionId: red.id, x: 19, y: 15, action: 'add', colorTolerance: 0, radius: 3 },
+    ] });
+    expect(added.ok, JSON.stringify(added)).toBe(true);
+    const after = session.snapshot().regions.find(item => item.id === red.id)!;
+    expect(after.pixelCount).toBeGreaterThan(beforeSeed.regions.find(item => item.id === red.id)!.pixelCount);
+    expect(after.originalMaskId).toBe(red.maskId);
+    expect(session.maskFor(blue.maskId)).toEqual(other);
+    const reopened = await DecompositionSession.openDocument(await session.saveDocument());
+    expect(reopened.maskFor(after.maskId)).toEqual(session.maskFor(after.maskId));
+    expect(reopened.maskFor(after.originalMaskId!)).toEqual(original);
+    await reopened.close();
+    expect(session.undo(session.revision)).toBe(true);
+    expect(session.snapshot().regions.find(item => item.id === red.id)).toEqual(beforeSeed.regions.find(item => item.id === red.id));
+    const denied = await session.execute({ expectedRevision: session.revision, edits: [
+      { op: 'region.seedMask', regionId: red.id, x: 20, y: 15, action: 'add', colorTolerance: 255, radius: 5 },
+    ] });
+    expect(denied.ok).toBe(false);
+    expect(session.snapshot().regions.find(item => item.id === red.id)).toEqual(beforeSeed.regions.find(item => item.id === red.id));
+    await session.close();
+  });
+});

@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 472" role="img" aria-labelledby="title description">
+  <title id="title">How the ambiguous multi-view comparison works</title>
+  <desc id="description">Two still references contain identical red circles. The algorithm leaves four possible identities unresolved. A person illustrates one manual identity decision, primary A equals alternate Y. Hyde exports only the editable primary pose, with no animation.</desc>
+  <rect width="1000" height="472" fill="#f4f6fa"/>
+  <text x="30" y="42" font-family="Arial, sans-serif" font-size="24" font-weight="700" fill="#172537">Two still references, uncertain identities</text>
+  <text x="30" y="67" font-family="Arial, sans-serif" font-size="15" fill="#48566a">The circles look alike. Position alone cannot prove which shape is the same physical part across views.</text>
+
+  <g font-family="Arial, sans-serif">
+    <rect x="24" y="94" width="292" height="203" rx="12" fill="#fff" stroke="#cbd4e0"/>
+    <text x="42" y="122" font-size="17" font-weight="700" fill="#172537">1 · Primary reference</text>
+    <circle cx="108" cy="202" r="39" fill="#c9473c"/>
+    <circle cx="232" cy="202" r="39" fill="#c9473c"/>
+    <text x="102" y="208" font-size="16" font-weight="700" fill="#fff">A</text>
+    <text x="226" y="208" font-size="16" font-weight="700" fill="#fff">B</text>
+
+    <rect x="354" y="94" width="292" height="203" rx="12" fill="#fff" stroke="#cbd4e0"/>
+    <text x="372" y="122" font-size="17" font-weight="700" fill="#172537">2 · Alternate reference</text>
+    <circle cx="438" cy="202" r="39" fill="#c9473c"/>
+    <circle cx="562" cy="202" r="39" fill="#c9473c"/>
+    <text x="432" y="208" font-size="16" font-weight="700" fill="#fff">X</text>
+    <text x="556" y="208" font-size="16" font-weight="700" fill="#fff">Y</text>
+
+    <rect x="684" y="94" width="292" height="203" rx="12" fill="#fff" stroke="#cbd4e0"/>
+    <text x="702" y="122" font-size="17" font-weight="700" fill="#172537">3 · Native Hyde export</text>
+    <circle cx="768" cy="202" r="39" fill="#c9473c"/>
+    <circle cx="892" cy="202" r="39" fill="#c9473c"/>
+    <text x="762" y="208" font-size="16" font-weight="700" fill="#fff">A</text>
+    <text x="886" y="208" font-size="16" font-weight="700" fill="#fff">B</text>
+
+    <path d="M 316 191 L 342 191" stroke="#8695a9" stroke-width="3" stroke-dasharray="6 5"/>
+    <path d="M 342 191 l -9 -6 m 9 6 l -9 6" stroke="#8695a9" stroke-width="3" fill="none"/>
+    <path d="M 646 191 L 672 191" stroke="#8695a9" stroke-width="3"/>
+    <path d="M 672 191 l -9 -6 m 9 6 l -9 6" stroke="#8695a9" stroke-width="3" fill="none"/>
+
+    <rect x="24" y="324" width="292" height="112" rx="10" fill="#eaf0f7"/>
+    <text x="42" y="350" font-size="16" font-weight="700" fill="#172537">Automatic analysis</text>
+    <text x="42" y="376" font-size="14" fill="#314054">A↔X, A↔Y, B↔X, B↔Y</text>
+    <text x="42" y="400" font-size="14" fill="#314054">Four candidates; none auto-approved.</text>
+
+    <rect x="354" y="324" width="292" height="112" rx="10" fill="#fff4cc"/>
+    <text x="372" y="350" font-size="16" font-weight="700" fill="#493814">Illustrative manual decision</text>
+    <text x="372" y="376" font-size="14" fill="#493814">Person confirms A ↔ Y.</text>
+    <text x="372" y="400" font-size="14" fill="#493814">Saved in the editable .hydecomp.</text>
+
+    <rect x="684" y="324" width="292" height="112" rx="10" fill="#e8f5ef"/>
+    <text x="702" y="350" font-size="16" font-weight="700" fill="#183d2d">Output behavior</text>
+    <text x="702" y="376" font-size="14" fill="#274b3b">Editable A/B geometry from primary.</text>
+    <text x="702" y="400" font-size="14" fill="#274b3b">No keyframes or motion inferred.</text>
+  </g>
+  <text x="30" y="459" font-family="Arial, sans-serif" font-size="12" fill="#617085">This diagram explains the workflow. The actual source/native browser frames are in 03-ambiguous-multiview.png.</text>
+</svg>

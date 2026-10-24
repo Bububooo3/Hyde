@@ -283,7 +283,7 @@ describe('portable Hyde archives', () => {
   });
   it('rejects invalid manifest versions and malformed XML', async () => {
     const project = fixture();
-    await expect(loadProjectFile(await mutateManifest(project, xml => xml.replace('type="project" version="1"', 'type="project" version="7"')))).rejects.toThrow('Unsupported archive');
+    await expect(loadProjectFile(await mutateManifest(project, xml => xml.replace('type="project" version="1"', 'type="project" version="7"')))).rejects.toMatchObject({ code: 'SCHEMA_UNSUPPORTED', archiveType: 'project', source: 'manifest', actualVersion: 7 });
     await expect(loadProjectFile(await mutateManifest(project, xml => xml.slice(0, -4)))).rejects.toThrow('Malformed XML');
   });
   it('rejects missing element references and zero length clips', async () => {
