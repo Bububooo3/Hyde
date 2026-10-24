@@ -2,6 +2,7 @@ import { decodeAssemblyBytes, encodeAssemblyBytes, migrateArchiveBytes, validate
 import type { ArchiveMigrationResult } from './archive';
 import { unzipSync } from 'fflate';
 import { HydeAuthoringSession } from './authoring';
+import { enrichAssetInspection } from './assetInspection';
 import type { ExecuteRequest, ExecuteResult, HydeDiagnostic } from './authoring';
 import { evaluateCamera } from './engine';
 import { createProject } from './model';
@@ -65,7 +66,8 @@ export class HydeSession {
   capabilities(): ReturnType<HydeAuthoringSession['capabilities']> { return this.ready().capabilities(); }
   execute(request: ExecuteRequest): Promise<ExecuteResult> { return this.ready().execute(request); }
   inspect(request: Parameters<HydeAuthoringSession['inspect']>[0]): Promise<ReturnType<HydeAuthoringSession['inspect']>> {
-    return Promise.resolve(this.ready().inspect(request));
+    const authoring = this.ready();
+    return enrichAssetInspection(authoring.snapshot(), request, authoring.inspect(request)) as Promise<ReturnType<HydeAuthoringSession['inspect']>>;
   }
   diagnostics(): Promise<HydeDiagnostic[]> {
     try { validateDocument(this.ready().snapshot(), false); return Promise.resolve([]); }

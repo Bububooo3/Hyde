@@ -1,4 +1,5 @@
 import { HydeAuthoringSession } from './authoring';
+import { enrichAssetInspection } from './assetInspection';
 import type { ExecuteRequest, HydeCommand, HydeDiagnostic } from './authoring';
 import { HydeRenderHost } from './browserHost';
 import { exportMedia } from './mediaExport';
@@ -95,7 +96,9 @@ export class EditorBridge {
         }
         case 'inspect': {
           this.require('read');
-          const result = new HydeAuthoringSession(this.editor.project()).inspect(object(request.payload) as unknown as Parameters<HydeAuthoringSession['inspect']>[0]);
+          const project = this.editor.project();
+          const query = object(request.payload) as unknown as Parameters<HydeAuthoringSession['inspect']>[0];
+          const result = await enrichAssetInspection(project, query, new HydeAuthoringSession(project).inspect(query));
           return this.success(requestId, result);
         }
         case 'evaluate': {

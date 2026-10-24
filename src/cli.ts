@@ -4,6 +4,7 @@ import { basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decodeAssemblyBytes, decodeProjectBytes, encodeProjectBytes, HydeSchemaUnsupportedError, validateDocument } from './archive';
 import { HydeAuthoringSession } from './authoring';
+import { enrichAssetInspection } from './assetInspection';
 import { BrowserHostError, probeBrowserHost, runBrowserTask } from './cliBrowserRunner';
 import type { ExecuteRequest, HydeCommand, HydeDiagnostic, InspectRequest } from './authoring';
 import { insertAssemblyAt } from './editing';
@@ -213,10 +214,10 @@ async function dispatch(args: string[], io: Output): Promise<{ command: string; 
         timeStart: start, timeEnd: end,
       };
       if (['scene', 'element', 'asset', 'assembly'].includes(target) && !query.id) throw new CliFailure('INVALID_ARGUMENT', `--id is required for ${target} inspection.`, 2);
-      let result: ReturnType<typeof session.inspect>;
-      try { result = session.inspect(query); }
-      catch (error) { throw new CliFailure('TARGET_NOT_FOUND', error instanceof Error ? error.message : 'Inspection target not found.', 2); }
-      if ('error' in result && result.error) throw new CliFailure(result.error.code, result.error.message, 2);
+      let result: Awaited<ReturnType<typeof enrichAssetInspection>>;
+      try { result = await enrichAssetInspection(session.snapshot(), query, session.inspect(query)); }
+      catch (error) { throw new CliFailure('INVALID_PROJECT', error instanceof Error ? error.message : 'Asset inspection failed.', 3); }
+      if (result.error) throw new CliFailure(result.error.code, result.error.message, 2);
       return { command: key, result: bounded(result) };
     }
     case 'project apply': {
