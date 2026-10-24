@@ -20,7 +20,8 @@ const object = (properties: Record<string, Schema>, required: string[] = []): Sc
 
 const point = object({ x: number, y: number }, ['x', 'y']);
 const pathPoint = object({ x: number, y: number, in: point, out: point }, ['x', 'y']);
-const path = object({ points: array(pathPoint, 3, 4096) }, ['points']);
+const contour = object({ points: array(pathPoint, 3, 4096) }, ['points']);
+const path = object({ points: array(pathPoint, 3, 4096), holes: array(contour, 0, 64) }, ['points']);
 const fit = enumeration('fit', 'fill', 'stretch');
 const easing = enumeration('linear', 'sine', 'quad', 'cubic', 'quart', 'quint', 'expo', 'circ', 'back', 'bounce', 'elastic');
 const direction = enumeration('in', 'out', 'inOut');
@@ -195,7 +196,7 @@ const sharedFields: Record<string, Schema> = {
   pivotX: fraction, pivotY: fraction, opacity: fraction, volume: { type: 'number', minimum: 0, maximum: 2 },
   speed: positive, pitchSemitones: { type: 'number', minimum: -24, maximum: 24 },
   min: number, max: number, priority: { type: 'integer', minimum: 1, maximum: 10 },
-  index: { type: 'integer', minimum: 0 }, fraction, steps: positive, switchPoint: fraction,
+  index: { type: 'integer', minimum: 0 }, contourIndex: { type: 'integer', minimum: 0, maximum: 64 }, fraction, steps: positive, switchPoint: fraction,
   value: { anyOf: [number, text] }, text, background: text, fill: text, stroke: text,
   color: text, fontFamily: text, fontSize: { type: 'number', minimum: 1, maximum: 300 },
   fps: positive, posterTime: nonnegative, rotation: number,
@@ -219,6 +220,7 @@ const sharedFields: Record<string, Schema> = {
 const operationFields: Record<string, Record<string, Schema>> = {
   'scene.trimBoundary': { edge: enumeration('start', 'end') },
   'scene.setPlacement': { placement },
+  'element.setTransform': { space: enumeration('local', 'world') },
   'element.create': { kind: sharedFields.kind, properties: elementProperties },
   'element.align': { mode: enumeration('left', 'centerX', 'right', 'top', 'centerY', 'bottom') },
   'element.distribute': { mode: enumeration('distributeX', 'distributeY') },
@@ -251,6 +253,11 @@ const operationFields: Record<string, Record<string, Schema>> = {
 };
 
 const conditionalArgs: Record<string, Schema> = {
+  'element.setTransform': {
+    if: { properties: { space: { const: 'world' } }, required: ['space'] },
+    then: { properties: { transform: object({ x: number, y: number, rotation: number, scaleX: number, scaleY: number }) } },
+    else: { not: { required: ['timeSeconds'] } },
+  },
   'text.setFont': { anyOf: [{ required: ['fontFamily'] }, { required: ['fontSize'] }] },
   'video.setSourceTiming': { dependentRequired: { inTime: ['outTime'], outTime: ['inTime'] } },
   'clip.editPlacedKey': {

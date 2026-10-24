@@ -1,7 +1,7 @@
 import { Application, BlurFilter, Color, Container, Graphics, Mesh, MeshGeometry, Sprite, Text, Texture, VideoSource } from 'pixi.js';
 import { layoutWithLines, prepareWithSegments } from '@chenglou/pretext';
 import type { PreparedTextWithSegments } from '@chenglou/pretext';
-import type { Asset, PlacementFrame, Project, StoryElement } from './model';
+import type { Asset, PlacementFrame, Project, ShapeContour, StoryElement } from './model';
 import { cameraToStage, evaluateCamera, evaluateCameraForScene, evaluateProject, sourceTime, videoVisualExpired } from './engine';
 import {mapSceneFramePoint,sceneFrameTransform,sceneVisualFrames} from './sceneFrame';
 import {shapePathCommands} from './shapePath';
@@ -89,11 +89,11 @@ function paint(value: string) {
   }
 }
 
-function path(graphics: Graphics, element: StoryElement): Graphics {
+function path(graphics: Graphics, element: StoryElement, contour?: ShapeContour): Graphics {
   const width = Math.max(1, finite(element.width, 1));
   const height = Math.max(1, finite(element.height, 1));
-  if (element.shapePath) {
-    for (const command of shapePathCommands(element.shapePath, width, height)) {
+  if (contour || element.shapePath) {
+    for (const command of shapePathCommands(contour ?? element.shapePath!, width, height)) {
       if (command.type === 'move') graphics.moveTo(command.x, command.y);
       else if (command.type === 'line') graphics.lineTo(command.x, command.y);
       else if (command.type === 'cubic') graphics.bezierCurveTo(command.x1, command.y1, command.x2, command.y2, command.x, command.y);
@@ -111,6 +111,11 @@ function path(graphics: Graphics, element: StoryElement): Graphics {
     return graphics.poly(points, true);
   }
   return graphics.rect(0, 0, width, height);
+}
+
+function filledPath(graphics: Graphics, element: StoryElement, color: ReturnType<typeof paint> | number): void {
+  path(graphics, element).fill(color);
+  for (const hole of element.shapePath?.holes ?? []) path(graphics, element, hole).cut();
 }
 
 /** Wait for decoded pixels, not merely a metadata event. Never leave an export waiting forever. */
@@ -336,12 +341,16 @@ export class StageRenderer {
     node.outline.visible = !isText && element.strokeWidth > 0;
     node.shadow.visible = !isText && element.shadow.enabled;
     if (!isText) {
-      path(node.shape, element).fill(paint(element.fill));
-      if (element.strokeWidth > 0) path(node.outline, element).stroke({ ...paint(element.stroke), width: element.strokeWidth });
-      path(node.mask, element).fill(0xffffff);
+      filledPath(node.shape, element, paint(element.fill));
+      if (element.strokeWidth > 0) {
+        const style = { ...paint(element.stroke), width: element.strokeWidth };
+        path(node.outline, element).stroke(style);
+        for (const hole of element.shapePath?.holes ?? []) path(node.outline, element, hole).stroke(style);
+      }
+      filledPath(node.mask, element, 0xffffff);
     }
     if (node.shadow.visible) {
-      path(node.shadow, element).fill(paint(element.shadow.color));
+      filledPath(node.shadow, element, paint(element.shadow.color));
       node.shadow.position.set(element.shadow.x, element.shadow.y);
       const blur = Math.max(0, element.shadow.blur);
       if (blur > 0) {

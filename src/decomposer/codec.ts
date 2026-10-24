@@ -7,6 +7,17 @@ const MAX_MEMBER_BYTES = 128 * 1024 * 1024;
 const MAX_MEMBERS = 20_000;
 const safeId = (value: string) => /^[A-Za-z0-9_-]{1,128}$/.test(value);
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
+function validPath(value: unknown): boolean {
+  if (!record(value) || !Array.isArray(value.points) || value.holes !== undefined && (!Array.isArray(value.holes) || value.holes.length > 64)) return false;
+  const contours = [value, ...((value.holes ?? []) as unknown[])];
+  if (((value.holes ?? []) as unknown[]).some(hole => !record(hole) || hole.holes !== undefined)) return false;
+  if (contours.some(contour => !record(contour) || !Array.isArray(contour.points) || contour.points.length < 3 || contour.points.length > 4096) ||
+    contours.reduce<number>((sum, contour) => sum + (record(contour) && Array.isArray(contour.points) ? contour.points.length : 0), 0) > 16384) return false;
+  const pointValid = (point: unknown) => record(point) && ['x', 'y'].every(axis => typeof point[axis] === 'number' && Number.isFinite(point[axis])) &&
+    ['in', 'out'].every(handle => point[handle] === undefined || record(point[handle]) && ['x', 'y'].every(axis =>
+      typeof (point[handle] as Record<string, unknown>)[axis] === 'number' && Number.isFinite((point[handle] as Record<string, unknown>)[axis])));
+  return contours.every(contour => record(contour) && (contour.points as unknown[]).every(pointValid));
+}
 
 export async function sha256(bytes: Uint8Array): Promise<string> {
   const hash = await crypto.subtle.digest('SHA-256', bytes as BufferSource);
@@ -44,7 +55,7 @@ export function validateDecompositionDocument(document: unknown, sourceBytes?: M
       if (item.originalMaskId !== undefined && !masks.has(String(item.originalMaskId))) throw new Error('Original region mask evidence is missing.');
     }
     for (const path of [(item.geometry as Record<string, unknown>).generatedPath, (item.geometry as Record<string, unknown>).manualPath].filter(value => value !== undefined))
-      if (!record(path) || !Array.isArray(path.points) || path.points.length < 3 || path.points.length > 4096 || path.points.some(point => !record(point) || typeof point.x !== 'number' || typeof point.y !== 'number' || !Number.isFinite(point.x) || !Number.isFinite(point.y))) throw new Error('Invalid region geometry.');
+      if (!validPath(path)) throw new Error('Invalid region geometry.');
   }
   for (const item of document.parts) {
     if (!record(item) || !safeId(String(item.id)) || partIds.has(String(item.id)) || !Array.isArray(item.regionIds) || !record(item.pivot) || typeof item.pivot.x !== 'number' || typeof item.pivot.y !== 'number') throw new Error('Invalid part metadata.');

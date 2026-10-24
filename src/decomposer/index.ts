@@ -11,6 +11,8 @@ export type { CorrespondenceOptions, CorrespondenceRanking } from './corresponde
 export { exportNativeDecomposition } from './export';
 export { compareNativeRender } from './quality';
 export type { NativeRenderComparisonOptions, ReconstructionQualityReport } from './quality';
+export { renderDiagnosticTile } from './diagnosticTile';
+export type { DiagnosticTile, DiagnosticTileRequest, DiagnosticTileView } from './diagnosticTile';
 export type { DecompositionEdit, DecompositionEditResult } from './session';
 export type { DecodedImage } from './image';
 export type { HydeDecompositionExport, HydeDecompositionExportOptions } from './export';

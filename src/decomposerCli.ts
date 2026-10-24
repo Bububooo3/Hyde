@@ -1,10 +1,10 @@
 import { basename, extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { atomicWrite, readLimitedFile } from './atomicFile';
-import { runBrowserTask } from './cliBrowserRunner';
+import { launchLocalChromium, runBrowserTask } from './cliBrowserRunner';
 import { DecompositionSession } from './decomposer/session';
 import { compareNativeRender } from './decomposer/quality';
-import type { DecompositionEdit, DecompositionMode, SourceInput, SourceRole } from './decomposer';
+import type { Box, DecompositionEdit, DecompositionMode, DiagnosticTileView, SourceInput, SourceRole } from './decomposer';
 
 type Flags = Record<string, string | true>;
 type IO = { stdout(text: string): void; stderr(text: string): void };
@@ -50,6 +50,13 @@ function mode(text: unknown): DecompositionMode | undefined {
   if (text !== 'appearance' && text !== 'animation-ready') throw new CliError('INVALID_ARGUMENT', 'Mode must be appearance or animation-ready.');
   return text;
 }
+function tileBounds(text: string | undefined): Box | undefined {
+  if (text === undefined) return undefined;
+  if (!/^\d+,\d+,\d+,\d+$/.test(text)) throw new CliError('INVALID_ARGUMENT', '--bounds must be x,y,width,height in integer source pixels.');
+  const [x, y, width, height] = text.split(',').map(Number);
+  if (![x, y, width, height].every(Number.isSafeInteger)) throw new CliError('INVALID_ARGUMENT', '--bounds contains an unsafe integer.');
+  return { x, y, width, height };
+}
 function extensionMime(path: string): SourceInput['mime'] {
   const ext = extname(path).toLowerCase();
   if (ext === '.png') return 'image/png';
@@ -65,8 +72,9 @@ async function jsonFile(path: string): Promise<Request> {
 }
 async function browserDecode(bytes: Uint8Array, mime: string): Promise<SourceInput['decoded']> {
   if (bytes.length > 32 * 1024 * 1024) throw new CliError('RESOURCE_LIMIT', 'JPEG/WebP source exceeds the 32 MiB browser decode limit.');
-  const { chromium } = await import('playwright');
-  const browser = await chromium.launch({ headless: true });
+  let browser;
+  try { browser = await launchLocalChromium(); }
+  catch (error) { throw new CliError('CAPABILITY_UNAVAILABLE', error instanceof Error ? error.message : 'Local Chromium is unavailable.', 5); }
   try {
     const page = await browser.newPage();
     const result = await page.evaluate(async ({ base64, type }) => {
@@ -125,13 +133,28 @@ async function dispatch(argv: string[]): Promise<Record<string, unknown>> {
     } finally { await session.close(); }
   }
   if (command === 'inspect') {
-    allow(flags, ['target', 'id', 'limit', 'cursor', 'json']);
+    allow(flags, ['target', 'id', 'limit', 'cursor', 'view', 'source', 'region', 'bounds', 'output', 'overwrite', 'json']);
     const [path] = positional(args, 1), session = await openDocument(path);
     try {
       const target = value(flags, 'target') ?? 'summary';
+      if (target === 'tile') {
+        if (flags.id || flags.limit || flags.cursor) throw new CliError('INVALID_ARGUMENT', 'Tile inspection uses --source, --region and --bounds.');
+        const view = value(flags, 'view') ?? 'source';
+        if (!['source', 'mask', 'evidence'].includes(view)) throw new CliError('INVALID_ARGUMENT', 'Tile view must be source, mask or evidence.');
+        const tile = session.renderDiagnosticTile({ view: view as DiagnosticTileView,
+          sourceId: value(flags, 'source'), regionId: value(flags, 'region'), bounds: tileBounds(value(flags, 'bounds')) });
+        const { bytes, ...metadata } = tile;
+        const output = await save(value(flags, 'output', true)!, bytes, flags);
+        return { command, result: { ...metadata, byteLength: bytes.length }, ...output };
+      }
+      if (flags.view || flags.source || flags.region || flags.bounds || flags.output || flags.overwrite)
+        throw new CliError('INVALID_ARGUMENT', 'Tile flags require --target tile.');
       if (!['summary', 'sources', 'regions', 'parts', 'region', 'part', 'diagnostics', 'correspondences'].includes(target)) throw new CliError('INVALID_ARGUMENT', 'Unknown inspection target.');
+      if ((target === 'region' || target === 'part') && !value(flags, 'id')) throw new CliError('INVALID_ARGUMENT', `--id is required for ${target} inspection.`);
       const limit = value(flags, 'limit'), cursor = value(flags, 'cursor');
-      return { command, result: session.inspect({ target: target as Parameters<typeof session.inspect>[0]['target'], id: value(flags, 'id'), limit: limit ? Number(limit) : undefined, cursor: cursor ? Number(cursor) : undefined }) };
+      const result = session.inspect({ target: target as Parameters<typeof session.inspect>[0]['target'], id: value(flags, 'id'), limit: limit ? Number(limit) : undefined, cursor: cursor ? Number(cursor) : undefined });
+      if ('error' in result && result.error) throw new CliError(result.error.code, result.error.message);
+      return { command, result };
     } finally { await session.close(); }
   }
   if (command === 'edit') {

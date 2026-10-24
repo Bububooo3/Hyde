@@ -12,7 +12,7 @@ export interface HydeDecompositionExportOptions {
   width?: number;
   height?: number;
   duration?: number;
-  /** Required when a transparent interior hole cannot be represented by one native path. */
+  /** Explicit fallback only for source holes that exceed native contour fitting limits. */
   allowHoleApproximation?: boolean;
 }
 
@@ -116,10 +116,15 @@ export async function exportNativeDecomposition(document: DecompositionDocumentV
   validateGraphs(document, regions);
   const warnings: DecompositionDiagnostic[] = [];
   for (const region of regions) {
-    if (region.holeCount && !options.allowHoleApproximation) throw new Error(`HOLE_NOT_REPRESENTABLE: Region ${region.id} has an interior hole; approve approximation explicitly.`);
-    if (region.holeCount) warnings.push({ code: 'HOLE_NOT_REPRESENTABLE', severity: 'warning', regionId: region.id, bounds: region.bounds, message: 'The source hole is retained as raster alpha inside the editable outer path; its inner boundary is not native vector geometry.' });
+    const path = regionPath(region), represented = path.holes?.length ?? 0;
+    if (represented < region.holeCount && !options.allowHoleApproximation)
+      throw new Error(`HOLE_NOT_REPRESENTABLE: Region ${region.id} has ${region.holeCount - represented} source hole(s) without editable native contours; approve raster-alpha fallback explicitly.`);
+    if (represented < region.holeCount) warnings.push({ code: 'HOLE_NOT_REPRESENTABLE', severity: 'warning', regionId: region.id, bounds: region.bounds,
+      message: `${region.holeCount - represented} interior source hole(s) remain raster-alpha approximations; ${represented} are editable Hyde contours.` });
     if (region.geometry.status === 'inferred') warnings.push({ code: 'HIDDEN_GEOMETRY_INFERRED', severity: 'warning', regionId: region.id, bounds: region.bounds, message: 'This editable geometry includes an inferred hidden area.' });
-    if (regionPath(region).points.length > 4096) throw new Error(`PATH_TOO_COMPLEX: Region ${region.id} exceeds Hyde's path limit.`);
+    if (path.points.length > 4096 || represented > 64 || path.holes?.some(hole => hole.points.length > 4096) ||
+      path.points.length + (path.holes?.reduce((sum, hole) => sum + hole.points.length, 0) ?? 0) > 16384)
+      throw new Error(`PATH_TOO_COMPLEX: Region ${region.id} exceeds Hyde's contour limit.`);
   }
   const projectName = options.name ?? document.name;
   const sdk = HydeAuthoringSession.create(projectName);
@@ -149,7 +154,7 @@ export async function exportNativeDecomposition(document: DecompositionDocumentV
     if (!mask) throw new Error(`Region ${region.id} mask is missing.`);
     const id = `hc_${region.id}`; regionIds[region.id] = id;
     const part = partById.get(region.partId ?? '');
-    const texture = region.geometry.texture === 'source-crop' || region.holeCount > 0 || Boolean(mask.alpha);
+    const texture = region.geometry.texture === 'source-crop' || region.holeCount > (regionPath(region).holes?.length ?? 0) || Boolean(mask.alpha);
     let assetId: string | undefined;
     if (texture) {
       const bytes = cropTexture(region, mask, image);

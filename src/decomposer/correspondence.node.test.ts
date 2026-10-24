@@ -93,6 +93,23 @@ describe('multi-reference correspondence ranking', () => {
     await session.close();
   });
 
+  it('does not treat front/back or alignment annotations as identity decisions', async () => {
+    const pair = makeRepeatedMultiviewFixture();
+    const { session, document, primary, alternate } = await analyze(pair.primary.input, pair.alternate.input);
+    try {
+      const options = { primarySource: document.sources[0], alternateSource: document.sources[1] };
+      const initial = rankReferenceCorrespondences(primary, alternate, options);
+      const [first, second] = initial.candidates;
+      const annotations: CorrespondenceRecord[] = [
+        { ...first, id: 'manual-layer-evidence', kind: 'front-back-evidence', origin: 'manual', accepted: true },
+        { ...second, id: 'manual-alignment', kind: 'source-alignment', origin: 'manual', accepted: false },
+      ];
+      const ranked = rankReferenceCorrespondences(primary, alternate, { ...options, manual: annotations });
+      expect(ranked.candidates.map(item => item.id)).toEqual(initial.candidates.map(item => item.id));
+      expect(ranked.candidates.every(item => item.kind === 'possible-match' && item.accepted === undefined)).toBe(true);
+    } finally { await session.close(); }
+  });
+
   it('does not infer part identity from a detail or mask-guide source role', async () => {
     const red: Color = [200, 60, 50], blue: Color = [40, 120, 200];
     const first = raster('front.png', (_, rect, disk) => { disk(16, 22, 8, red); rect(47, 12, 62, 32, blue); }, 'primary');
@@ -133,6 +150,51 @@ describe('multi-reference correspondence ranking', () => {
     expect(best?.regionIds![0]).toBe(pRedNextToBlue.id);
     expect(best?.evidence.some(text => text.includes('manual landmark-adjacency support'))).toBe(true);
     expect(ranked.candidates.every(item => item.regionIds![0] !== pBlue.id && item.regionIds![1] !== aBlue.id)).toBe(true);
+    await session.close();
+  });
+
+  it('uses paired point landmarks without region assignments as bounded evidence for repeated shapes', async () => {
+    const pair = makeRepeatedMultiviewFixture();
+    const { session, document, primary, alternate } = await analyze(pair.primary.input, pair.alternate.input);
+    const [primaryLeft, primaryRight] = [...primary].sort((a, b) => a.bounds.x - b.bounds.x);
+    const [alternateLeft, alternateRight] = [...alternate].sort((a, b) => a.bounds.x - b.bounds.x);
+    const landmark: CorrespondenceRecord = { id: 'landmark_near_left', kind: 'landmark', origin: 'manual', accepted: true,
+      sourceIds: [document.sources[1].id, document.sources[0].id],
+      landmarkPoints: [{ x: 9, y: 20 }, { x: 6, y: 20 }], evidence: ['two user-paired points on the background'] };
+    const options = { primarySource: document.sources[0], alternateSource: document.sources[1] };
+    const ranked = rankReferenceCorrespondences(primary, alternate, { ...options, manual: [landmark] });
+    const firstFor = (regionId: string) => ranked.candidates.find(item => item.regionIds?.[1] === regionId);
+    expect(firstFor(alternateLeft.id)?.regionIds?.[0]).toBe(primaryLeft.id);
+    expect(firstFor(alternateRight.id)?.regionIds?.[0]).toBe(primaryRight.id);
+    expect(firstFor(alternateRight.id)?.evidence.some(item => item.includes('point-landmark radial distance'))).toBe(true);
+    expect(ranked.candidates.every(item => item.kind === 'possible-match' && item.accepted === undefined)).toBe(true);
+    const rejected = rankReferenceCorrespondences(primary, alternate, { ...options, manual: [{ ...landmark, accepted: false }] });
+    expect(rejected.candidates.every(item => item.evidence.every(text => !text.includes('point-landmark radial distance')))).toBe(true);
+    await session.close();
+  });
+
+  it('uses source-pixel contact length to rank repeated regions with identically colored neighbors', async () => {
+    const red: Color = [190, 70, 60], blue: Color = [30, 100, 210];
+    const first = raster('contact-front.png', (_, rect) => {
+      rect(8, 8, 20, 36, red); rect(20, 14, 25, 30, blue);
+      rect(43, 8, 55, 36, red); rect(55, 20, 60, 25, blue);
+    }, 'primary');
+    const second = raster('contact-alternate.png', (_, rect) => {
+      rect(8, 8, 20, 36, red); rect(20, 20, 25, 25, blue);
+      rect(43, 8, 55, 36, red); rect(55, 14, 60, 30, blue);
+    }, 'alternate-pose');
+    const { session, document, primary, alternate } = await analyze(first, second);
+    const redPrimary = primary.filter(region => region.color === '#be463c').sort((a, b) => a.bounds.x - b.bounds.x);
+    const redAlternate = alternate.filter(region => region.color === '#be463c').sort((a, b) => a.bounds.x - b.bounds.x);
+    expect(redPrimary).toHaveLength(2);
+    expect(redAlternate).toHaveLength(2);
+    expect(redPrimary[0].adjacency[0]?.sharedBoundary).toBeGreaterThan(redPrimary[1].adjacency[0]?.sharedBoundary);
+    const ranked = rankReferenceCorrespondences(primary, alternate, { primarySource: document.sources[0], alternateSource: document.sources[1] });
+    const firstFor = (regionId: string) => ranked.candidates.find(item => item.regionIds?.[1] === regionId);
+    expect(firstFor(redAlternate[0].id)?.regionIds?.[0]).toBe(redPrimary[1].id);
+    expect(firstFor(redAlternate[1].id)?.regionIds?.[0]).toBe(redPrimary[0].id);
+    expect(firstFor(redAlternate[1].id)?.evidence.some(item => item.includes('color/contact distance'))).toBe(true);
+    expect(firstFor(redAlternate[1].id)?.ambiguity).toBeTruthy();
     await session.close();
   });
 });

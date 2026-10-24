@@ -43,7 +43,7 @@ describe('deterministic multi-scale color segmentation and path fidelity', () =>
     await session.close();
   });
 
-  it('fits the character head without collapsing it to a triangle, while disclosing actual holes', async () => {
+  it('fits the character head and retains independently editable interior holes', async () => {
     const character = makeSyntheticFixture('articulated-character');
     const session = await DecompositionSession.importSources([character.input], { mode: 'animation-ready' });
     await session.analyze();
@@ -58,7 +58,8 @@ describe('deterministic multi-scale color segmentation and path fidelity', () =>
       const fixture = makeSyntheticFixture(name);
       const withHole = await DecompositionSession.importSources([fixture.input]);
       await withHole.analyze();
-      expect(withHole.snapshot().diagnostics.map(item => item.code)).toContain('HOLE_NOT_REPRESENTABLE');
+      for (const region of withHole.snapshot().regions.filter(item => item.holeCount > 0))
+        expect(region.geometry.generatedPath.holes?.length).toBe(region.holeCount);
       await withHole.close();
     }
   });

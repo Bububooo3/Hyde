@@ -123,8 +123,14 @@ export function validateDocument(model: unknown, assembly: boolean): asserts mod
     if (element.shapePath !== undefined) {
       check(['rectangle', 'ellipse', 'polygon', 'image', 'video'].includes(String(element.kind)), 'Only visual shapes and media can have an editable path.');
       check(record(element.shapePath) && Array.isArray(element.shapePath.points), 'Invalid editable path.');
-      check(element.shapePath.points.length >= 3 && element.shapePath.points.length <= 4096, 'An editable path needs 3 to 4096 points.');
-      for (const point of element.shapePath.points) {
+      const holes = element.shapePath.holes;
+      check(holes === undefined || Array.isArray(holes) && holes.length <= 64, 'An editable path has too many holes.');
+      const contours = [element.shapePath, ...(holes ?? [])];
+      check((holes ?? []).every(hole => record(hole) && hole.holes === undefined), 'Nested editable holes are unsupported.');
+      check(contours.every(contour => record(contour) && Array.isArray(contour.points) && contour.points.length >= 3 && contour.points.length <= 4096)
+        && contours.reduce((sum, contour) => sum + contour.points.length, 0) <= 16384,
+      'An editable contour needs 3 to 4096 points, with no more than 16384 total.');
+      for (const contour of contours) for (const point of contour.points) {
         check(record(point), 'Invalid editable path point.');
         number(point.x, 'Path point X'); number(point.y, 'Path point Y');
         for (const handle of ['in', 'out'] as const) if (point[handle] !== undefined) {

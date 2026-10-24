@@ -1,8 +1,8 @@
-import type { PathPoint, ShapePath } from '../model';
+import type { PathPoint, ShapeContour, ShapePath } from '../model';
 import type { Box, CorrespondenceRecord, DecompositionDiagnostic, DecompositionMode, LayerRecord, PartRecord, Point, ReconstructionSettings, RegionGeometry, RegionMask, RegionRecord, SourceReference } from './types';
 import type { DecodedImage } from './image';
 
-export const ALGORITHM_VERSION = 'deterministic-regions-2';
+export const ALGORITHM_VERSION = 'deterministic-regions-3';
 interface Component { id: number; count: number; minX: number; minY: number; maxX: number; maxY: number; r: number; g: number; b: number; variance: number; partialAlpha: number }
 interface BoundaryEvidence { shared: number; contrast: number; coarse2: number; coarse4: number }
 export interface AnalysisResult { regions: RegionRecord[]; parts: PartRecord[]; masks: Map<string, RegionMask>; layers: LayerRecord[]; diagnostics: DecompositionDiagnostic[] }
@@ -115,6 +115,22 @@ function sampledIoU(points: Point[], mask: RegionMask, bounds: Box): number {
   for (let y = 0; y < mask.height; y += stride) for (let x = 0; x < mask.width; x += stride) {
     const expected = mask.bytes[y * mask.width + x] !== 0;
     const actual = polygonContains(points, bounds.x + x + .5, bounds.y + y + .5);
+    if (expected && actual) intersection++;
+    if (expected || actual) union++;
+  }
+  return union ? intersection / union : 1;
+}
+
+function contourAgreement(original: Point[], fitted: Point[]): number {
+  const bounds = original.reduce((box, point) => ({ left: Math.min(box.left, point.x), right: Math.max(box.right, point.x),
+    top: Math.min(box.top, point.y), bottom: Math.max(box.bottom, point.y) }),
+  { left: Infinity, right: -Infinity, top: Infinity, bottom: -Infinity });
+  const left = Math.floor(bounds.left), right = Math.ceil(bounds.right);
+  const top = Math.floor(bounds.top), bottom = Math.ceil(bounds.bottom);
+  let intersection = 0, union = 0;
+  const stride = Math.max(1, Math.ceil(Math.sqrt(Math.max(1, (right - left) * (bottom - top)) / 30_000)));
+  for (let y = top; y < bottom; y += stride) for (let x = left; x < right; x += stride) {
+    const expected = polygonContains(original, x + .5, y + .5), actual = polygonContains(fitted, x + .5, y + .5);
     if (expected && actual) intersection++;
     if (expected || actual) union++;
   }
@@ -277,8 +293,8 @@ function fitVisibleContour(loop: Point[], mask: RegionMask, bounds: Box, setting
   let quality = sampledIoU(outer, mask, bounds);
   // Use the requested tolerance as the initial complexity budget. If it drops
   // visible source pixels, spend a few more vertices while within maxPoints.
-  // Holes cannot be represented by one Hyde path, so do not disguise their
-  // residual error by repeatedly refining only the outside contour.
+  // A compound region is scored after fitting its interior contours; do not
+  // refine only the outside against a mask that includes transparent holes.
   for (let attempt = 0; attempt < 3 && !hasHoles && quality < .98 && tolerance > .08; attempt++) {
     tolerance /= 2;
     const candidate = simplify(loop, tolerance, settings.maxPathPoints);
@@ -301,21 +317,72 @@ function fitVisibleContour(loop: Point[], mask: RegionMask, bounds: Box, setting
   return { path: outer.map(point => ({ ...point })), quality: sampledIoU(outer, mask, bounds) };
 }
 
-function normalizedPath(path: PathPoint[], bounds: Box): ShapePath {
+function normalizedPath(path: PathPoint[], bounds: Box, holes: PathPoint[][] = []): ShapePath {
   const normalize = (point: Point) => ({ x: (point.x - bounds.x) / bounds.width, y: (point.y - bounds.y) / bounds.height });
-  return { points: path.map(point => ({ ...normalize(point), ...(point.in ? { in: normalize(point.in) } : {}), ...(point.out ? { out: normalize(point.out) } : {}) })) };
+  const contour = (points: PathPoint[]): ShapeContour => ({ points: points.map(point => ({ ...normalize(point),
+    ...(point.in ? { in: normalize(point.in) } : {}), ...(point.out ? { out: normalize(point.out) } : {}) })) });
+  return { ...contour(path), ...(holes.length ? { holes: holes.map(contour) } : {}) };
+}
+
+function sampledCompoundIoU(outer: Point[], holes: Point[][], mask: RegionMask, bounds: Box): number {
+  const stride = Math.max(1, Math.ceil(Math.sqrt(mask.bytes.length / 30_000)));
+  let intersection = 0, union = 0;
+  for (let y = 0; y < mask.height; y += stride) for (let x = 0; x < mask.width; x += stride) {
+    const px = bounds.x + x + .5, py = bounds.y + y + .5;
+    const expected = mask.bytes[y * mask.width + x] !== 0;
+    const actual = polygonContains(outer, px, py) && !holes.some(hole => polygonContains(hole, px, py));
+    if (expected && actual) intersection++;
+    if (expected || actual) union++;
+  }
+  return union ? intersection / union : 1;
+}
+
+/** Reject a fitted inner contour if it would move a source hole enough to
+ * change its topology. Its raster evidence remains in the mask for fallback. */
+function fitHoleContour(loop: Point[], settings: ReconstructionSettings): PathPoint[] | undefined {
+  let tolerance = settings.pathTolerance;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    let simplified: Point[];
+    try { simplified = simplify(loop, tolerance, settings.maxPathPoints); }
+    catch { return undefined; }
+    const curved = curvedContour(loop, simplified, tolerance);
+    const selected = [curved, simplified.map(point => ({ ...point }))].find(candidate => {
+      const flattened = flattenedPath(candidate);
+      return candidate.length >= 3 && candidate.length <= 4096 && flattened.length <= 4096 &&
+        !selfIntersects(flattened) && Math.abs(area(flattened)) > 1e-5 && contourAgreement(loop, flattened) >= .98;
+    });
+    if (selected) return selected;
+    tolerance /= 2;
+    if (tolerance < .04) break;
+  }
+  return undefined;
+}
+
+function fitRegionContours(loops: Point[][], mask: RegionMask, bounds: Box, settings: ReconstructionSettings, coverage?: Uint8Array) {
+  const { path } = fitVisibleContour(loops[0], mask, bounds, settings, loops.length > 1, coverage);
+  const holes: PathPoint[][] = [];
+  let pointCount = path.length;
+  for (const loop of loops.slice(1)) {
+    if (holes.length >= 64) break;
+    const fitted = fitHoleContour(loop, settings);
+    if (!fitted || pointCount + fitted.length > 16384) continue;
+    holes.push(fitted); pointCount += fitted.length;
+  }
+  return { path: normalizedPath(path, bounds, holes), pointCount,
+    holeCount: loops.length - 1,
+    quality: sampledCompoundIoU(flattenedPath(path), holes.map(flattenedPath), mask, bounds) };
 }
 
 export function fitMaskGeometry(id: string, mask: RegionMask, bounds: Box, settings: ReconstructionSettings, texture: RegionGeometry['texture']): { geometry: RegionGeometry; holeCount: number } {
   const loops = contours(mask, bounds.x, bounds.y);
   if (!loops.length) throw new Error('Mask contains no foreground pixels.');
   if (loops.filter(loop => area(loop) > 0).length > 1) throw new Error('AMBIGUOUS_REGION: A single path cannot represent disconnected mask islands. Split them into separate regions.');
-  const { path, quality } = fitVisibleContour(loops[0], mask, bounds, settings, loops.length > 1, mask.alpha);
-  if (path.length > 4096) throw new Error('PATH_TOO_COMPLEX');
+  const fitted = fitRegionContours(loops, mask, bounds, settings, mask.alpha);
+  if (fitted.path.points.length > 4096) throw new Error('PATH_TOO_COMPLEX');
   return {
-    geometry: { id: `${id}_geometry`, generatedPath: normalizedPath(path, bounds), bounds,
-      status: 'visible', quality: { maskIoU: quality, pathPointCount: path.length, colorError: 0 }, texture, locked: false },
-    holeCount: Math.max(0, loops.length - 1),
+    geometry: { id: `${id}_geometry`, generatedPath: fitted.path, bounds,
+      status: 'visible', quality: { maskIoU: fitted.quality, pathPointCount: fitted.pointCount, colorError: 0 }, texture, locked: false },
+    holeCount: fitted.holeCount,
   };
 }
 
@@ -567,11 +634,12 @@ export function analyzeImage(image: DecodedImage, source: SourceReference, mode:
     if (coverage) for (let y = 0; y < mask.height; y++) for (let x = 0; x < mask.width; x++) if (mask.bytes[y * mask.width + x]) {
       coverage[y * mask.width + x] = rgba[((bounds.y + y) * width + bounds.x + x) * 4 + 3];
     }
-    const { path, quality } = fitVisibleContour(loops[0], mask, bounds, settings, loops.length > 1, coverage);
-    if (path.length > 4096) throw new Error('PATH_TOO_COMPLEX');
-    const shapePath = normalizedPath(path, bounds);
-    const holeCount = Math.max(0, loops.length - 1);
-    if (holeCount) diagnostics.push({ code: 'HOLE_NOT_REPRESENTABLE', severity: 'warning', sourceId: source.id, regionId: id, bounds, message: 'The source mask has interior holes; a single Hyde path cannot preserve transparent cutouts.', suggestion: 'Keep a masked raster texture or manually split the geometry.' });
+    const fitted = fitRegionContours(loops, mask, bounds, settings, coverage);
+    if (fitted.path.points.length > 4096) throw new Error('PATH_TOO_COMPLEX');
+    const shapePath = fitted.path, holeCount = fitted.holeCount;
+    if (holeCount > (shapePath.holes?.length ?? 0)) diagnostics.push({ code: 'HOLE_NOT_REPRESENTABLE', severity: 'warning', sourceId: source.id, regionId: id, bounds,
+      message: `${holeCount - (shapePath.holes?.length ?? 0)} interior source contour(s) exceed safe native vector fitting limits.`,
+      suggestion: 'Refine or split the region; otherwise approve an explicit raster-alpha fallback at export.' });
     const variance = Math.sqrt(component.variance), texture = component.partialAlpha > 0 || settings.preserveTexture && variance > 8 ? 'source-crop' : 'flat';
     if (component.partialAlpha && !settings.preserveTexture) diagnostics.push({ code: 'TEXTURE_APPROXIMATION', severity: 'info', sourceId: source.id, regionId: id, bounds,
       message: 'The region keeps its source alpha fringe in an editable textured path even with texture preservation disabled.' });
@@ -580,7 +648,7 @@ export function analyzeImage(image: DecodedImage, source: SourceReference, mode:
       confidence: { kind: 'heuristic', reasons: ['connected 4-neighbor foreground pixels', 'original-pixel boundary contrast and 2×/4× color agreement', 'visible alpha or opaque-border contrast'] },
       provenance: { algorithmVersion: ALGORITHM_VERSION, settingsFingerprint }, generationStatus: 'generated',
       locked: { mask: false, geometry: false, part: false }, lineage: { parents: [], children: [] }, partId,
-      geometry: { id: `${id}_geometry`, generatedPath: shapePath, bounds, status: 'visible', quality: { maskIoU: quality, pathPointCount: path.length, colorError: variance }, texture, locked: false },
+      geometry: { id: `${id}_geometry`, generatedPath: shapePath, bounds, status: 'visible', quality: { maskIoU: fitted.quality, pathPointCount: fitted.pointCount, colorError: variance }, texture, locked: false },
       holeCount, adjacency: [],
     };
     regions.push(region); masks.set(maskId, mask); labelToRegion.set(component.id, region);

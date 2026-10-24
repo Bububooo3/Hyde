@@ -8,7 +8,9 @@ import { exportNativeDecomposition } from './export';
 import type { HydeDecompositionExport, HydeDecompositionExportOptions } from './export';
 import { proposeHiddenContinuations } from './hidden';
 import { proposeJunctionLayers } from './junction';
-import { decodeSource } from './image';
+import { renderDiagnosticTile } from './diagnosticTile';
+import type { DiagnosticTile, DiagnosticTileRequest } from './diagnosticTile';
+import { decodeSource, unsupportedPngColorMetadata } from './image';
 import type { DecodedImage } from './image';
 import { defaultSettings } from './types';
 import type { CorrespondenceRecord, DecompositionDocumentV1, DecompositionMode, LayerRecord, PartRecord, ReconstructionSettings, RegionMask, RegionRecord, SourceInput, SourceReference } from './types';
@@ -82,7 +84,10 @@ function remapPath(path: ShapePath, before: RegionRecord['bounds'], after: Regio
     x: (before.x + value.x * before.width - after.x) / after.width,
     y: (before.y + value.y * before.height - after.y) / after.height,
   });
-  return { points: path.points.map(value => ({ ...point(value), ...(value.in ? { in: point(value.in) } : {}), ...(value.out ? { out: point(value.out) } : {}) })) };
+  const contour = (values: ShapePath['points']) => values.map(value => ({
+    ...point(value), ...(value.in ? { in: point(value.in) } : {}), ...(value.out ? { out: point(value.out) } : {}),
+  }));
+  return { points: contour(path.points), ...(path.holes ? { holes: path.holes.map(hole => ({ points: contour(hole.points) })) } : {}) };
 }
 
 function landmarkAlignment(document: DecompositionDocumentV1, sourceId: string, landmarkIds: string[]): [number, number, number, number, number, number] {
@@ -227,7 +232,12 @@ export class DecompositionSession {
     const docId = `doc_${sources[0].byteHash.slice(0, 16)}`;
     const document: DecompositionDocumentV1 = {
       format: 'hyde-decomposition', schemaVersion: 1, id: docId, name: options.name ?? inputs[0].name.replace(/\.[^.]+$/, ''), createdAt: now, updatedAt: now,
-      algorithmVersion: ALGORITHM_VERSION, mode, settings, sources, regions: [], parts: [], correspondences: [], layers: [], diagnostics: [], history: [],
+      algorithmVersion: ALGORITHM_VERSION, mode, settings, sources, regions: [], parts: [], correspondences: [], layers: [],
+      diagnostics: sources.flatMap(source => {
+        const warning = source.mime === 'image/png' ? unsupportedPngColorMetadata(bytes.get(source.id)!) : undefined;
+        return warning ? [{ code: 'COLOR_SPACE_WARNING' as const, severity: 'warning' as const, sourceId: source.id, message: warning,
+          suggestion: 'Convert the reference to sRGB before import when precise color matching matters.' }] : [];
+      }), history: [],
     };
     validateDecompositionDocument(document, bytes, new Map(), new Map([...images].map(([id, image]) => [id, image.rgba])));
     return new DecompositionSession(document, bytes, images, new Map());
@@ -263,16 +273,46 @@ export class DecompositionSession {
   async analyze(options: { mode?: DecompositionMode; settings?: Partial<ReconstructionSettings>; signal?: AbortSignal } = {}): Promise<{ revision: number; regionCount: number; diagnostics: DecompositionDocumentV1['diagnostics']; remapped: Record<string, string> }> {
     this.ensureOpen();
     const mode = options.mode ?? this.document.mode;
-    const settings = { ...(options.mode && options.mode !== this.document.mode ? defaultSettings(mode) : this.document.settings), ...options.settings };
-    const fingerprint = await sha256(new TextEncoder().encode(JSON.stringify(settings)));
     const previous = this.document, priorMasks = this.masks;
+    let settings = { ...(options.mode && options.mode !== previous.mode ? defaultSettings(mode) : previous.settings), ...options.settings };
+    let complexityNote: { sourceId: string; before: number; after: number } | undefined;
+    let firstPass: { sourceId: string; fingerprint: string; result: ReturnType<typeof analyzeImage> } | undefined;
+    // One first-pass retry is allowed only when the ordinary appearance pass
+    // fragments a primary reference into mostly tiny pieces. Keep the ordinary
+    // profile for clean flat art and gradients; explicit user settings win.
+    if (mode === 'appearance' && !previous.regions.length && !options.settings && settings.colorStep === 24) {
+      const source = previous.sources.find(item => item.role === 'primary');
+      if (source) {
+        const image = this.images.get(source.id)!;
+        const baselineFingerprint = await sha256(new TextEncoder().encode(JSON.stringify(settings)));
+        const baseline = analyzeImage(image, source, mode, settings, baselineFingerprint, options.signal);
+        firstPass = { sourceId: source.id, fingerprint: baselineFingerprint, result: baseline };
+        const tiny = baseline.regions.filter(region => region.pixelCount < settings.minRegionPixels).length;
+        if (baseline.regions.length >= 100 && tiny > baseline.regions.length / 2) {
+          const alternative = { ...settings, colorStep: 40, minRegionPixels: 8 };
+          const simplified = analyzeImage(image, source, mode, alternative, 'complexity-probe', options.signal);
+          const quality = (regions: typeof baseline.regions) => regions.reduce((sum, region) =>
+            sum + region.pixelCount * region.geometry.quality.maskIoU, 0) / Math.max(1, regions.reduce((sum, region) => sum + region.pixelCount, 0));
+          if (simplified.regions.length >= 2 && simplified.parts.length >= 2 &&
+            simplified.regions.length <= baseline.regions.length * .6 && quality(simplified.regions) >= quality(baseline.regions) - .01) {
+            settings = alternative;
+            complexityNote = { sourceId: source.id, before: baseline.regions.length, after: simplified.regions.length };
+          }
+        }
+      }
+    }
+    const fingerprint = await sha256(new TextEncoder().encode(JSON.stringify(settings)));
     const candidate = structuredClone(previous), masks = cloneMaskMap(priorMasks);
     candidate.algorithmVersion = ALGORITHM_VERSION;
     candidate.mode = mode; candidate.settings = settings; candidate.regions = []; candidate.parts = []; candidate.layers = []; candidate.diagnostics = [];
+    if (complexityNote) candidate.diagnostics.push({ code: 'AUTO_COMPLEXITY_REDUCTION', severity: 'info', sourceId: complexityNote.sourceId,
+      message: `The first appearance pass yielded ${complexityNote.before} mostly tiny regions; coarser color grouping reduced it to ${complexityNote.after} while preserving mask agreement.`,
+      suggestion: 'Adjust Color step and minimum region size if small paint features need separate parts.' });
     const remapped: Record<string, string> = {}, matched = new Set<string>();
     for (const source of candidate.sources) {
       if (options.signal?.aborted) throw new Error('CANCELED');
-      const result = analyzeImage(this.images.get(source.id)!, source, mode, settings, fingerprint, options.signal);
+      const result = firstPass?.sourceId === source.id && firstPass.fingerprint === fingerprint
+        ? firstPass.result : analyzeImage(this.images.get(source.id)!, source, mode, settings, fingerprint, options.signal);
       const old = previous.regions.filter(region => region.sourceId === source.id && active(region) && region.geometry.status === 'visible');
       const localIds = new Map<string, string>();
       for (const region of result.regions) {
@@ -316,6 +356,9 @@ export class DecompositionSession {
         backRegionId: localIds.get(layer.backRegionId) ?? layer.backRegionId,
       })));
       candidate.diagnostics.push(...result.diagnostics);
+      const colorWarning = source.mime === 'image/png' ? unsupportedPngColorMetadata(this.sourceBytes.get(source.id)!) : undefined;
+      if (colorWarning) candidate.diagnostics.push({ code: 'COLOR_SPACE_WARNING', severity: 'warning', sourceId: source.id,
+        message: colorWarning, suggestion: 'Convert the reference to sRGB before import when precise color matching matters.' });
     }
     for (const region of previous.regions) if (region.geometry.status === 'inferred' && region.suppressed && !candidate.regions.some(item => item.id === region.id)) {
       candidate.regions.push(structuredClone(region));
@@ -432,12 +475,24 @@ export class DecompositionSession {
 
   inspect(query: { target: 'summary' | 'sources' | 'regions' | 'parts' | 'region' | 'part' | 'diagnostics' | 'correspondences'; id?: string; limit?: number; cursor?: number }) {
     this.ensureOpen();
-    const limit = Math.max(1, Math.min(100, query.limit ?? 25)), cursor = Math.max(0, Math.floor(query.cursor ?? 0));
+    if (!['summary', 'sources', 'regions', 'parts', 'region', 'part', 'diagnostics', 'correspondences'].includes(query.target))
+      return { revision: this.revision, error: { code: 'OPERATION_UNSUPPORTED', message: 'Inspection target is unsupported.' } };
+    if (query.limit !== undefined && (!Number.isSafeInteger(query.limit) || query.limit < 1 || query.limit > 100) ||
+      query.cursor !== undefined && (!Number.isSafeInteger(query.cursor) || query.cursor < 0))
+      return { revision: this.revision, error: { code: 'INVALID_ARGUMENT', message: 'Inspection limit must be 1–100 and cursor must be a nonnegative integer.' } };
+    const limit = query.limit ?? 25, cursor = query.cursor ?? 0;
     if (query.target === 'summary') return { revision: this.revision, id: this.document.id, mode: this.document.mode, sourceCount: this.document.sources.length, regionCount: this.document.regions.filter(active).length, partCount: this.document.parts.length, diagnosticCount: this.document.diagnostics.length };
-    if (query.target === 'region') return { revision: this.revision, region: structuredClone(this.document.regions.find(item => item.id === query.id)) };
-    if (query.target === 'part') return { revision: this.revision, part: structuredClone(this.document.parts.find(item => item.id === query.id)) };
+    if (query.target === 'region' || query.target === 'part') {
+      const item = query.target === 'region' ? this.document.regions.find(region => region.id === query.id) : this.document.parts.find(part => part.id === query.id);
+      if (!item) return { revision: this.revision, error: { code: 'TARGET_NOT_FOUND', message: `${query.target} does not exist.`, targetId: query.id } };
+      return query.target === 'region' ? { revision: this.revision, region: structuredClone(item) } : { revision: this.revision, part: structuredClone(item) };
+    }
     const list = query.target === 'sources' ? this.document.sources : query.target === 'parts' ? this.document.parts : query.target === 'diagnostics' ? this.document.diagnostics : query.target === 'correspondences' ? this.document.correspondences : this.document.regions.filter(active);
     return { revision: this.revision, items: structuredClone(list.slice(cursor, cursor + limit)), nextCursor: cursor + limit < list.length ? cursor + limit : undefined };
+  }
+  renderDiagnosticTile(request: DiagnosticTileRequest): DiagnosticTile {
+    this.ensureOpen();
+    return renderDiagnosticTile(this.document, this.images, this.masks, request);
   }
   compare() {
     this.ensureOpen();

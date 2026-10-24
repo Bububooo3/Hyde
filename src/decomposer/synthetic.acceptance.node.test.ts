@@ -112,17 +112,20 @@ describe('rights-clear synthetic decomposer acceptance inventory', () => {
     await reopened.close(); await session.close();
   });
 
-  it('discloses occlusion and hole limits instead of silently exporting a false vector hole', async () => {
+  it('exports representable holes as native contours and discloses any residual fallback', async () => {
     for (const name of ['occlusion', 'hole-islands', 'pixel-art'] as const) {
       const { session, document } = await analyze(name);
       expect(document.regions.some(item => item.holeCount > 0), name).toBe(true);
-      expect(document.diagnostics.map(item => item.code), name).toContain('HOLE_NOT_REPRESENTABLE');
-      await expect(session.exportHyde({ format: 'hyde' }), name).rejects.toThrow('HOLE_NOT_REPRESENTABLE');
+      const unresolved = document.regions.filter(region => region.holeCount > (region.geometry.generatedPath.holes?.length ?? 0));
+      if (unresolved.length) await expect(session.exportHyde({ format: 'hyde' }), name).rejects.toThrow('HOLE_NOT_REPRESENTABLE');
       const allowed = await session.exportHyde({ format: 'hyde', allowHoleApproximation: true });
       const native = decodeProjectBytes(allowed.bytes);
-      expect(allowed.warnings.map(item => item.code), name).toContain('HOLE_NOT_REPRESENTABLE');
+      expect(allowed.warnings.filter(item => item.code === 'HOLE_NOT_REPRESENTABLE').length, name).toBe(unresolved.length);
+      for (const region of document.regions.filter(item => item.holeCount > 0)) {
+        const element = native.elements.find(item => item.id === allowed.mapping.regionIds[region.id]);
+        expect(element?.shapePath?.holes?.length ?? 0, name).toBe(region.geometry.generatedPath.holes?.length ?? 0);
+      }
       expect(native.elements.filter(item => item.shapePath).length, name).toBe(document.regions.length);
-      expect(native.assets.length, name).toBeGreaterThanOrEqual(1);
       await session.close();
     }
   });

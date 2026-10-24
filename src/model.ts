@@ -42,9 +42,12 @@ export interface AssemblyClipInstance {
 export interface Asset { id: string; name: string; mime: string; kind: 'image' | 'video' | 'audio' | 'font'; dataUrl: string; duration?: number; licenseNotice?: string }
 export interface Attachment { type: 'fixed' | 'hinge' | 'slider'; parentId: string; min?: number; max?: number }
 export interface PathPoint { x: number; y: number; in?: {x: number; y: number}; out?: {x: number; y: number} }
-/** Closed cubic path in element-local, normalized coordinates. Missing handles
- * make a straight edge. This remains resolution-independent when resized. */
-export interface ShapePath { points: PathPoint[] }
+/** Closed cubic contour in element-local, normalized coordinates. Missing
+ * handles make a straight edge. */
+export interface ShapeContour { points: PathPoint[] }
+/** The outer contour and optional editable cutouts share one element transform.
+ * Older archives contain only `points`; holes are a backward-compatible field. */
+export interface ShapePath extends ShapeContour { holes?: ShapeContour[] }
 /** Procedural offsets run after keyed/assembly animation but before a part's
  * attachment constraint and parent transform. Times are element-local seconds. */
 export interface MotionBase { id: string; enabled: boolean; start: number; duration: number }

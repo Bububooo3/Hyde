@@ -33,7 +33,7 @@ function referenceTime(value: number): number {
 
 /** Selection/editing must still work for a hidden object or outside its active span.
  * Extend only evaluation spans, retaining authored anchors and local key times. */
-function worldPoses(project: Project, time: number): Map<string, StoryElement> {
+export function worldPoses(project: Project, time: number): Map<string, StoryElement> {
   const scene = {
     ...project,
     elements: project.elements.map(element => ({

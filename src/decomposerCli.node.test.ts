@@ -3,9 +3,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { runDecomposerCli } from './decomposerCli';
-import { encodePng } from './decomposer/image';
+import { decodePng, encodePng } from './decomposer/image';
 import { DecompositionSession } from './decomposer/session';
 import { decodeProjectBytes } from './archive';
+import { launchLocalChromium } from './cliBrowserRunner';
 
 const folders: string[] = [];
 afterEach(async () => { for (const folder of folders.splice(0)) await rm(folder, { recursive: true, force: true }); });
@@ -58,6 +59,18 @@ describe('hyde-decompose CLI', () => {
     expect(analyzed.result.revision).toBe(1);
     const inspected = await run(['inspect', document, '--target', 'regions', '--json']);
     expect(inspected.result.result.items).toHaveLength(analyzed.result.regionCount);
+    const regionId = inspected.result.result.items[0].id;
+    const evidencePath = join(folder, 'evidence.png');
+    const tile = await run(['inspect', document, '--target', 'tile', '--view', 'evidence', '--region', regionId,
+      '--bounds', '0,0,16,16', '--output', evidencePath, '--json']);
+    expect(tile.exit, JSON.stringify(tile.error)).toBe(0);
+    expect(tile.result.result).toMatchObject({ regionId, mime: 'image/png', bounds: { x: 0, y: 0, width: 16, height: 16 } });
+    expect(JSON.stringify(tile.result)).not.toContain('bytes');
+    expect(decodePng(await readFile(evidencePath)).width).toBe(16);
+    expect((await run(['inspect', document, '--target', 'region', '--id', 'missing', '--json'])).error.errors[0].code).toBe('TARGET_NOT_FOUND');
+    expect((await run(['inspect', document, '--target', 'regions', '--limit', 'bad', '--json'])).error.errors[0].code).toBe('INVALID_ARGUMENT');
+    expect((await run(['inspect', document, '--target', 'tile', '--view', 'mask', '--region', regionId,
+      '--bounds', '0,0,513,1', '--output', join(folder, 'too-large.png'), '--json'])).error.errors[0].code).toBe('RESOURCE_LIMIT');
     expect((await run(['compare', document, '--json'])).result.result.regionCount).toBe(analyzed.result.regionCount);
 
     const session = await DecompositionSession.openDocument(await readFile(document));
@@ -101,4 +114,38 @@ describe('hyde-decompose CLI', () => {
     expect(Array.from((await readFile(overlay)).subarray(0, 8))).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
     expect(JSON.stringify(comparison.result)).not.toContain('residualOverlayPng');
   }, 60_000);
+
+  (process.env.HYDE_TEST_BROWSER ? it : it.skip)('imports JPEG and WebP through local browser decode and reopens canonical pixels', async () => {
+    const browser = await launchLocalChromium();
+    let encoded: { jpeg: string; webp: string };
+    try {
+      const page = await browser.newPage();
+      encoded = await page.evaluate(() => {
+        const canvas = document.createElement('canvas'); canvas.width = 24; canvas.height = 20;
+        const context = canvas.getContext('2d')!;
+        context.fillStyle = 'white'; context.fillRect(0, 0, canvas.width, canvas.height);
+        context.fillStyle = '#d43b27'; context.fillRect(4, 3, 13, 14);
+        return { jpeg: canvas.toDataURL('image/jpeg', .96), webp: canvas.toDataURL('image/webp', .96) };
+      });
+    } finally { await browser.close(); }
+    const folder = await mkdtemp(join(process.cwd(), '.hyde-decompose-decode-')); folders.push(folder);
+    for (const [kind, extension, mime] of [['jpeg', 'jpg', 'image/jpeg'], ['webp', 'webp', 'image/webp']] as const) {
+      expect(encoded[kind].startsWith(`data:${mime};base64,`)).toBe(true);
+      const sourceBytes = Buffer.from(encoded[kind].split(',')[1], 'base64');
+      const source = join(folder, `source.${extension}`), document = join(folder, `source-${kind}.hydecomp`);
+      await writeFile(source, sourceBytes);
+      const imported = await run(['import', '--source', source, '--output', document, '--json']);
+      expect(imported.exit, JSON.stringify(imported.error)).toBe(0);
+      const first = await DecompositionSession.openDocument(await readFile(document));
+      const sourceId = first.snapshot().sources[0].id, pixels = first.sourcePixelsFor(sourceId);
+      expect(first.sourceBytesFor(sourceId)).toEqual(Uint8Array.from(sourceBytes));
+      expect(pixels).toMatchObject({ width: 24, height: 20 });
+      await first.close();
+      expect((await run(['analyze', document, '--output', document, '--overwrite', '--json'])).exit).toBe(0);
+      const reopened = await DecompositionSession.openDocument(await readFile(document));
+      expect(reopened.sourcePixelsFor(sourceId).rgba).toEqual(pixels.rgba);
+      expect(reopened.snapshot().regions.length).toBeGreaterThan(0);
+      await reopened.close();
+    }
+  }, 90_000);
 });

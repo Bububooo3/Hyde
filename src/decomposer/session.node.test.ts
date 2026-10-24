@@ -188,7 +188,7 @@ describe('deterministic decomposition and native Hyde export', () => {
     await reopened.close(); await session.close();
   });
 
-  it('retains authentic texture inside an editable native path and refuses an unapproved transparent hole', async () => {
+  it('retains authentic texture and editable native hole contours', async () => {
     const textured = await DecompositionSession.importSources([{ bytes: texturedPng(), name: 'textured.png', mime: 'image/png' }]);
     await textured.analyze();
     const regions = textured.snapshot().regions.filter(item => item.generationStatus !== 'historical');
@@ -201,10 +201,11 @@ describe('deterministic decomposition and native Hyde export', () => {
     const hole = await DecompositionSession.importSources([{ bytes: texturedPng(true), name: 'hole.png', mime: 'image/png' }]);
     await hole.analyze();
     expect(hole.snapshot().regions[0].holeCount).toBe(1);
-    await expect(hole.exportHyde({ format: 'hyde' })).rejects.toThrow('HOLE_NOT_REPRESENTABLE');
-    const approximated = await hole.exportHyde({ format: 'hyde', allowHoleApproximation: true });
-    expect(approximated.warnings.map(item => item.code)).toContain('HOLE_NOT_REPRESENTABLE');
-    expect(approximated.project.elements.find(item => item.shapePath)?.assetId).toBeTruthy();
+    expect(hole.snapshot().regions[0].geometry.generatedPath.holes).toHaveLength(1);
+    const withHole = await hole.exportHyde({ format: 'hyde' });
+    expect(withHole.warnings.map(item => item.code)).not.toContain('HOLE_NOT_REPRESENTABLE');
+    expect(withHole.project.elements.find(item => item.shapePath)?.shapePath?.holes).toHaveLength(1);
+    expect(withHole.project.elements.find(item => item.shapePath)?.assetId).toBeTruthy();
   });
 
   it('merges adjacent pieces with lineage and preserves their colors as a masked texture', async () => {

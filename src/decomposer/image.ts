@@ -121,6 +121,27 @@ export function decodePng(bytes: Uint8Array): DecodedImage {
   return { width, height, rgba };
 }
 
+/** The deterministic PNG decoder keeps encoded channel values; it does not
+ * apply embedded ICC or gamma/chromaticity transforms. Surface that limit. */
+export function unsupportedPngColorMetadata(bytes: Uint8Array): string | undefined {
+  if (!equalPrefix(bytes, pngSignature)) return undefined;
+  let at = pngSignature.length, icc = false, gamma = false, chromaticity = false, srgb = false;
+  while (at + 12 <= bytes.length) {
+    const length = read32(bytes, at), next = at + 12 + length;
+    if (length > 128 * 1024 * 1024 || next > bytes.length) break;
+    const type = new TextDecoder().decode(bytes.subarray(at + 4, at + 8));
+    if (type === 'iCCP') icc = true;
+    if (type === 'gAMA') gamma = true;
+    if (type === 'cHRM') chromaticity = true;
+    if (type === 'sRGB') srgb = true;
+    if (type === 'IEND') break;
+    at = next;
+  }
+  if (icc) return 'Embedded PNG ICC profile is retained in the original bytes but is not applied to canonical analysis pixels.';
+  if (!srgb && (gamma || chromaticity)) return 'PNG gamma/chromaticity metadata is retained in the original bytes but is not applied to canonical analysis pixels.';
+  return undefined;
+}
+
 export async function decodeSource(input: SourceInput): Promise<DecodedImage> {
   if (!input.bytes.byteLength || input.bytes.byteLength > 128 * 1024 * 1024) throw new Error('IMAGE_TOO_LARGE');
   if (input.mime === 'image/png') return decodePng(input.bytes);

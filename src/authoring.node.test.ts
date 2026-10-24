@@ -166,6 +166,91 @@ describe('authoring transactions in Node', () => {
     expect(session.snapshot().elements[0].opacity).toBe(1);
   });
 
+  it('sets an editable child pose in stage coordinates through Hyde parent evaluation', async () => {
+    const session = HydeAuthoringSession.create('World transform');
+    const made = await session.execute({ protocolVersion: 1, expectedRevision: 0, commands: [
+      { op: 'element.create', args: { id: 'frame', kind: 'group', properties: { x: 100, y: 80, rotation: 90, scaleX: 2, scaleY: 1.5, width: 0, height: 0 } } },
+      { op: 'element.create', args: { id: 'part', kind: 'rectangle', properties: { parentId: 'frame', x: 10, y: 5, hidden: true } } },
+      { op: 'keyframe.upsert', args: { elementId: 'frame', property: 'x', timeSeconds: 0, value: 100 } },
+      { op: 'keyframe.upsert', args: { elementId: 'frame', property: 'x', timeSeconds: 1, value: 120 } },
+    ] });
+    expect(made.ok, JSON.stringify(made)).toBe(true);
+    const changed = await session.execute({ protocolVersion: 1, expectedRevision: 1, commands: [
+      { op: 'element.setTransform', args: { id: 'part', space: 'world', timeSeconds: 1, transform: { x: 150, y: 120, rotation: 110, scaleX: 3, scaleY: 1.5 } } },
+    ] });
+    expect(changed.ok, JSON.stringify(changed)).toBe(true);
+    const reopened = HydeAuthoringSession.open(session.exportProject());
+    const part = reopened.snapshot().elements.find(item => item.id === 'part')!;
+    expect(part.hidden).toBe(true);
+    expect(part.parentId).toBe('frame');
+    expect(part).toMatchObject({ rotation: 20, scaleX: 1.5, scaleY: 1 });
+    expect(part.x).toBeCloseTo(20, 10);
+    expect(part.y).toBeCloseTo(-20, 10);
+    const visible = reopened.snapshot();
+    visible.elements.find(item => item.id === 'part')!.hidden = false;
+    const pose = new HydeAuthoringSession(visible).evaluate(1).find(item => item.id === 'part')!;
+    expect(pose).toMatchObject({ rotation: 110, scaleX: 3, scaleY: 1.5 });
+    expect(pose.x).toBeCloseTo(150, 10);
+    expect(pose.y).toBeCloseTo(120, 10);
+
+    const unchangedY = await session.execute({ protocolVersion: 1, expectedRevision: 2, commands: [
+      { op: 'element.setTransform', args: { id: 'part', space: 'world', timeSeconds: 1, transform: { x: 160 } } },
+    ] });
+    expect(unchangedY.ok, JSON.stringify(unchangedY)).toBe(true);
+    const moved = session.snapshot();
+    moved.elements.find(item => item.id === 'part')!.hidden = false;
+    const movedPose = new HydeAuthoringSession(moved).evaluate(1).find(item => item.id === 'part')!;
+    expect(movedPose.x).toBeCloseTo(160, 10);
+    expect(movedPose.y).toBeCloseTo(120, 10);
+  });
+
+  it('rejects world poses that constraints or animated child transforms would override atomically', async () => {
+    const session = HydeAuthoringSession.create('Constrained world pose');
+    const made = await session.execute({ protocolVersion: 1, expectedRevision: 0, commands: [
+      { op: 'element.create', args: { id: 'root', kind: 'group', properties: { rotation: 20, width: 0, height: 0 } } },
+      { op: 'element.create', args: { id: 'child', kind: 'rectangle' } },
+      { op: 'assembly.attach', args: { id: 'child', parentId: 'root', type: 'hinge', min: -10, max: 10 } },
+    ] });
+    expect(made.ok, JSON.stringify(made)).toBe(true);
+    const before = session.snapshot();
+    const constrained = await session.execute({ protocolVersion: 1, expectedRevision: 1, commands: [
+      { op: 'element.setTransform', args: { id: 'child', space: 'world', transform: { rotation: 80 } } },
+    ] });
+    expect(constrained).toMatchObject({ ok: false, revision: 1 });
+    expect(session.snapshot()).toEqual(before);
+    const ambiguous = await session.execute({ protocolVersion: 1, expectedRevision: 1, commands: [
+      { op: 'element.setTransform', args: { id: 'child', space: 'world', transform: { width: 40 } } } as never,
+    ] });
+    expect(ambiguous).toMatchObject({ ok: false, revision: 1 });
+    expect(session.snapshot()).toEqual(before);
+    const keyed = await session.execute({ protocolVersion: 1, expectedRevision: 1, commands: [
+      { op: 'keyframe.upsert', args: { elementId: 'child', property: 'x', timeSeconds: 0, value: 5 } },
+      { op: 'element.setTransform', args: { id: 'child', space: 'world', transform: { x: 40 } } },
+    ] });
+    expect(keyed).toMatchObject({ ok: false, revision: 1 });
+    expect(session.snapshot()).toEqual(before);
+  });
+
+  it('allows a world rotation while a different local property has keyframes', async () => {
+    const session = HydeAuthoringSession.create('Independent world property');
+    const made = await session.execute({ protocolVersion: 1, expectedRevision: 0, commands: [
+      { op: 'element.create', args: { id: 'parent', kind: 'group', properties: { rotation: 35, width: 0, height: 0 } } },
+      { op: 'element.create', args: { id: 'child', kind: 'rectangle', properties: { parentId: 'parent' } } },
+      { op: 'keyframe.upsert', args: { elementId: 'child', property: 'x', timeSeconds: 0, value: 12 } },
+    ] });
+    expect(made.ok, JSON.stringify(made)).toBe(true);
+    const rotated = await session.execute({ protocolVersion: 1, expectedRevision: 1, commands: [
+      { op: 'element.setTransform', args: { id: 'child', space: 'world', transform: { rotation: 80 } } },
+    ] });
+    expect(rotated.ok, JSON.stringify(rotated)).toBe(true);
+    const pose = session.evaluate(0).find(item => item.id === 'child')!;
+    expect(pose.rotation).toBeCloseTo(80, 10);
+    const blocked = await session.execute({ protocolVersion: 1, expectedRevision: 2, commands: [
+      { op: 'element.setTransform', args: { id: 'child', space: 'world', transform: { x: 40 } } },
+    ] });
+    expect(blocked).toMatchObject({ ok: false, revision: 2 });
+  });
+
   it('bounds IDs in a stale-revision conflict while retaining the current revision', async () => {
     const session = HydeAuthoringSession.create();
     const commands = Array.from({ length: 51 }, (_, index) => ({

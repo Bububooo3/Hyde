@@ -26,6 +26,12 @@ describe('Hyde v1 command JSON Schema', () => {
     expect(args('scene.create').properties.duration).toMatchObject({ type: 'number', exclusiveMinimum: 0 });
     expect(args('element.create').properties.kind.enum).toContain('group');
     expect((args('element.create').properties.properties as Shape).properties.width).toMatchObject({ minimum: 0 });
+    expect(args('element.setTransform').properties.space.enum).toEqual(['local', 'world']);
+    expect(args('element.setTransform')).toMatchObject({
+      if: { properties: { space: { const: 'world' } }, required: ['space'] },
+      then: { properties: { transform: { additionalProperties: false, properties: { x: { type: 'number' }, rotation: { type: 'number' } } } } },
+      else: { not: { required: ['timeSeconds'] } },
+    });
     expect(args('shape.removePoint').required).toEqual(['id', 'index']);
     expect(args('shape.setPath').properties.path).toMatchObject({ type: 'object', properties: { points: { minItems: 3, maxItems: 4096 } } });
     expect(args('media.setPin').required).toEqual(['id', 'corners']);

@@ -8,6 +8,25 @@ import { compareNativeRender } from './quality';
 import { encodePng } from './image';
 import { makeSyntheticFixture } from '../../tests/decomposerSyntheticFixtures';
 
+it('reduces severe first-pass appearance fragmentation without overriding explicit settings', async () => {
+  const fixture = makeSyntheticFixture('storybook-fox');
+  const automatic = await DecompositionSession.importSources([fixture.input], { mode: 'appearance' });
+  const explicit = await DecompositionSession.importSources([fixture.input], { mode: 'appearance' });
+  try {
+    await automatic.analyze();
+    await explicit.analyze({ settings: { colorStep: 24 } });
+    const result = automatic.snapshot();
+    expect(result.diagnostics.map(item => item.code)).toContain('AUTO_COMPLEXITY_REDUCTION');
+    expect(result.settings).toMatchObject({ colorStep: 40, minRegionPixels: 8 });
+    expect(result.regions.length).toBeLessThan(explicit.snapshot().regions.length / 2);
+    expect(result.parts.length).toBeGreaterThan(2);
+    expect(explicit.snapshot().settings.colorStep).toBe(24);
+    const reopened = await DecompositionSession.openDocument(await automatic.saveDocument());
+    expect(reopened.snapshot().regions).toEqual(result.regions);
+    await reopened.close();
+  } finally { await automatic.close(); await explicit.close(); }
+}, 120_000);
+
 it('keeps a layered antialiased illustration in distinct, inspectable parts', async () => {
   const fixture = makeSyntheticFixture('storybook-fox');
   const session = await DecompositionSession.importSources([fixture.input], { mode: 'animation-ready' });

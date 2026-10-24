@@ -2,7 +2,7 @@ import { decodeAssemblyBytes, decodeProjectBytes, encodeAssemblyBytes, encodePro
 import { evaluateProject } from './engine';
 import { createElement, createProject, uid } from './model';
 import type { AnimProperty, Assembly, Asset, Attachment, ElementKind, Keyframe, Project, ShapePath, StoryElement } from './model';
-import { descendantIds, makeAssembly, reparentElement } from './editing';
+import { descendantIds, makeAssembly, parentId, reparentElement, worldPoses } from './editing';
 import { duplicateScene, deleteScene, moveScene, retimeScene } from './sceneOperations';
 import { makeSceneIndependent, placeLinkedScene } from './scenePlacement';
 import { movePathAnchor, removePathPoint, setPathHandle, splitPathSegment, withEditablePath } from './shapePath';
@@ -28,6 +28,7 @@ export interface HydeDiagnostic {
 type Ref = string;
 type ElementCreate = Partial<Pick<StoryElement, 'name' | 'x' | 'y' | 'width' | 'height' | 'rotation' | 'scaleX' | 'scaleY' | 'pivotX' | 'pivotY' | 'fill' | 'stroke' | 'strokeWidth' | 'opacity' | 'start' | 'duration' | 'assetId' | 'text' | 'fontFamily' | 'fontSize' | 'parentId' | 'hidden' | 'locked'>>;
 type Transform = Partial<Pick<StoryElement, 'x' | 'y' | 'width' | 'height' | 'rotation' | 'scaleX' | 'scaleY' | 'pivotX' | 'pivotY'>>;
+type WorldTransform = Partial<Pick<StoryElement, 'x' | 'y' | 'rotation' | 'scaleX' | 'scaleY'>>;
 type Appearance = Partial<Pick<StoryElement, 'fill' | 'stroke' | 'strokeWidth' | 'opacity' | 'hidden' | 'optimize' | 'shadow'>>;
 
 export type CoreHydeCommand =
@@ -41,14 +42,15 @@ export type CoreHydeCommand =
   | { op: 'scene.unlink'; args: { id: Ref }; clientCommandId?: string }
   | { op: 'element.create'; args: { id?: string; alias?: string; kind: ElementKind; sceneId?: Ref; properties?: ElementCreate }; clientCommandId?: string }
   | { op: 'element.remove'; args: { id: Ref; descendants?: boolean }; clientCommandId?: string }
-  | { op: 'element.setTransform'; args: { id: Ref; transform: Transform }; clientCommandId?: string }
+  | { op: 'element.setTransform'; args: { id: Ref; transform: Transform; space?: 'local'; timeSeconds?: never }; clientCommandId?: string }
+  | { op: 'element.setTransform'; args: { id: Ref; transform: WorldTransform; space: 'world'; timeSeconds?: number }; clientCommandId?: string }
   | { op: 'element.updateAppearance'; args: { id: Ref; appearance: Appearance }; clientCommandId?: string }
   | { op: 'shape.setPath'; args: { id: Ref; path: ShapePath }; clientCommandId?: string }
   | { op: 'shape.convertToPath'; args: { id: Ref }; clientCommandId?: string }
-  | { op: 'shape.insertPoint'; args: { id: Ref; index: number; fraction?: number }; clientCommandId?: string }
-  | { op: 'shape.movePoint'; args: { id: Ref; index: number; x: number; y: number }; clientCommandId?: string }
-  | { op: 'shape.setHandle'; args: { id: Ref; index: number; side: 'in' | 'out'; position?: { x: number; y: number } }; clientCommandId?: string }
-  | { op: 'shape.removePoint'; args: { id: Ref; index: number }; clientCommandId?: string }
+  | { op: 'shape.insertPoint'; args: { id: Ref; index: number; fraction?: number; contourIndex?: number }; clientCommandId?: string }
+  | { op: 'shape.movePoint'; args: { id: Ref; index: number; x: number; y: number; contourIndex?: number }; clientCommandId?: string }
+  | { op: 'shape.setHandle'; args: { id: Ref; index: number; side: 'in' | 'out'; position?: { x: number; y: number }; contourIndex?: number }; clientCommandId?: string }
+  | { op: 'shape.removePoint'; args: { id: Ref; index: number; contourIndex?: number }; clientCommandId?: string }
   | { op: 'assembly.attach'; args: { id: Ref; parentId: Ref; type: Attachment['type']; min?: number; max?: number; preserveWorldPose?: boolean; timeSeconds?: number }; clientCommandId?: string }
   | { op: 'assembly.detach'; args: { id: Ref; preserveWorldPose?: boolean; timeSeconds?: number }; clientCommandId?: string }
   | { op: 'track.ensure'; args: { elementId: Ref; property: AnimProperty }; clientCommandId?: string }
@@ -90,14 +92,14 @@ const coreCommandKeys: Record<(typeof coreOperations)[number], string[]> = {
   'scene.unlink': ['id'],
   'element.create': ['id', 'alias', 'kind', 'sceneId', 'properties'],
   'element.remove': ['id', 'descendants'],
-  'element.setTransform': ['id', 'transform'],
+  'element.setTransform': ['id', 'transform', 'space', 'timeSeconds'],
   'element.updateAppearance': ['id', 'appearance'],
   'shape.setPath': ['id', 'path'],
   'shape.convertToPath': ['id'],
-  'shape.insertPoint': ['id', 'index', 'fraction'],
-  'shape.movePoint': ['id', 'index', 'x', 'y'],
-  'shape.setHandle': ['id', 'index', 'side', 'position'],
-  'shape.removePoint': ['id', 'index'],
+  'shape.insertPoint': ['id', 'index', 'fraction', 'contourIndex'],
+  'shape.movePoint': ['id', 'index', 'x', 'y', 'contourIndex'],
+  'shape.setHandle': ['id', 'index', 'side', 'position', 'contourIndex'],
+  'shape.removePoint': ['id', 'index', 'contourIndex'],
   'assembly.attach': ['id', 'parentId', 'type', 'min', 'max', 'preserveWorldPose', 'timeSeconds'],
   'assembly.detach': ['id', 'preserveWorldPose', 'timeSeconds'],
   'track.ensure': ['elementId', 'property'],
@@ -171,6 +173,51 @@ function requiredElement(project: Project, id: string): StoryElement {
   const element = project.elements.find(item => item.id === id);
   if (!element) throw new Error(`Element ${id} does not exist.`);
   return element;
+}
+const spatialProperties = new Set(['x', 'y', 'rotation', 'scaleX', 'scaleY']);
+
+/** Convert a requested stage pose through the exact Hyde parent evaluation at
+ * one story time. Authored base values cannot override an active local track,
+ * placed clip, or procedural behavior, so those cases fail explicitly. */
+function setWorldTransform(project: Project, id: string, requested: WorldTransform, time: number): void {
+  if (!Number.isFinite(time) || time < 0) throw new Error('World transform timeSeconds must be finite and nonnegative.');
+  const target = requiredElement(project, id);
+  if (Object.keys(requested).some(key => !spatialProperties.has(key))) throw new Error('World transform supports x, y, rotation, scaleX, and scaleY only; edit dimensions and pivot in local space.');
+  const affected = new Set(Object.keys(requested));
+  if (affected.has('x') || affected.has('y')) { affected.add('x'); affected.add('y'); }
+  if (target.tracks.some(track => affected.has(track.property) && track.keyframes.length)
+    || target.motionBehaviors?.some(behavior => behavior.enabled)
+    || project.elements.some(owner => owner.clipInstances?.length && (
+      owner.assemblyClips?.some(clip => clip.tracks.some(track => track.elementId === id && affected.has(track.property)))
+      || owner.clipInstances.some(instance => instance.trackOverrides?.some(track => track.elementId === id && affected.has(track.property)))
+    ))) throw new Error('World transform cannot change a part with authored transform animation; edit its keys, clip, or motion behavior.');
+
+  const poses = worldPoses(project, time);
+  const current = poses.get(id);
+  if (!current) throw new Error('World transform target has no evaluable source pose at timeSeconds.');
+  const parent = parentId(target) ? poses.get(parentId(target)!) : undefined;
+  if (parentId(target) && !parent) throw new Error('World transform parent has no evaluable source pose at timeSeconds.');
+  if (requested.x !== undefined || requested.y !== undefined) {
+    const x = (requested.x ?? current.x) - (parent?.x ?? 0);
+    const y = (requested.y ?? current.y) - (parent?.y ?? 0);
+    if (parent) {
+      if (Math.abs(parent.scaleX) < 1e-10 || Math.abs(parent.scaleY) < 1e-10) throw new Error('World transform cannot invert a zero-scale parent.');
+      const radians = -parent.rotation * Math.PI / 180;
+      target.x = (x * Math.cos(radians) - y * Math.sin(radians)) / parent.scaleX;
+      target.y = (x * Math.sin(radians) + y * Math.cos(radians)) / parent.scaleY;
+    } else { target.x = x; target.y = y; }
+  }
+  if (requested.rotation !== undefined) target.rotation = requested.rotation - (parent?.rotation ?? 0);
+  for (const field of ['scaleX', 'scaleY'] as const) if (requested[field] !== undefined) {
+    const factor = parent?.[field] ?? 1;
+    if (Math.abs(factor) < 1e-10) throw new Error('World transform cannot invert a zero-scale parent.');
+    target[field] = requested[field] / factor;
+  }
+  const result = worldPoses(project, time).get(id);
+  if (!result || Object.entries(requested).some(([key, value]) =>
+    Math.abs((result[key as keyof WorldTransform] as number) - (value as number)) > 1e-6 * Math.max(1, Math.abs(value as number)))) {
+    throw new Error('World transform cannot produce the requested pose under this attachment or active scene.');
+  }
 }
 function bytesDataUrl(bytes: Uint8Array, mime: string): string {
   let binary = '';
@@ -450,23 +497,35 @@ export class HydeAuthoringSession {
         if (!args.descendants && descendants.size > 1) throw new Error('Element has descendants; request descendants=true to remove the complete hierarchy.');
         project.elements = project.elements.filter(item => !descendants.has(item.id)); break;
       }
-      case 'element.setTransform': Object.assign(requiredElement(project, resolve(args.id, aliases)), args.transform); break;
+      case 'element.setTransform': {
+        const targetId = resolve(args.id, aliases);
+        if (args.space !== undefined && args.space !== 'local' && args.space !== 'world') throw new Error('Transform space must be local or world.');
+        for (const [field, value] of Object.entries(args.transform as Record<string, unknown>)) {
+          if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`Transform ${field} must be a finite number.`);
+        }
+        if (args.space === 'world') setWorldTransform(project, targetId, args.transform, args.timeSeconds ?? requiredElement(project, targetId).start);
+        else {
+          if (args.timeSeconds !== undefined) throw new Error('timeSeconds is only meaningful for a world transform.');
+          Object.assign(requiredElement(project, targetId), args.transform);
+        }
+        break;
+      }
       case 'element.updateAppearance': Object.assign(requiredElement(project, resolve(args.id, aliases)), args.appearance); break;
       case 'shape.setPath': requiredElement(project, resolve(args.id, aliases)).shapePath = structuredClone(args.path); break;
       case 'shape.convertToPath': {
         const element = requiredElement(project, resolve(args.id, aliases)); Object.assign(element, withEditablePath(element)); break;
       }
       case 'shape.insertPoint': {
-        const element = requiredElement(project, resolve(args.id, aliases)); element.shapePath = splitPathSegment(withEditablePath(element).shapePath!, args.index, args.fraction); break;
+        const element = requiredElement(project, resolve(args.id, aliases)); element.shapePath = splitPathSegment(withEditablePath(element).shapePath!, args.index, args.fraction, args.contourIndex); break;
       }
       case 'shape.movePoint': {
-        const element = requiredElement(project, resolve(args.id, aliases)); element.shapePath = movePathAnchor(withEditablePath(element).shapePath!, args.index, args.x, args.y); break;
+        const element = requiredElement(project, resolve(args.id, aliases)); element.shapePath = movePathAnchor(withEditablePath(element).shapePath!, args.index, args.x, args.y, args.contourIndex); break;
       }
       case 'shape.setHandle': {
-        const element = requiredElement(project, resolve(args.id, aliases)); element.shapePath = setPathHandle(withEditablePath(element).shapePath!, args.index, args.side, args.position); break;
+        const element = requiredElement(project, resolve(args.id, aliases)); element.shapePath = setPathHandle(withEditablePath(element).shapePath!, args.index, args.side, args.position, args.contourIndex); break;
       }
       case 'shape.removePoint': {
-        const element = requiredElement(project, resolve(args.id, aliases)); element.shapePath = removePathPoint(withEditablePath(element).shapePath!, args.index); break;
+        const element = requiredElement(project, resolve(args.id, aliases)); element.shapePath = removePathPoint(withEditablePath(element).shapePath!, args.index, args.contourIndex); break;
       }
       case 'assembly.attach': {
         const id = resolve(args.id, aliases), parentId = resolve(args.parentId, aliases);

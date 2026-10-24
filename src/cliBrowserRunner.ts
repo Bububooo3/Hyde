@@ -1,7 +1,7 @@
 import { readFile, stat } from 'node:fs/promises';
 import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Page } from 'playwright';
+import type { Browser, Page } from 'playwright';
 import type { ExportProgress } from './mediaExport';
 import type { Project } from './model';
 
@@ -24,6 +24,19 @@ export interface BrowserTaskResult {
 
 export class BrowserHostError extends Error {
   constructor(readonly code: string, message: string) { super(message); }
+}
+
+/** Prefer an installed Chrome before Playwright's optional bundled Chromium. */
+export async function launchLocalChromium(args: string[] = []): Promise<Browser> {
+  let chromium: typeof import('playwright')['chromium'];
+  try { ({ chromium } = await import('playwright')); }
+  catch { throw new BrowserHostError('CAPABILITY_UNAVAILABLE', 'Playwright is required for local browser work. Install Hyde dependencies and a Chromium browser.'); }
+  const launch = { headless: true, args };
+  try { return await chromium.launch({ ...launch, channel: 'chrome' }); }
+  catch {
+    try { return await chromium.launch(launch); }
+    catch { throw new BrowserHostError('CAPABILITY_UNAVAILABLE', 'Chromium is unavailable. Install Chrome or run npx playwright install chromium.'); }
+  }
 }
 
 function runtimePath(): string {
@@ -50,16 +63,7 @@ async function browserPage(): Promise<{ page: Page; close: () => Promise<void> }
   const runtime = runtimePath();
   try { await stat(runtime); }
   catch { throw new BrowserHostError('CAPABILITY_UNAVAILABLE', 'Hyde browser runtime is missing. Run npm run cli:build to build the CLI and render host.'); }
-  let chromium: typeof import('playwright')['chromium'];
-  try { ({ chromium } = await import('playwright')); }
-  catch { throw new BrowserHostError('CAPABILITY_UNAVAILABLE', 'Playwright is required for local browser rendering. Install Hyde dependencies and a Chromium browser.'); }
-  const launch = { headless: true, args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] };
-  let browser;
-  try { browser = await chromium.launch({ ...launch, channel: 'chrome' }); }
-  catch {
-    try { browser = await chromium.launch({ ...launch }); }
-    catch { throw new BrowserHostError('CAPABILITY_UNAVAILABLE', 'Chromium is unavailable. Install Chrome or run npx playwright install chromium.'); }
-  }
+  const browser = await launchLocalChromium(['--use-angle=swiftshader', '--enable-unsafe-swiftshader']);
   try {
     const context = await browser.newContext({ serviceWorkers: 'block' });
     await context.route('**/*', route => {

@@ -91,20 +91,54 @@ function shapeDistance(a: Float32Array, b: Float32Array): number {
   return clamp01(best / .6);
 }
 
-interface Descriptor { region: RegionRecord; color: [number, number, number]; shape: Float32Array; neighborColors: [number, number, number][] }
+interface NeighborContact { color: [number, number, number]; length: number }
+interface Descriptor { region: RegionRecord; color: [number, number, number]; shape: Float32Array; contacts: NeighborContact[] }
 
 function descriptors(regions: RegionRecord[]): Descriptor[] {
   const byId = new Map(regions.map(region => [region.id, region]));
-  return regions.map(region => ({ region, color: rgb(region.color), shape: shapeSignature(region), neighborColors: region.adjacency
-    .map(edge => byId.get(edge.regionId)).filter((value): value is RegionRecord => Boolean(value)).map(neighbor => rgb(neighbor.color)) }));
+  return regions.map(region => ({ region, color: rgb(region.color), shape: shapeSignature(region), contacts: region.adjacency
+    .flatMap(edge => { const neighbor = byId.get(edge.regionId); return neighbor ? [{ color: rgb(neighbor.color),
+      length: edge.sharedBoundary / Math.sqrt(Math.max(1, region.pixelCount)) }] : []; }) }));
 }
 
-function neighborhoodDistance(a: Descriptor, b: Descriptor): number {
-  const left = a.neighborColors, right = b.neighborColors;
-  if (!left.length && !right.length) return 0;
-  if (!left.length || !right.length) return 1;
-  const nearest = (from: [number, number, number][], to: [number, number, number][]) => from.reduce((sum, color) => sum + Math.min(...to.map(other => colorDistance(color, other))), 0) / from.length;
-  return clamp01(.65 * (nearest(left, right) + nearest(right, left)) / 2 + .35 * Math.abs(left.length - right.length) / Math.max(left.length, right.length));
+function neighborhoodDistance(a: Descriptor, b: Descriptor): { combined: number; color: number; contact: number } {
+  const left = a.contacts, right = b.contacts;
+  const missing = { combined: 1, color: 1, contact: 1 };
+  if (!left.length && !right.length) return { combined: 0, color: 0, contact: 0 };
+  if (!left.length || !right.length) return missing;
+  const nearest = (from: NeighborContact[], to: NeighborContact[]) => from.reduce((sum, edge) => {
+    const best = to.map(other => ({ color: colorDistance(edge.color, other.color),
+      contact: clamp01(Math.abs(Math.log(Math.max(.01, edge.length) / Math.max(.01, other.length))) / 1.5) }))
+      .sort((first, second) => (.7 * first.color + .3 * first.contact) - (.7 * second.color + .3 * second.contact))[0];
+    return { color: sum.color + best.color, contact: sum.contact + best.contact };
+  }, { color: 0, contact: 0 });
+  const aToB = nearest(left, right), bToA = nearest(right, left);
+  const color = (aToB.color / left.length + bToA.color / right.length) / 2;
+  const contact = (aToB.contact / left.length + bToA.contact / right.length) / 2;
+  return { color, contact, combined: clamp01(.65 * (.7 * color + .3 * contact) + .35 * Math.abs(left.length - right.length) / Math.max(left.length, right.length)) };
+}
+
+interface PointLandmark { primary: Point; alternate: Point }
+
+function pointLandmarks(options: CorrespondenceOptions): PointLandmark[] {
+  const primary = options.primarySource, alternate = options.alternateSource;
+  if (!primary || !alternate) return [];
+  return (options.manual ?? []).filter(item => item.origin === 'manual' && item.kind === 'landmark' && item.accepted !== false && item.landmarkPoints)
+    .sort((a, b) => a.id.localeCompare(b.id)).slice(0, 64).flatMap(item => {
+      const primaryIndex = item.sourceIds.indexOf(primary.id), alternateIndex = item.sourceIds.indexOf(alternate.id);
+      return primaryIndex < 0 || alternateIndex < 0 ? [] : [{ primary: item.landmarkPoints![primaryIndex], alternate: item.landmarkPoints![alternateIndex] }];
+    });
+}
+
+/** Local radial distance is useful ranking evidence, but does not assert that two poses share a rigid transform. */
+function landmarkDistance(primary: RegionRecord, alternate: RegionRecord, points: PointLandmark[], options: CorrespondenceOptions): number | undefined {
+  if (!points.length || !options.primarySource || !options.alternateSource) return undefined;
+  const p = center(primary), a = center(alternate);
+  const pScale = Math.hypot(options.primarySource.width, options.primarySource.height);
+  const aScale = Math.hypot(options.alternateSource.width, options.alternateSource.height);
+  const errors = points.map(pair => clamp01(Math.abs(Math.hypot(p.x - pair.primary.x, p.y - pair.primary.y) / pScale
+    - Math.hypot(a.x - pair.alternate.x, a.y - pair.alternate.y) / aScale) * 2)).sort((left, right) => left - right);
+  return errors[Math.floor(errors.length / 2)];
 }
 
 function alignedDistance(primary: RegionRecord, alternate: RegionRecord, primarySource?: SourceReference, alternateSource?: SourceReference): number | undefined {
@@ -127,9 +161,9 @@ function anchorEvidence(primary: RegionRecord, alternate: RegionRecord, anchors:
   return { supported, contradicted };
 }
 
-interface ScoredPair { primary: Descriptor; alternate: Descriptor; score: number; color: number; shape: number; area: number; aspect: number; neighborhood: number; position?: number; anchors: { supported: number; contradicted: number } }
+interface ScoredPair { primary: Descriptor; alternate: Descriptor; score: number; independentScore: number; color: number; shape: number; area: number; aspect: number; neighborhood: number; contact: number; position?: number; landmark?: number; anchors: { supported: number; contradicted: number } }
 
-function scorePair(primary: Descriptor, alternate: Descriptor, options: CorrespondenceOptions, anchors: Map<string, string>): ScoredPair {
+function scorePair(primary: Descriptor, alternate: Descriptor, options: CorrespondenceOptions, anchors: Map<string, string>, points: PointLandmark[]): ScoredPair {
   const a = primary.region, b = alternate.region;
   const color = colorDistance(primary.color, alternate.color);
   const shape = shapeDistance(primary.shape, alternate.shape);
@@ -140,11 +174,15 @@ function scorePair(primary: Descriptor, alternate: Descriptor, options: Correspo
   const aspect = normalized(Math.log((a.bounds.width / a.bounds.height) / (b.bounds.width / b.bounds.height)), 1.2);
   const neighborhood = neighborhoodDistance(primary, alternate);
   const position = alignedDistance(a, b, options.primarySource, options.alternateSource);
+  const landmark = landmarkDistance(a, b, points, options);
   const anchor = anchorEvidence(a, b, anchors);
-  let score = .38 * color + .28 * shape + .12 * area + .08 * aspect + .14 * neighborhood;
+  let score = .38 * color + .28 * shape + .12 * area + .08 * aspect + .14 * neighborhood.combined;
   if (position !== undefined) score = .78 * score + .22 * position;
-  score = clamp01(score - Math.min(anchor.supported, 2) * .06 + Math.min(anchor.contradicted, 2) * .1);
-  return { primary, alternate, score, color, shape, area, aspect, neighborhood, position, anchors: anchor };
+  const anchorAdjustment = -Math.min(anchor.supported, 2) * .06 + Math.min(anchor.contradicted, 2) * .1;
+  const independentScore = clamp01(score + anchorAdjustment);
+  if (landmark !== undefined && position === undefined) score = .88 * score + .12 * landmark;
+  score = clamp01(score + anchorAdjustment);
+  return { primary, alternate, score, independentScore, color, shape, area, aspect, neighborhood: neighborhood.combined, contact: neighborhood.contact, position, landmark, anchors: anchor };
 }
 
 /**
@@ -166,7 +204,8 @@ export function rankReferenceCorrespondences(primary: RegionRecord[], alternate:
   const primaryIds = new Set(primary.map(region => region.id));
   const alternateIds = new Set(alternate.map(region => region.id));
   // Existing manual pairs may have been recorded with either source first.
-  const manual = (options.manual ?? []).filter(item => item.origin === 'manual' && item.regionIds).flatMap(item => {
+  const manual = (options.manual ?? []).filter(item => item.origin === 'manual' && item.regionIds &&
+    (item.kind === 'same-part' || item.kind === 'possible-match' || item.kind === 'landmark')).flatMap(item => {
     const [first, second] = item.regionIds!;
     if (primaryIds.has(first) && alternateIds.has(second)) return [{ primaryId: first, alternateId: second, accepted: item.accepted }];
     if (primaryIds.has(second) && alternateIds.has(first)) return [{ primaryId: second, alternateId: first, accepted: item.accepted }];
@@ -180,9 +219,10 @@ export function rankReferenceCorrespondences(primary: RegionRecord[], alternate:
   }
   const p = descriptors(primary.filter(region => region.generationStatus !== 'historical' && region.geometry.status === 'visible' && !acceptedPrimary.has(region.id)));
   const a = descriptors(alternate.filter(region => region.generationStatus !== 'historical' && region.geometry.status === 'visible' && !acceptedAlternate.has(region.id)));
+  const points = pointLandmarks(options);
   const ranked = new Map<string, ScoredPair[]>(), reciprocal = new Map<string, ScoredPair[]>();
   for (const alt of a) {
-    const choices = p.filter(item => !manualPairs.has(`${item.region.id}:${alt.region.id}`)).map(item => scorePair(item, alt, options, anchors))
+    const choices = p.filter(item => !manualPairs.has(`${item.region.id}:${alt.region.id}`)).map(item => scorePair(item, alt, options, anchors, points))
       .filter(item => item.score <= .75).sort((left, right) => left.score - right.score || left.primary.region.id.localeCompare(right.primary.region.id));
     ranked.set(alt.region.id, choices);
     for (const choice of choices) {
@@ -199,17 +239,22 @@ export function rankReferenceCorrespondences(primary: RegionRecord[], alternate:
     if (ambiguous) result.diagnostics.push({ code: 'CORRESPONDENCE_AMBIGUOUS', severity: 'info', sourceId: alt.region.sourceId, regionId: alt.region.id,
       message: 'Several primary regions have similar shape, color and neighborhood evidence for this reference region.', suggestion: 'Inspect the ranked candidates and confirm or reject the intended part correspondence.' });
     for (const [index, item] of choices.slice(0, limit).entries()) {
+      const identityMargin = item.landmark === undefined || item.position !== undefined || choices.length < 2 ? 1
+        : Math.min(...choices.filter(other => other !== item).map(other => other.independentScore)) - item.independentScore;
       const unique = options.alternateSource?.role !== 'detail' && index === 0 && !ambiguous && margin >= (item.position === undefined ? .14 : .05)
-        && reciprocal.get(item.primary.region.id)?.[0] === item && item.score <= .12
+        && identityMargin >= (item.position === undefined ? .14 : .05)
+        && reciprocal.get(item.primary.region.id)?.[0] === item && item.score <= .12 && item.independentScore <= .12
         && item.color < .08 && item.shape < .16 && item.area < .3 && item.aspect < .3 && item.neighborhood < .35
+        && (item.landmark === undefined || item.landmark < .25)
         && item.anchors.contradicted === 0;
       const evidence = [
         `normalized contour distance ${item.shape.toFixed(3)}`,
         `sRGB color distance ${item.color.toFixed(3)}`,
         `relative area/aspect distances ${item.area.toFixed(3)}/${item.aspect.toFixed(3)}`,
-        `adjacent-region color distance ${item.neighborhood.toFixed(3)}`,
+        `adjacent-region color/contact distance ${item.neighborhood.toFixed(3)}/${item.contact.toFixed(3)}`,
       ];
       if (item.position !== undefined) evidence.push(`declared source-transform center distance ${item.position.toFixed(3)}`);
+      if (item.landmark !== undefined) evidence.push(`paired point-landmark radial distance ${item.landmark.toFixed(3)}; poses may differ nonrigidly`);
       if (item.anchors.supported || item.anchors.contradicted) evidence.push(`manual landmark-adjacency support/conflict ${item.anchors.supported}/${item.anchors.contradicted}`);
       evidence.push(`combined heuristic distance ${item.score.toFixed(3)}`);
       result.candidates.push({ id: `${alt.region.id}_match_${item.primary.region.id}`, sourceIds: [item.primary.region.sourceId, alt.region.sourceId],
