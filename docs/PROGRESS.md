@@ -12,6 +12,8 @@ Verification in the original checkout: `npm test` (79 files passed, one skipped;
 
 The products remain incomplete against the attached specifications. Next priorities: broaden SDK command/inspector acceptance and media variants, improve Decomposer hidden texture/shape recovery and guided corrections, test larger real illustration quality, and obtain owner re-review of the labeled multi-view workflow. Cross-view layer proposals are inspectable and manually approvable/rejectable; a narrow confirmed-alignment fixture now yields source-pose-contained inferred geometry. Native holes are editable; unrepresentable complex contours still require explicit fallback. T-junctions and cross-view alignment provide evidence, not proven unseen surfaces or articulation. Pixel-art contours can remain stepped after rotation; high-resolution smooth source behaves better. Contact alone does not establish Slider or joint limits. MP4/WebM support is unavailable in this test Chrome; static text capture requires a browser with loaded fonts. Preserve the native Hyde model/evaluator/archive and separate `.hydecomp` source document. **Verified** below refers to the older Story Studio baseline; the new-product requirement-level proof is in [ACCEPTANCE.md](ACCEPTANCE.md).
 
+The owner supplied a separate [Story Studio editor backlog](EDITOR_BACKLOG.md), HYDE-001–013. It is deferred and not authorized for implementation until the SDK and Decomposer are complete or explicitly reprioritized.
+
 Updated 2026-10-24. The original Story Studio matrix below remains its previously verified baseline, not a completion claim for either new product.
 
 | Capability | State | Current boundary |
