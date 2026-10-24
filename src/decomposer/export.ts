@@ -44,7 +44,9 @@ function cropTexture(region: RegionRecord, mask: RegionMask, image: DecodedImage
     rgba[target + 2] = useSourceColor ? image.rgba[source + 2] : flat[2];
     const pixel = y * bounds.width + x;
     const sourceAlpha = image.rgba[source + 3];
-    const baseAlpha = mask.alpha && sourceAlpha === 0 ? 255 : sourceAlpha;
+    // A manual brush may deliberately extend an editable region into a source
+    // pixel with zero alpha. Use its part color and authored mask coverage there.
+    const baseAlpha = sourceAlpha === 0 ? 255 : sourceAlpha;
     rgba[target + 3] = mask.bytes[pixel] ? Math.round(baseAlpha * (mask.alpha?.[pixel] ?? 255) / 255) : 0;
   }
   return encodePng({ width: bounds.width, height: bounds.height, rgba });

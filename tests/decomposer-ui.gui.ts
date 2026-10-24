@@ -91,6 +91,28 @@ test('guided mask brush, path drag and pivot edits commit through worker revisio
   expect(Number(await page.getByLabel('Pivot X').inputValue())).toBeCloseTo(26, 1);
 });
 
+test('add brush extends the selected source mask beyond its automatic rectangle', async ({ page }) => {
+  await page.goto('/decomposer.html');
+  await page.getByLabel('Import images').setInputFiles({ name: 'two-piece-prop.png', mimeType: 'image/png', buffer: fixture() });
+  await expect(page.getByRole('status')).toContainText('Automatic first pass found 2 editable regions.');
+  await page.locator('.left-pane .scroll-list').first().locator('.row').first().click();
+  await page.getByLabel('Canvas tool').selectOption('paint-add');
+  await page.getByLabel('Brush radius').fill('2');
+  const canvas = page.locator('canvas.interactive-canvas'), box = await canvas.boundingBox();
+  expect(box).toBeTruthy();
+  const point = { x: box!.x + 34 / 40 * box!.width, y: box!.y + 12 / 32 * box!.height };
+  await page.mouse.move(point.x, point.y); await page.mouse.down(); await page.mouse.up();
+  await expect(page.getByRole('status')).toContainText('region.refineMask saved');
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Save source' }).click();
+  const archive = await downloadPromise;
+  const saved = await decodeDecompositionDocument(new Uint8Array(await readFile(await archive.path())));
+  const blue = saved.document.regions.find(region => region.color === '#1e6fbc' && region.generationStatus !== 'historical')!;
+  expect(blue.bounds.x + blue.bounds.width).toBeGreaterThan(34);
+  const mask = saved.masks.get(blue.maskId)!;
+  expect(mask.bytes[(12 - blue.bounds.y) * mask.width + 34 - blue.bounds.x]).toBe(1);
+});
+
 test('animation-ready attachment proposal can be reviewed and accepted in the editor', async ({ page }) => {
   const art = makeSyntheticFixture('articulated-character');
   await page.goto('/decomposer.html');

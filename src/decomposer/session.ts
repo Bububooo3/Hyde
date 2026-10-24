@@ -19,7 +19,7 @@ export type DecompositionEdit =
   | { op: 'region.setPath'; regionId: string; path: ShapePath }
   | { op: 'region.clearManualPath'; regionId: string }
   | { op: 'region.setSuppressed'; regionId: string; suppressed: boolean }
-  | { op: 'region.refineMask'; regionId: string; handle: string }
+  | { op: 'region.refineMask'; regionId: string; handle: string; bounds?: RegionRecord['bounds'] }
   | { op: 'region.featherOutside'; regionId: string; radius: number; strength: number }
   | { op: 'region.seedMask'; regionId: string; x: number; y: number; action: 'add' | 'subtract'; colorTolerance: number; radius: number; maxPixels?: number }
   | { op: 'region.split'; regionId: string; axis: 'x' | 'y'; coordinate: number }
@@ -552,12 +552,17 @@ export class DecompositionSession {
         else if (edit.op === 'region.refineMask') {
           const target = region(edit.regionId), incoming = this.stagedMasks.get(edit.handle) ?? fail('Mask handle is unavailable.');
           if (target.locked.mask) fail('Mask is locked.');
-          if (incoming.width !== target.bounds.width || incoming.height !== target.bounds.height) fail('Mask dimensions must match the region bounds.');
+          const bounds = edit.bounds ?? target.bounds, image = this.images.get(target.sourceId)!;
+          if (!Number.isInteger(bounds.x) || !Number.isInteger(bounds.y) || !Number.isInteger(bounds.width) || !Number.isInteger(bounds.height) || bounds.x < 0 || bounds.y < 0 || bounds.width < 1 || bounds.height < 1 || bounds.x + bounds.width > image.width || bounds.y + bounds.height > image.height) fail('Mask bounds must stay inside the source image.');
+          if (incoming.width !== bounds.width || incoming.height !== bounds.height) fail('Mask dimensions must match the region bounds.');
+          const changedBounds = bounds.x !== target.bounds.x || bounds.y !== target.bounds.y || bounds.width !== target.bounds.width || bounds.height !== target.bounds.height;
+          if (changedBounds && target.geometry.manualPath) fail('DOCUMENT_CONFLICT: Unlock the manual contour before expanding its mask.');
           if (!target.originalMaskId) target.originalMaskId = target.maskId;
           const id = `${target.id}_manual_mask_${this.revision + 1}_${editIndex}`;
           target.maskId = id; masks.set(id, cloneRegionMask(incoming));
+          if (changedBounds) { target.bounds = { ...bounds }; target.geometry.bounds = { ...bounds }; }
           target.pixelCount = incoming.bytes.reduce((sum, value) => sum + value, 0);
-          const fitted = fitMaskGeometry(target.id, incoming, target.bounds, candidate.settings, target.geometry.texture);
+          const fitted = fitMaskGeometry(target.id, incoming, bounds, candidate.settings, target.geometry.texture);
           target.geometry.generatedPath = fitted.geometry.generatedPath; target.geometry.quality = fitted.geometry.quality; target.holeCount = fitted.holeCount;
           target.generationStatus = 'manual'; changed.add(target.id);
         } else if (edit.op === 'region.featherOutside') {

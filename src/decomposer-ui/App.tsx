@@ -84,6 +84,23 @@ function paintDisc(mask: RegionMask, bounds: RegionRecord['bounds'], x: number, 
   }
 }
 
+function expandBrushMask(mask: RegionMask, bounds: RegionRecord['bounds'], points: { x: number; y: number }[], radius: number, width: number, height: number): { mask: RegionMask; bounds: RegionRecord['bounds'] } {
+  const left = Math.max(0, Math.min(bounds.x, ...points.map(point => Math.floor(point.x - radius))));
+  const top = Math.max(0, Math.min(bounds.y, ...points.map(point => Math.floor(point.y - radius))));
+  const right = Math.min(width, Math.max(bounds.x + bounds.width, ...points.map(point => Math.ceil(point.x + radius))));
+  const bottom = Math.min(height, Math.max(bounds.y + bounds.height, ...points.map(point => Math.ceil(point.y + radius))));
+  const expanded = { x: left, y: top, width: right - left, height: bottom - top };
+  if (expanded.x === bounds.x && expanded.y === bounds.y && expanded.width === bounds.width && expanded.height === bounds.height) return { mask, bounds };
+  const bytes = new Uint8Array(expanded.width * expanded.height);
+  const alpha = mask.alpha ? new Uint8Array(bytes.length) : undefined;
+  for (let y = 0; y < mask.height; y++) {
+    const offset = (bounds.y + y - top) * expanded.width + bounds.x - left;
+    bytes.set(mask.bytes.subarray(y * mask.width, (y + 1) * mask.width), offset);
+    if (alpha) alpha.set(mask.alpha!.subarray(y * mask.width, (y + 1) * mask.width), offset);
+  }
+  return { mask: { width: expanded.width, height: expanded.height, bytes, ...(alpha ? { alpha } : {}) }, bounds: expanded };
+}
+
 /** Snap only to a measured local alpha/color transition. Avoid moving a point on flat artwork. */
 function snapToSourceEdge(point: { x: number; y: number }, pixels: Uint8ClampedArray, width: number, height: number, radius: number): { x: number; y: number } {
   const difference = (x: number, y: number, nx: number, ny: number): number => {
@@ -516,14 +533,24 @@ export default function App() {
       setDraftPoint(undefined); setDraftHandle(undefined);
     } else if (stroke.tool === 'paint-add' || stroke.tool === 'paint-erase') {
       const old = masks.get(selectedRegion.id); if (!old) return;
-      const mask: RegionMask = { width: old.width, height: old.height, bytes: Uint8Array.from(old.bytes), ...(old.alpha ? { alpha: Uint8Array.from(old.alpha) } : {}) };
       const points = [...stroke.points, point];
+      if (stroke.tool === 'paint-add' && selectedRegion.geometry.manualPath && points.some(item =>
+        item.x - brushRadius < selectedRegion.bounds.x || item.y - brushRadius < selectedRegion.bounds.y ||
+        item.x + brushRadius > selectedRegion.bounds.x + selectedRegion.bounds.width ||
+        item.y + brushRadius > selectedRegion.bounds.y + selectedRegion.bounds.height)) {
+        setStatus('Unlock the manual contour and use its generated path before brushing beyond this region.');
+        setRenderVersion(value => value + 1); return;
+      }
+      const copy: RegionMask = { width: old.width, height: old.height, bytes: Uint8Array.from(old.bytes), ...(old.alpha ? { alpha: Uint8Array.from(old.alpha) } : {}) };
+      const { mask, bounds } = stroke.tool === 'paint-add' && source && !selectedRegion.geometry.manualPath
+        ? expandBrushMask(copy, selectedRegion.bounds, points, brushRadius, source.width, source.height)
+        : { mask: copy, bounds: selectedRegion.bounds };
       for (let index = 0; index < points.length; index++) {
         const from = points[Math.max(0, index - 1)], to = points[index];
         const steps = Math.max(1, Math.ceil(Math.hypot(to.x - from.x, to.y - from.y) / Math.max(1, brushRadius / 2)));
-        for (let step = 0; step <= steps; step++) paintDisc(mask, selectedRegion.bounds, from.x + (to.x - from.x) * step / steps, from.y + (to.y - from.y) * step / steps, brushRadius, stroke.tool === 'paint-add' ? 1 : 0, brushHardness);
+        for (let step = 0; step <= steps; step++) paintDisc(mask, bounds, from.x + (to.x - from.x) * step / steps, from.y + (to.y - from.y) * step / steps, brushRadius, stroke.tool === 'paint-add' ? 1 : 0, brushHardness);
       }
-      void perform([{ op: 'region.refineMask', regionId: selectedRegion.id, handle: 'worker' }], mask);
+      void perform([{ op: 'region.refineMask', regionId: selectedRegion.id, handle: 'worker', ...(bounds === selectedRegion.bounds ? {} : { bounds }) }], mask);
     }
     setRenderVersion(value => value + 1);
   }

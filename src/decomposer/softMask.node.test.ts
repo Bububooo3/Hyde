@@ -107,3 +107,38 @@ it('expands a guided outward feather into transparent pixels without changing so
   expect(session.snapshot().regions[0].bounds).toEqual(before.bounds);
   await session.close();
 }, 30_000);
+
+it('extends a brushed region beyond its first-pass bounds through native export and source recovery', async () => {
+  const width = 24, height = 24, rgba = new Uint8Array(width * height * 4);
+  for (let y = 8; y < 16; y++) for (let x = 8; x < 16; x++) rgba.set([194, 86, 51, 255], (y * width + x) * 4);
+  const session = await DecompositionSession.importSources([{ bytes: encodePng({ width, height, rgba }), name: 'brush.png', mime: 'image/png' }]);
+  await session.analyze();
+  const before = session.snapshot().regions[0], original = session.maskFor(before.maskId);
+  const bounds = { x: 5, y: 8, width: 11, height: 8 };
+  const bytes = new Uint8Array(bounds.width * bounds.height);
+  for (let row = 0; row < original.height; row++) bytes.set(original.bytes.subarray(row * original.width, (row + 1) * original.width), row * bounds.width + before.bounds.x - bounds.x);
+  for (let column = 0; column <= 3; column++) bytes[3 * bounds.width + column] = 1;
+  const handle = session.stageMask({ width: bounds.width, height: bounds.height, bytes, alpha: Uint8Array.from(bytes, bit => bit ? 255 : 0) });
+  const changed = await session.execute({ expectedRevision: session.revision, edits: [{ op: 'region.refineMask', regionId: before.id, handle, bounds }] });
+  expect(changed.ok, JSON.stringify(changed)).toBe(true);
+  const after = session.snapshot().regions[0];
+  expect(after.bounds).toEqual(bounds);
+  expect(after.originalMaskId).toBe(before.maskId);
+  const native = await session.exportHyde({ format: 'hyde' });
+  const shape = native.project.elements.find(item => item.id === native.mapping.regionIds[after.id])!;
+  expect(shape.shapePath?.points.length).toBeGreaterThanOrEqual(4);
+  const crop = decodePng(Uint8Array.from(Buffer.from(native.project.assets.find(item => item.id === shape.assetId)!.dataUrl.split(',')[1], 'base64')));
+  expect(crop.rgba[(3 * bounds.width) * 4 + 3]).toBe(255);
+  if (process.env.HYDE_TEST_BROWSER) {
+    const rendered = await runBrowserTask(native.project, { kind: 'preview', options: { timeSeconds: 0, width, height, format: 'png' } });
+    expect(decodePng(rendered.bytes).rgba[(11 * width + 5) * 4 + 3]).toBeGreaterThan(200);
+  }
+  const reopened = await DecompositionSession.openDocument(await session.saveDocument());
+  expect(reopened.snapshot().regions[0].bounds).toEqual(bounds);
+  expect(reopened.maskFor(after.maskId).bytes[3 * bounds.width]).toBe(1);
+  expect(reopened.maskFor(before.maskId)).toEqual(original);
+  await reopened.close();
+  expect(session.undo(session.revision)).toBe(true);
+  expect(session.snapshot().regions[0].bounds).toEqual(before.bounds);
+  await session.close();
+}, 30_000);
