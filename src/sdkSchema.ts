@@ -185,7 +185,7 @@ const requiredArgs: Record<string, string[]> = {
 };
 
 const sharedFields: Record<string, Schema> = {
-  id: ref, alias, name: text, handle: ref, sourceId: ref, beforeId: ref,
+  id: ref, alias, name: text, handle: ref, reuseExisting: boolean, sourceId: ref, beforeId: ref,
   sceneId: ref, elementId: ref, rootId: ref, clipId: ref, instanceId: ref,
   effectId: ref, parentId: ref, folderId: ref, targetId: ref, assetId: ref, keyId: ref,
   kind: enumeration('rectangle', 'ellipse', 'polygon', 'text', 'image', 'video', 'audio', 'group'),

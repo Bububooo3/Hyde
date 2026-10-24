@@ -4,6 +4,30 @@ import { HydeAuthoringSession } from './authoring';
 import { decodeProjectBytes } from './archive';
 
 describe('authoring transactions in Node', () => {
+  it('reuses identical staged assets only when requested and preserves aliases across archive reopen', async () => {
+    const session = HydeAuthoringSession.create('Deduplicated media');
+    const bytes = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lXcAAAAASUVORK5CYII=', 'base64'));
+    const first = session.stageAsset(bytes, 'image/png', 'image');
+    const duplicate = session.stageAsset(bytes, 'image/png', 'image');
+    const result = await session.execute({ protocolVersion: 1, expectedRevision: 0, commands: [
+      { op: 'asset.add', args: { alias: '$original', handle: first, name: 'original.png' } },
+      { op: 'asset.add', args: { alias: '$reused', handle: duplicate, name: 'duplicate.png', reuseExisting: true } },
+      { op: 'element.create', args: { kind: 'image', properties: { assetId: '$reused' } } },
+    ] });
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) return;
+    expect(result.idMap.$reused).toBe(result.idMap.$original);
+    expect(session.snapshot().assets).toHaveLength(1);
+    expect(session.snapshot().assets[0].name).toBe('original.png');
+    expect(HydeAuthoringSession.open(session.exportProject()).snapshot().elements[0].assetId).toBe(result.idMap.$original);
+    const explicit = session.stageAsset(bytes, 'image/png', 'image');
+    const refused = await session.execute({ protocolVersion: 1, expectedRevision: session.revision, commands: [
+      { op: 'asset.add', args: { id: 'separate-id', handle: explicit, name: 'separate.png', reuseExisting: true } },
+    ] });
+    expect(refused.ok).toBe(false);
+    expect(session.snapshot().assets).toHaveLength(1);
+  });
+
   it('authors linked-scene speed through native duration and inspects the effective speed after archive reopen', async () => {
     const session = HydeAuthoringSession.create('Speed');
     const sourceId = session.snapshot().sequences[0].id;
