@@ -7,6 +7,7 @@ import { decodeDecompositionDocument, encodeDecompositionDocument, sha256, valid
 import { exportNativeDecomposition } from './export';
 import type { HydeDecompositionExport, HydeDecompositionExportOptions } from './export';
 import { proposeHiddenContinuations } from './hidden';
+import { proposeCrossViewOcclusion } from './multiviewOcclusion';
 import { proposeJunctionLayers } from './junction';
 import { renderDiagnosticTile } from './diagnosticTile';
 import type { DiagnosticTile, DiagnosticTileRequest } from './diagnosticTile';
@@ -442,6 +443,9 @@ export class DecompositionSession {
     const attachments = proposePartAttachments(candidate, masks);
     for (const part of candidate.parts) if (!part.attachmentLocked) part.attachmentProposal = attachments.proposals.get(part.id);
     candidate.diagnostics.push(...attachments.diagnostics);
+    const crossView = proposeCrossViewOcclusion(candidate, masks, previous.correspondences.filter(item => item.origin === 'manual'));
+    candidate.layers.push(...crossView.layers);
+    candidate.diagnostics.push(...crossView.diagnostics);
     const liveIds = new Set(candidate.regions.filter(active).map(region => region.id));
     const storedIds = new Set(candidate.regions.map(region => region.id));
     const suppressedIds = new Set(candidate.regions.filter(region => region.suppressed).map(region => region.id));

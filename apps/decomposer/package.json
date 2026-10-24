@@ -1,0 +1,16 @@
+{
+  "name": "@hyde/decomposer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "hyde-decompose": "./dist/cli/hyde-decompose.mjs"
+  },
+  "dependencies": {
+    "@hyde/sdk": "0.1.0"
+  },
+  "scripts": {
+    "build": "npm run decomposer:build --prefix ../..",
+    "test": "npm run test:decomposer --prefix ../.."
+  }
+}

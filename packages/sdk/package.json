@@ -1,0 +1,16 @@
+{
+  "name": "@hyde/sdk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/types/sdk.d.ts",
+      "import": "./dist/hyde-sdk.mjs"
+    }
+  },
+  "scripts": {
+    "build": "npm run sdk:build --prefix ../..",
+    "test": "npm run test:sdk --prefix ../.."
+  }
+}

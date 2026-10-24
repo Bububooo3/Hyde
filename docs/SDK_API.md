@@ -1,11 +1,11 @@
 # Hyde Agent Authoring SDK (local development API)
 
-The SDK uses Story Studio's `Project`/`Assembly` types, evaluator, editing helpers and archive codec. It does not require a server. Build the Node package and CLI with `npm run sdk:build` and `npm run cli:build`. The local package exposes `hyde-editor/sdk`; direct source imports work in this repository. The protocol version is **1** and the current SDK version is **0.1.0**. This is an implementation checkpoint; [ACCEPTANCE.md](ACCEPTANCE.md) lists unfinished requirements.
+The SDK uses Story Studio's `Project`/`Assembly` types, evaluator, editing helpers and archive codec. It does not require a server. Build the `packages/sdk/` workspace with `npm run build -w @hyde/sdk` and the CLI with `npm run cli:build`. The local package exposes `@hyde/sdk` (and the existing `hyde-editor/sdk` alias); implementation imports the shared root `src/` core. The protocol version is **1** and the current SDK version is **0.1.0**. This is an implementation checkpoint; [ACCEPTANCE.md](ACCEPTANCE.md) lists unfinished requirements.
 
 ## Node example
 
 ```ts
-import { hyde } from 'hyde-editor/sdk';
+import { hyde } from '@hyde/sdk';
 
 const session = await hyde.createProject({ name: 'An editable story', width: 640, height: 480 });
 const sceneId = session.snapshot().sequences[0].id;

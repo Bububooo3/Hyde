@@ -4,9 +4,9 @@ import { defineConfig } from 'vite';
 export default defineConfig({
   build: {
     target: 'node20',
-    outDir: 'dist/sdk',
+    outDir: 'packages/sdk/dist',
     emptyOutDir: true,
-    lib: { entry: 'src/sdk.ts', formats: ['es'], fileName: () => 'hyde-sdk.mjs' },
+    lib: { entry: 'packages/sdk/src/index.ts', formats: ['es'], fileName: () => 'hyde-sdk.mjs' },
     rollupOptions: { external: /^node:/ },
   },
 });

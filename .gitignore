@@ -1,6 +1,8 @@
 node_modules/
 dist/
 dist-decomposer/
+packages/sdk/dist/
+apps/decomposer/dist/
 test-results/
 playwright-report/
 *.tsbuildinfo

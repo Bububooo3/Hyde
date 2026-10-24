@@ -4,7 +4,7 @@
     "noEmit": false,
     "declaration": true,
     "emitDeclarationOnly": true,
-    "outDir": "dist/sdk/types",
+    "outDir": "packages/sdk/dist/types",
     "rootDir": "src"
   },
   "include": ["src/sdk.ts", "src/gifenc.d.ts"]
