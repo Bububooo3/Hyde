@@ -32,20 +32,28 @@
       "_CanvasPool-O_8k9jVW.js"
     ]
   },
-  "_init-DhQTTWXE.js": {
-    "file": "assets/init-DhQTTWXE.js",
+  "_init-D5CgzAG2.js": {
+    "file": "assets/init-D5CgzAG2.js",
     "name": "init",
     "imports": [
       "_CanvasPool-O_8k9jVW.js",
-      "_webPlayerSettings-BJn0a8vc.js",
+      "_webPlayerSettings-BpdAcXy9.js",
       "_canvasUtils-DHiBpmSz.js"
     ]
   },
-  "_webPlayerSettings-BJn0a8vc.js": {
-    "file": "assets/webPlayerSettings-BJn0a8vc.js",
+  "_mediaAudioSegments-DstqbidB.js": {
+    "file": "assets/mediaAudioSegments-DstqbidB.js",
+    "name": "mediaAudioSegments",
+    "dynamicImports": [
+      "node_modules/signalsmith-stretch/SignalsmithStretch.mjs"
+    ]
+  },
+  "_webPlayerSettings-BpdAcXy9.js": {
+    "file": "assets/webPlayerSettings-BpdAcXy9.js",
     "name": "webPlayerSettings",
     "imports": [
       "_CanvasPool-O_8k9jVW.js",
+      "_mediaAudioSegments-DstqbidB.js",
       "_canvasUtils-DHiBpmSz.js",
       "_RenderTargetSystem-D85YXrAp.js",
       "_getTextureBatchBindGroup-CDnZS9mH.js",
@@ -54,8 +62,7 @@
     "dynamicImports": [
       "node_modules/pixi.js/lib/environment-browser/browserAll.mjs",
       "node_modules/pixi.js/lib/environment-webworker/webworkerAll.mjs",
-      "_webPlayerSettings-BJn0a8vc.js",
-      "node_modules/signalsmith-stretch/SignalsmithStretch.mjs"
+      "_webPlayerSettings-BpdAcXy9.js"
     ],
     "css": [
       "assets/webPlayerSettings-DaKh38y_.css"
@@ -72,15 +79,17 @@
     "src": "_webPlayerSettings-DaKh38y_.css"
   },
   "index.html": {
-    "file": "assets/main-CqVLX_Sg.js",
+    "file": "assets/main-D2qMYaGZ.js",
     "name": "main",
     "src": "index.html",
     "isEntry": true,
     "imports": [
-      "_webPlayerSettings-BJn0a8vc.js"
+      "_CanvasPool-O_8k9jVW.js",
+      "_webPlayerSettings-BpdAcXy9.js",
+      "_mediaAudioSegments-DstqbidB.js"
     ],
     "dynamicImports": [
-      "src/mediaExport.ts"
+      "index.html"
     ],
     "css": [
       "assets/main-BT62avq3.css"
@@ -175,24 +184,24 @@
     "src": "node_modules/@fontsource/space-grotesk/files/space-grotesk-latin-400-normal.woff2"
   },
   "node_modules/pixi.js/lib/environment-browser/browserAll.mjs": {
-    "file": "assets/browserAll-XA0cgs25.js",
+    "file": "assets/browserAll-lnYhmQp1.js",
     "name": "browserAll",
     "src": "node_modules/pixi.js/lib/environment-browser/browserAll.mjs",
     "isDynamicEntry": true,
     "imports": [
       "_CanvasPool-O_8k9jVW.js",
-      "_webPlayerSettings-BJn0a8vc.js",
-      "_init-DhQTTWXE.js"
+      "_webPlayerSettings-BpdAcXy9.js",
+      "_init-D5CgzAG2.js"
     ]
   },
   "node_modules/pixi.js/lib/environment-webworker/webworkerAll.mjs": {
-    "file": "assets/webworkerAll-COTTd34q.js",
+    "file": "assets/webworkerAll-DD9QOVPB.js",
     "name": "webworkerAll",
     "src": "node_modules/pixi.js/lib/environment-webworker/webworkerAll.mjs",
     "isDynamicEntry": true,
     "imports": [
-      "_webPlayerSettings-BJn0a8vc.js",
-      "_init-DhQTTWXE.js"
+      "_webPlayerSettings-BpdAcXy9.js",
+      "_init-D5CgzAG2.js"
     ]
   },
   "node_modules/signalsmith-stretch/SignalsmithStretch.mjs": {
@@ -202,26 +211,16 @@
     "isDynamicEntry": true
   },
   "player.html": {
-    "file": "assets/player-DsapApzz.js",
+    "file": "assets/player-Bh__wfi1.js",
     "name": "player",
     "src": "player.html",
     "isEntry": true,
     "imports": [
-      "_webPlayerSettings-BJn0a8vc.js"
+      "_webPlayerSettings-BpdAcXy9.js",
+      "_mediaAudioSegments-DstqbidB.js"
     ],
     "css": [
       "assets/player-GHhwuAuN.css"
-    ]
-  },
-  "src/mediaExport.ts": {
-    "file": "assets/mediaExport-CJinGesd.js",
-    "name": "mediaExport",
-    "src": "src/mediaExport.ts",
-    "isDynamicEntry": true,
-    "imports": [
-      "_CanvasPool-O_8k9jVW.js",
-      "_webPlayerSettings-BJn0a8vc.js",
-      "index.html"
     ]
   }
 }
