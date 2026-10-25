@@ -20,6 +20,7 @@ export type DecompositionEdit =
   | { op: 'region.setPath'; regionId: string; path: ShapePath }
   | { op: 'region.clearManualPath'; regionId: string }
   | { op: 'region.setSuppressed'; regionId: string; suppressed: boolean }
+  | { op: 'region.setColor'; regionId: string; color: string | null }
   | { op: 'region.refineMask'; regionId: string; handle: string; bounds?: RegionRecord['bounds'] }
   | { op: 'region.featherOutside'; regionId: string; radius: number; strength: number }
   | { op: 'region.seedMask'; regionId: string; x: number; y: number; action: 'add' | 'subtract'; colorTolerance: number; radius: number; maxPixels?: number }
@@ -331,6 +332,11 @@ export class DecompositionSession {
           result.masks.delete(region.maskId);
           region.id = oldId; region.maskId = oldMaskId;
           region.geometry.id = oldRegion.geometry.id;
+          if (oldRegion.authoredColor) {
+            region.generatedColor = region.color;
+            region.authoredColor = oldRegion.authoredColor;
+            region.color = oldRegion.authoredColor;
+          }
           region.geometry.manualPath = oldRegion.geometry.manualPath;
           region.geometry.locked = oldRegion.geometry.locked;
           region.locked = structuredClone(oldRegion.locked);
@@ -411,6 +417,11 @@ export class DecompositionSession {
           region.locked = structuredClone(earlier.locked);
           region.lineage = structuredClone(earlier.lineage);
           region.geometry.manualPath = structuredClone(earlier.geometry.manualPath);
+          if (earlier.authoredColor) {
+            region.generatedColor = region.color;
+            region.authoredColor = earlier.authoredColor;
+            region.color = earlier.authoredColor;
+          }
           region.geometry.locked = earlier.geometry.locked;
           if (earlier.locked.mask || earlier.generationStatus === 'manual' || earlier.originalMaskId) {
             Object.assign(region, { maskId: earlier.maskId, originalMaskId: earlier.originalMaskId, bounds: earlier.bounds, pixelCount: earlier.pixelCount, holeCount: earlier.holeCount, geometry: structuredClone(earlier.geometry), generationStatus: earlier.generationStatus });
@@ -561,6 +572,19 @@ export class DecompositionSession {
         else if (edit.op === 'region.setSuppressed') {
           const target = candidate.regions.find(item => item.id === edit.regionId && item.generationStatus !== 'historical' && item.geometry.status === 'inferred') ?? fail('Only a current inferred region can be suppressed or restored.');
           target.suppressed = edit.suppressed; changed.add(target.id);
+        }
+        else if (edit.op === 'region.setColor') {
+          const target = region(edit.regionId);
+          if (edit.color === null) {
+            if (target.generatedColor) target.color = target.generatedColor;
+            delete target.authoredColor; delete target.generatedColor;
+          } else {
+            if (target.geometry.texture !== 'flat') fail('INVALID_ARGUMENT: A source-crop texture controls this region color.');
+            if (typeof edit.color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(edit.color)) fail('INVALID_ARGUMENT: Region color must be a six-digit hex value.');
+            if (!target.authoredColor) target.generatedColor = target.color;
+            target.color = edit.color.toLowerCase(); target.authoredColor = target.color;
+          }
+          changed.add(target.id);
         }
         else if (edit.op === 'region.refineMask') {
           const target = region(edit.regionId), incoming = this.stagedMasks.get(edit.handle) ?? fail('Mask handle is unavailable.');

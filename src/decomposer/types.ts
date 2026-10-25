@@ -77,6 +77,10 @@ export interface RegionRecord {
   pixelCount: number;
   classification: 'foreground' | 'background';
   color: string;
+  /** Explicit flat-fill correction, independent of generated mask and path. */
+  authoredColor?: string;
+  /** Last automatic estimate, retained so a color correction can be reset. */
+  generatedColor?: string;
   colorVariance: number;
   confidence: { kind: 'heuristic'; reasons: string[] };
   provenance: { algorithmVersion: string; settingsFingerprint: string };

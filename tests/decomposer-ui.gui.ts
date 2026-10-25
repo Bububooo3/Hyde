@@ -91,6 +91,52 @@ test('guided mask brush, path drag and pivot edits commit through worker revisio
   expect(Number(await page.getByLabel('Pivot X').inputValue())).toBeCloseTo(26, 1);
 });
 
+test('flat region color correction is reversible, survives regeneration and source reopen', async ({ page }) => {
+  await page.goto('/decomposer.html');
+  await page.getByLabel('Import images').setInputFiles({ name: 'two-piece-prop.png', mimeType: 'image/png', buffer: fixture() });
+  await expect(page.getByRole('status')).toContainText('Automatic first pass found 2 editable regions.');
+  await page.locator('.left-pane .scroll-list').first().locator('.row').first().click();
+  const fill = page.getByLabel('Flat fill color');
+  const generated = await fill.inputValue();
+  await fill.fill('wrong'); await fill.blur();
+  await expect(page.getByRole('status')).toContainText('six-digit hex');
+  await expect(fill).toHaveValue(generated);
+  await fill.fill('#a1b2c3'); await fill.blur();
+  await expect(page.getByRole('status')).toContainText('region.setColor saved');
+  await expect(fill).toHaveValue('#a1b2c3');
+  await page.getByRole('button', { name: 'Undo' }).click();
+  await expect(fill).toHaveValue(generated);
+  await page.getByRole('button', { name: 'Redo' }).click();
+  await expect(fill).toHaveValue('#a1b2c3');
+  await page.getByRole('button', { name: 'Regenerate first pass' }).click();
+  await expect(page.getByLabel('Regeneration impact preview')).toBeVisible();
+  await page.getByRole('button', { name: 'Confirm regeneration' }).click();
+  await expect(page.getByRole('status')).toContainText('Regenerate first pass applied');
+  await expect(fill).toHaveValue('#a1b2c3');
+  const savePromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Save source' }).click();
+  const saved = await savePromise;
+  const bytes = new Uint8Array(await readFile(await saved.path()));
+  const decoded = await decodeDecompositionDocument(bytes);
+  const corrected = decoded.document.regions.find(region => region.authoredColor === '#a1b2c3' && region.generatedColor === generated);
+  expect(corrected).toBeTruthy();
+  await page.getByRole('button', { name: 'Preview in Hyde' }).click();
+  const native = page.getByAltText('Native Hyde render of current export');
+  await expect(native).toBeVisible();
+  const nativeColor = await native.evaluate((image: HTMLImageElement, point: { x: number; y: number }) => {
+    const canvas = document.createElement('canvas'); canvas.width = image.naturalWidth; canvas.height = image.naturalHeight;
+    const context = canvas.getContext('2d')!; context.drawImage(image, 0, 0);
+    return [...context.getImageData(point.x, point.y, 1, 1).data];
+  }, { x: Math.floor(corrected!.bounds.x + corrected!.bounds.width / 2), y: Math.floor(corrected!.bounds.y + corrected!.bounds.height / 2) });
+  expect(nativeColor.slice(0, 3)).toEqual([161, 178, 195]);
+  await page.getByLabel('Open .hydecomp').setInputFiles({ name: 'recolored.hydecomp', mimeType: 'application/zip', buffer: Buffer.from(bytes) });
+  await expect(page.getByRole('status')).toContainText('Opened recolored.hydecomp');
+  await page.locator('.left-pane .scroll-list').first().locator('.row').first().click();
+  await expect(fill).toHaveValue('#a1b2c3');
+  await page.getByRole('button', { name: 'Reset generated color' }).click();
+  await expect(fill).toHaveValue(generated);
+});
+
 test('add brush extends the selected source mask beyond its automatic rectangle', async ({ page }) => {
   await page.goto('/decomposer.html');
   await page.getByLabel('Import images').setInputFiles({ name: 'two-piece-prop.png', mimeType: 'image/png', buffer: fixture() });

@@ -54,6 +54,31 @@ it('uses an explicitly matched and aligned alternate still as reviewable occlusi
     expect(quality.silhouette.iou).toBeGreaterThan(.99);
     expect(quality.color.meanAbsoluteSrgbChannelError!).toBeLessThan(.02);
   }
+  const generatedColor = hidden[0].color;
+  const recolor = await session.execute({ expectedRevision: session.revision, edits: [
+    { op: 'region.setColor', regionId: hidden[0].id, color: '#a1b2c3' },
+  ] });
+  expect(recolor.ok, JSON.stringify(recolor)).toBe(true);
+  expect(session.snapshot().regions.find(item => item.id === hidden[0].id)).toMatchObject({
+    color: '#a1b2c3', authoredColor: '#a1b2c3', generatedColor,
+  });
+  await session.analyze();
+  const editedHidden = session.snapshot().regions.find(item => item.id === hidden[0].id)!;
+  expect(editedHidden).toMatchObject({ color: '#a1b2c3', authoredColor: '#a1b2c3', generatedColor });
+  expect(editedHidden.geometry.manualPath).toBeUndefined();
+  expect(editedHidden.locked.mask).toBe(false);
+  const nativeEdited = await session.exportHyde({ format: 'hyde' });
+  expect(nativeEdited.project.elements.find(item => item.id === nativeEdited.mapping.regionIds[hidden[0].id])?.fill).toBe('#a1b2c3');
+  const colorReopened = await DecompositionSession.openDocument(await session.saveDocument());
+  expect(colorReopened.snapshot().regions.find(item => item.id === hidden[0].id)?.color).toBe('#a1b2c3');
+  const reset = await colorReopened.execute({ expectedRevision: colorReopened.revision, edits: [
+    { op: 'region.setColor', regionId: hidden[0].id, color: null },
+  ] });
+  expect(reset.ok, JSON.stringify(reset)).toBe(true);
+  expect(colorReopened.snapshot().regions.find(item => item.id === hidden[0].id)?.color).toBe(generatedColor);
+  expect(colorReopened.undo(colorReopened.revision)).toBe(true);
+  expect(colorReopened.snapshot().regions.find(item => item.id === hidden[0].id)?.color).toBe('#a1b2c3');
+  await colorReopened.close();
   const rejected = await session.execute({ expectedRevision: session.revision, edits: [
     { op: 'layer.rejectProposal', frontRegionId: front.id, backRegionId: back.id },
   ] });

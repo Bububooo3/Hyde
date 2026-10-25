@@ -34,7 +34,7 @@ function regionPath(region: RegionRecord): ShapePath { return region.geometry.ma
 function cropTexture(region: RegionRecord, mask: RegionMask, image: DecodedImage): Uint8Array {
   const { bounds } = region;
   const rgba = new Uint8Array(bounds.width * bounds.height * 4);
-  const sourceColor = region.geometry.texture === 'source-crop' || region.holeCount > 0;
+  const sourceColor = region.geometry.texture === 'source-crop';
   const flat = [1, 3, 5].map(at => parseInt(region.color.slice(at, at + 2), 16));
   for (let y = 0; y < bounds.height; y++) for (let x = 0; x < bounds.width; x++) {
     const source = ((bounds.y + y) * image.width + bounds.x + x) * 4, target = (y * bounds.width + x) * 4;

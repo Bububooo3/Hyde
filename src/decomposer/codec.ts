@@ -47,6 +47,11 @@ export function validateDecompositionDocument(document: unknown, sourceBytes?: M
   for (const item of document.regions) {
     if (!record(item) || !safeId(String(item.id)) || regionIds.has(String(item.id)) || !sourceIds.has(String(item.sourceId)) || !safeId(String(item.maskId)) || maskIds.has(String(item.maskId)) || !record(item.bounds) || !Number.isInteger(item.bounds.width) || !Number.isInteger(item.bounds.height) || Number(item.bounds.width) < 1 || Number(item.bounds.height) < 1 || !record(item.geometry)) throw new Error('Invalid region metadata.');
     regionIds.add(String(item.id)); maskIds.add(String(item.maskId));
+    if (typeof item.color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(item.color) ||
+      item.authoredColor !== undefined && (typeof item.authoredColor !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(item.authoredColor)) ||
+      item.generatedColor !== undefined && (typeof item.generatedColor !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(item.generatedColor)) ||
+      (item.authoredColor === undefined) !== (item.generatedColor === undefined) ||
+      item.authoredColor !== undefined && item.color !== item.authoredColor) throw new Error('Region fill color is invalid.');
     if (item.suppressed !== undefined && (typeof item.suppressed !== 'boolean' || item.geometry.status !== 'inferred')) throw new Error('Only inferred regions can be suppressed.');
     const source = document.sources.find(source => source.id === item.sourceId)!;
     if (!Number.isInteger(item.bounds.x) || !Number.isInteger(item.bounds.y) || Number(item.bounds.x) < 0 || Number(item.bounds.y) < 0 || Number(item.bounds.x) + Number(item.bounds.width) > source.width || Number(item.bounds.y) + Number(item.bounds.height) > source.height) throw new Error('Region bounds exceed the source image.');
