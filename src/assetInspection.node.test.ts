@@ -9,7 +9,7 @@ import { HydeAuthoringSession } from './authoring';
 import { runCli } from './cli';
 import { EditorBridge } from './editorBridge';
 import { createProject } from './model';
-import { HydeSDK, HydeSession } from './sdk';
+import { HydeAssemblyHandle, HydeSDK, HydeSession } from './sdk';
 
 const png = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lXcAAAAASUVORK5CYII=', 'base64'));
 
@@ -67,4 +67,15 @@ it('inspects project summaries and asset pages without cloning embedded media', 
   expect(await session.inspect({ target: 'assets', fields: 'id,name' })).toMatchObject({ items: [{ id: 'large', name: 'large.bin' }] });
   expect(await session.inspect({ target: 'asset', id: 'large', fields: 'id,byteLength' })).toMatchObject({ asset: { id: 'large', byteLength: 3 * 1024 * 1024 } });
   expect(snapshot).not.toHaveBeenCalled();
+});
+
+it('inspects an assembly inventory without cloning its embedded media', () => {
+  const handle = new HydeAssemblyHandle({ format: 'hyde-assembly', version: 1, name: 'Large assembly', elements: [],
+    assets: [{ id: 'large', name: 'large.bin', mime: 'application/octet-stream', kind: 'image', dataUrl: `data:application/octet-stream;base64,${'A'.repeat(4 * 1024 * 1024)}` }] });
+  const clone = vi.spyOn(globalThis, 'structuredClone');
+  try {
+    expect(handle.inspect()).toMatchObject({ name: 'Large assembly', assets: [{ id: 'large', name: 'large.bin' }] });
+    expect(JSON.stringify(handle.inspect())).not.toContain('dataUrl');
+    expect(clone.mock.calls.every(([value]) => !value || typeof value !== 'object' || !('assets' in value) && !('dataUrl' in value))).toBe(true);
+  } finally { clone.mockRestore(); }
 });

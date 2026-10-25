@@ -94,7 +94,8 @@ export class HydeAssemblyHandle {
   constructor(private readonly assembly: Assembly) {}
   inspect(): Omit<Assembly, 'assets'> & { assets: Array<Omit<Asset, 'dataUrl'>> } {
     if (this.closed) throw new Error('The assembly handle is closed.');
-    return { ...structuredClone(this.assembly), assets: this.assembly.assets.map(({ dataUrl: _data, ...asset }) => structuredClone(asset)) };
+    const { assets: _assets, ...assembly } = this.assembly;
+    return { ...structuredClone(assembly), assets: this.assembly.assets.map(({ dataUrl: _data, ...asset }) => structuredClone(asset)) };
   }
   exportBytes(): Uint8Array {
     if (this.closed) throw new Error('The assembly handle is closed.');
