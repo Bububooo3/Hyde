@@ -123,6 +123,7 @@ test('flat region color correction is reversible, survives regeneration and sour
   await page.getByRole('button', { name: 'Preview in Hyde' }).click();
   const native = page.getByAltText('Native Hyde render of current export');
   await expect(native).toBeVisible();
+  expect(await native.evaluate(image => getComputedStyle(image).imageRendering)).toBe('auto');
   const nativeColor = await native.evaluate((image: HTMLImageElement, point: { x: number; y: number }) => {
     const canvas = document.createElement('canvas'); canvas.width = image.naturalWidth; canvas.height = image.naturalHeight;
     const context = canvas.getContext('2d')!; context.drawImage(image, 0, 0);
@@ -268,7 +269,7 @@ test('guided seed and path controls preserve editable history', async ({ page })
   await expect(page.getByRole('button', { name: 'Apply outward feather' })).toBeEnabled();
 });
 
-test('manual cross-reference landmarks and affine alignment survive source reopen', async ({ page }) => {
+test('manual cross-reference landmarks and affine alignment survive source reopen', async ({ page }, testInfo) => {
   await page.goto('/decomposer.html');
   await page.getByLabel('Import images').setInputFiles([
     { name: 'primary.png', mimeType: 'image/png', buffer: fixture() },
@@ -290,6 +291,12 @@ test('manual cross-reference landmarks and affine alignment survive source reope
   await expect(page.getByText('Pending landmark')).toBeVisible();
   await referenceRows.nth(1).click();
   await expect(page.locator('.canvas-label')).toContainText('alternate.png');
+  const comparison = page.getByLabel('Compare references');
+  await expect(comparison).toContainText('The primary image defines the editable Hyde construction pose.');
+  await expect(comparison).toContainText('No motion is generated.');
+  await expect(comparison.getByAltText('Primary construction pose')).toHaveJSProperty('naturalWidth', 40);
+  await expect(comparison.getByAltText('Additional reference')).toHaveJSProperty('naturalWidth', 40);
+  await page.screenshot({ path: testInfo.outputPath('reference-comparison.png'), fullPage: true });
   const second = await pointOnOriginal(12, 11);
   await page.mouse.click(second.x, second.y);
   await expect(page.getByRole('status')).toContainText('reference.correspond saved');

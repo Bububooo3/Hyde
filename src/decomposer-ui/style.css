@@ -55,8 +55,14 @@ h3 { font-size: 13px; margin: 0; }
 .canvas-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .canvas-card { display: flex; flex-direction: column; min-width: 0; align-items: safe center; justify-content: safe center; border: 1px solid #39545d; border-radius: 9px; background: radial-gradient(circle at 50% 40%, #29434a, #192c33 70%); overflow: auto; position: relative; }
 .canvas-label { position: absolute; top: 8px; left: 8px; z-index: 1; padding: 5px 7px; color: #eaf7f3; background: #0d242bbb; border-radius: 5px; font-size: 10px; }
-.canvas-card canvas { max-width: 95%; max-height: 75vh; width: min(95%, 640px); height: auto; object-fit: contain; image-rendering: pixelated; background: conic-gradient(#f4f6f1 25%, #d6dfdb 0 50%, #f4f6f1 0 75%, #d6dfdb 0) 0 0/16px 16px; box-shadow: 0 16px 36px #07151c8a; }
-.canvas-card canvas.zoomed { max-width: none; max-height: none; min-width: auto; min-height: auto; object-fit: none; flex: none; }
+.canvas-card canvas { max-width: 95%; max-height: 75vh; width: min(95%, 640px); height: auto; object-fit: contain; image-rendering: auto; background: conic-gradient(#f4f6f1 25%, #d6dfdb 0 50%, #f4f6f1 0 75%, #d6dfdb 0) 0 0/16px 16px; box-shadow: 0 16px 36px #07151c8a; }
+.canvas-card canvas.zoomed { max-width: none; max-height: none; min-width: auto; min-height: auto; object-fit: none; image-rendering: pixelated; flex: none; }
+.reference-comparison { display: grid; gap: 7px; margin: 12px 14px 0; padding: 11px 13px; border: 1px solid #41646a; border-radius: 8px; background: #182f37; font-size: 11px; color: #d4e4df; }
+.reference-comparison p { margin: 0; line-height: 1.45; color: #aec9c4; }
+.reference-comparison-images { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.reference-comparison figure { display: grid; gap: 5px; justify-items: center; min-width: 0; margin: 0; padding: 7px; border: 1px solid #38545d; border-radius: 6px; background: #10242c; }
+.reference-comparison figcaption { justify-self: start; }
+.reference-comparison img { display: block; width: 100%; max-height: 150px; object-fit: contain; image-rendering: auto; background: conic-gradient(#f4f6f1 25%, #d6dfdb 0 50%, #f4f6f1 0 75%, #d6dfdb 0) 0 0/16px 16px; }
 .canvas-card .interactive-canvas { touch-action: none; cursor: crosshair; }
 .empty-state { justify-self: center; align-self: center; text-align: center; max-width: 430px; padding: 25px; }
 .empty-state h1 { font-size: 26px; line-height: 1.15; }
@@ -67,7 +73,7 @@ h3 { font-size: 13px; margin: 0; }
 .status-panel .metric { color: #9ed4c8; }
 .section-heading { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .native-preview-visual { width: min(100%, 320px); margin: 10px auto 0; position: relative; }
-.native-preview-visual img { display: block; width: 100%; height: auto; max-height: 300px; image-rendering: pixelated; background: conic-gradient(#f4f6f1 25%, #d6dfdb 0 50%, #f4f6f1 0 75%, #d6dfdb 0) 0 0/16px 16px; }
+.native-preview-visual img { display: block; width: 100%; height: auto; max-height: 300px; image-rendering: auto; background: conic-gradient(#f4f6f1 25%, #d6dfdb 0 50%, #f4f6f1 0 75%, #d6dfdb 0) 0 0/16px 16px; }
 .native-preview-visual img.residual-image { position: absolute; inset: 0; width: 100%; height: 100%; background: none; pointer-events: none; }
 .native-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
 .native-metrics > div { display: grid; align-content: start; gap: 5px; min-width: 0; border: 1px solid #36545e; border-radius: 6px; padding: 8px; background: #122730; }

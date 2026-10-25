@@ -167,6 +167,8 @@ export default function App() {
   const [seedTolerance, setSeedTolerance] = useState(36), [seedRadius, setSeedRadius] = useState(24);
   const [pendingLandmark, setPendingLandmark] = useState<{ sourceId: string; x: number; y: number }>();
   const [renderVersion, setRenderVersion] = useState(0), [isolate, setIsolate] = useState(false);
+  const [loadedSourceId, setLoadedSourceId] = useState<string>();
+  const [primaryComparisonUrl, setPrimaryComparisonUrl] = useState<string>();
   const [showInferred, setShowInferred] = useState(true);
   const [requestedInference, setRequestedInference] = useState<boolean>();
   const [requestedMode, setRequestedMode] = useState<DecompositionMode>();
@@ -210,6 +212,17 @@ export default function App() {
   useEffect(() => setPoseOffset(0), [selectedPart?.id]);
   const selectedPath = selectedRegion?.geometry.manualPath ?? selectedRegion?.geometry.generatedPath;
   const primarySourceId = documentModel?.sources.find(item => item.role === 'primary')?.id;
+  const primarySource = documentModel?.sources.find(item => item.id === primarySourceId);
+  useEffect(() => {
+    setPrimaryComparisonUrl(undefined);
+    if (!primarySource || !source || source.role === 'primary') return;
+    let canceled = false, url: string | undefined;
+    void client.current.call<{ bytes: Uint8Array }>('source', { id: primarySource.id }).then(response => {
+      url = URL.createObjectURL(new Blob([response.bytes as BlobPart], { type: primarySource.mime }));
+      if (canceled) URL.revokeObjectURL(url); else setPrimaryComparisonUrl(url);
+    }).catch(() => { if (!canceled) setPrimaryComparisonUrl(undefined); });
+    return () => { canceled = true; if (url) URL.revokeObjectURL(url); };
+  }, [primarySource?.id, primarySource?.byteHash, source?.id, source?.role]);
   const referenceRegionLabel = (region: RegionRecord) => {
     const sourceName = documentModel?.sources.find(item => item.id === region.sourceId)?.name ?? region.sourceId;
     return `${sourceName} · (${region.bounds.x}, ${region.bounds.y}) · ${region.bounds.width}×${region.bounds.height} px`;
@@ -231,6 +244,7 @@ export default function App() {
     const image = new Image(); image.src = url; await image.decode();
     if (sourceUrl.current) URL.revokeObjectURL(sourceUrl.current);
     sourceUrl.current = url; sourceImage.current = image; sourcePixelsRef.current = sourcePixels(image, metadata.width, metadata.height);
+    setLoadedSourceId(sourceId);
     setRenderVersion(value => value + 1);
   }, []);
   const refresh = useCallback(async (state: WorkerState, loadSource = false) => {
@@ -270,6 +284,7 @@ export default function App() {
       if (documentModel) checkpoint.current = (await client.current.call<{ bytes: Uint8Array }>('save')).bytes;
       const inputs = await Promise.all(files.map(async (file, index) => ({ name: file.name, mime: file.type, role: index === 0 ? 'primary' : 'alternate-view', bytes: new Uint8Array(await file.arrayBuffer()) })));
       const imported = await client.current.call<WorkerState>('import', { inputs, options: { name: files[0].name.replace(/\.[^.]+$/, '') } });
+      setLoadedSourceId(undefined);
       await refresh(imported, true); setSelectedRegionId(undefined); setSelectedPartId(undefined); setPendingLandmark(undefined);
       checkpoint.current = (await client.current.call<{ bytes: Uint8Array }>('save')).bytes;
       setStatus(`Imported ${files.length} reference${files.length === 1 ? '' : 's'}. Analyzing…`);
@@ -285,6 +300,7 @@ export default function App() {
     setBusy(true);
     try {
       const opened = await client.current.call<WorkerState>('open', { bytes: new Uint8Array(await file.arrayBuffer()) });
+      setLoadedSourceId(undefined);
       await refresh(opened, true); setSelectedRegionId(undefined); setSelectedPartId(undefined); setPendingLandmark(undefined); setStatus(`Opened ${file.name}; original references and edits are available.`);
     } catch (error) { setStatus(error instanceof Error ? error.message : 'Open failed.'); }
     finally { setBusy(false); }
@@ -607,6 +623,7 @@ export default function App() {
       </aside>
       <main className="center-pane">
         <div className="canvas-toolbar"><div className="segmented">{(['original', 'reconstruction', 'overlay', 'side-by-side'] as View[]).map(item => <button key={item} aria-pressed={view === item} onClick={() => setView(item)}>{item === 'side-by-side' ? 'Side by side' : item[0].toUpperCase() + item.slice(1)}</button>)}</div><label>Zoom<select aria-label="Canvas zoom" value={String(zoom)} onChange={event => setZoom(event.target.value === 'fit' ? 'fit' : Number(event.target.value))}><option value="fit">Fit</option><option value="1">1× pixels</option><option value="2">2× pixels</option><option value="4">4× pixels</option><option value="8">8× pixels</option></select></label><label>Tool <select aria-label="Canvas tool" value={tool} onChange={event => setTool(event.target.value as Tool)}><option value="select">Select</option><option value="path">Edit path and handles</option><option value="paint-add">Add mask brush</option><option value="paint-erase">Subtract mask brush</option><option value="seed-add">Foreground seed</option><option value="seed-erase">Background seed</option><option value="landmark">Pair reference landmark</option><option value="pivot">Set pivot</option></select></label><label><input type="checkbox" checked={isolate} onChange={event => setIsolate(event.target.checked)}/> Isolate</label></div>
+        {source && source.role !== 'primary' && <section className="reference-comparison" aria-label="Compare references"><strong>Compare the two stills</strong><p>The primary image defines the editable Hyde construction pose. This additional view supplies evidence for a same-part match, front/back order and possible hidden contours. Confirm matches yourself; alignment maps coordinates only when one transform fits both images. No motion is generated.</p><div className="reference-comparison-images"><figure><figcaption>Primary construction pose · {primarySource?.name}</figcaption>{primaryComparisonUrl && <img alt="Primary construction pose" src={primaryComparisonUrl}/>}</figure><figure><figcaption>Additional reference · {source.name}</figcaption>{loadedSourceId === source.id && sourceUrl.current && <img alt="Additional reference" src={sourceUrl.current}/>}</figure></div></section>}
         {(tool === 'path' || tool.startsWith('paint') || tool.startsWith('seed') || view === 'overlay' || inferredRegions.length > 0) && <div className="canvas-subbar">
           {tool.startsWith('paint') && <><label>Brush radius <input aria-label="Brush radius" type="range" min="1" max="40" value={brushRadius} onChange={event => setBrushRadius(Number(event.target.value))}/>{brushRadius}px</label><label>Brush hardness <input aria-label="Brush hardness" type="range" min="0.1" max="1" step="0.1" value={brushHardness} onChange={event => setBrushHardness(Number(event.target.value))}/>{Math.round(brushHardness * 100)}%</label></>}
           {tool.startsWith('seed') && <><label>Seed tolerance <input aria-label="Seed tolerance" type="range" min="0" max="255" value={seedTolerance} onChange={event => setSeedTolerance(Number(event.target.value))}/>{seedTolerance}</label><label>Seed reach <input aria-label="Seed reach" type="range" min="1" max="256" value={seedRadius} onChange={event => setSeedRadius(Number(event.target.value))}/>{seedRadius}px</label></>}
