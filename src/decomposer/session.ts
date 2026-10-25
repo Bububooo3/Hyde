@@ -49,7 +49,7 @@ export interface DecompositionEditResult {
   ok: boolean;
   revision: number;
   changedIds?: string[];
-  error?: { code: string; message: string };
+  error?: { code: string; message: string; editIndex?: number; targetId?: string; suggestion?: string };
 }
 interface Snapshot { document: DecompositionDocumentV1; masks: Map<string, RegionMask> }
 const cloneRegionMask = (mask: RegionMask): RegionMask => ({ width: mask.width, height: mask.height, bytes: Uint8Array.from(mask.bytes), ...(mask.alpha ? { alpha: Uint8Array.from(mask.alpha) } : {}) });
@@ -574,8 +574,10 @@ export class DecompositionSession {
     delete candidate.exportMapping;
     const region = (id: string) => candidate.regions.find(item => item.id === id && active(item)) ?? fail(`Region ${id} does not exist.`);
     const part = (id: string) => candidate.parts.find(item => item.id === id) ?? fail(`Part ${id} does not exist.`);
+    let activeEditIndex: number | undefined;
     try {
       for (const [editIndex, edit] of request.edits.entries()) {
+        activeEditIndex = editIndex;
         if (edit.op === 'region.setPath') { const target = region(edit.regionId); target.geometry.manualPath = structuredClone(edit.path); target.geometry.locked = true; target.locked.geometry = true; changed.add(target.id); }
         else if (edit.op === 'region.offsetPath') {
           const target = region(edit.regionId);
@@ -835,6 +837,7 @@ export class DecompositionSession {
       }
       if (request.edits.some(edit => ['region.refineMask', 'region.featherOutside', 'region.seedMask', 'region.split', 'region.merge', 'part.create', 'part.assignRegion'].includes(edit.op)))
         for (const item of candidate.parts) if (!item.attachmentApproved && !item.attachmentLocked) item.attachmentProposal = undefined;
+      activeEditIndex = undefined;
       refreshPartBounds(candidate);
       candidate.updatedAt = new Date().toISOString();
       validateDecompositionDocument(candidate, this.sourceBytes, masks, new Map([...this.images].map(([id, image]) => [id, image.rgba])));
@@ -845,7 +848,13 @@ export class DecompositionSession {
       return { ok: true, revision: this.revision, changedIds: [...changed] };
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Edit failed.';
-      return { ok: false, revision: this.revision, error: { code: message.split(':')[0].replace(/[^A-Z_]/g, '') || 'DOCUMENT_CONFLICT', message } };
+      const explicit = /^([A-Z][A-Z_]+):\s*/.exec(message)?.[1];
+      const code = explicit ?? (/\bdoes not exist\b|\bnot found\b/i.test(message) ? 'TARGET_NOT_FOUND' : 'INVALID_ARGUMENT');
+      const edit = activeEditIndex === undefined ? undefined : request.edits[activeEditIndex];
+      const targetId = edit && ('regionId' in edit ? edit.regionId : 'partId' in edit ? edit.partId : 'sourceId' in edit ? edit.sourceId : 'firstId' in edit ? edit.firstId : undefined);
+      return { ok: false, revision: this.revision, error: { code, message,
+        ...(activeEditIndex === undefined ? {} : { editIndex: activeEditIndex }), ...(targetId ? { targetId } : {}),
+        ...(code === 'TARGET_NOT_FOUND' ? { suggestion: 'Reinspect the current document and use a current region, part, or source ID.' } : {}) } };
     }
   }
   async close(): Promise<void> { this.closed = true; this.images.clear(); this.sourceBytes.clear(); this.masks.clear(); this.stagedMasks.clear(); this.undoStack = []; this.redoStack = []; }

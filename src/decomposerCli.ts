@@ -14,7 +14,8 @@ const DOCUMENT_LIMIT = 256 * 1024 * 1024;
 const IMAGE_LIMIT = 128 * 1024 * 1024;
 
 class CliError extends Error {
-  constructor(readonly code: string, message: string, readonly exitCode = 2) { super(message); }
+  constructor(readonly code: string, message: string, readonly exitCode = 2,
+    readonly details?: { editIndex?: number; targetId?: string; suggestion?: string }) { super(message); }
 }
 
 function parse(argv: string[]): { command: string; args: string[]; flags: Flags } {
@@ -177,7 +178,8 @@ async function dispatch(argv: string[]): Promise<Record<string, unknown>> {
       const expectedRevision = request.expectedRevision;
       if (!Number.isInteger(expectedRevision)) throw new CliError('INVALID_ARGUMENT', 'Request needs integer expectedRevision.');
       const result = await session.execute({ expectedRevision: expectedRevision as number, edits, dryRun: Boolean(flags['dry-run']) });
-      if (!result.ok) throw new CliError(result.error?.code ?? 'EDIT_FAILED', result.error?.message ?? 'Edit failed.', 4);
+      if (!result.ok) throw new CliError(result.error?.code ?? 'EDIT_FAILED', result.error?.message ?? 'Edit failed.',
+        result.error?.code === 'DOCUMENT_CONFLICT' ? 4 : 2, result.error);
       if (flags['dry-run']) return { command, dryRun: true, ...result };
       const output = await save(value(flags, 'output', true)!, await session.saveDocument(), flags);
       return { command, ...result, ...output };
@@ -243,7 +245,8 @@ export async function runDecomposerCli(argv: string[], io: IO = { stdout: text =
     const fileError = error && typeof error === 'object' && 'path' in error;
     const code = fileError ? 'FILE_IO' : error instanceof CliError ? error.code : error instanceof Error && /^[A-Z_]+:/.test(error.message) ? error.message.split(':')[0] : 'DECOMPOSER_ERROR';
     const message = fileError ? 'Could not access the requested file.' : error instanceof Error ? error.message : 'Unknown decomposer failure.';
-    io.stderr(`${JSON.stringify({ ok: false, errors: [{ code, severity: 'error', message }] })}\n`);
+    io.stderr(`${JSON.stringify({ ok: false, errors: [{ code, severity: 'error', message,
+      ...(error instanceof CliError ? error.details : {}) }] })}\n`);
     return error instanceof CliError ? error.exitCode : 3;
   }
 }

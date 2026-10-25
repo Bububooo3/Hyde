@@ -104,6 +104,13 @@ describe('hyde-decompose CLI', () => {
     expect((await run(['inspect', document, '--target', 'regions', '--limit', 'bad', '--json'])).error.errors[0].code).toBe('INVALID_ARGUMENT');
     expect((await run(['inspect', document, '--target', 'tile', '--view', 'mask', '--region', regionId,
       '--bounds', '0,0,513,1', '--output', join(folder, 'too-large.png'), '--json'])).error.errors[0].code).toBe('RESOURCE_LIMIT');
+    const invalidRequest = join(folder, 'invalid-edit.json'), invalidOutput = join(folder, 'invalid.hydecomp');
+    await writeFile(invalidRequest, JSON.stringify({ expectedRevision: 1, edits: [{ op: 'region.setColor', regionId: 'missing-region', color: '#aabbcc' }] }));
+    const failedEdit = await run(['edit', document, '--request', invalidRequest, '--output', invalidOutput, '--json']);
+    expect(failedEdit.exit).toBe(2);
+    expect(failedEdit.error.errors[0]).toMatchObject({ code: 'TARGET_NOT_FOUND', editIndex: 0, targetId: 'missing-region' });
+    expect(failedEdit.error.errors[0].suggestion).toContain('Reinspect');
+    expect(await readdir(folder)).not.toContain('invalid.hydecomp');
     expect((await run(['compare', document, '--json'])).result.result.regionCount).toBe(analyzed.result.regionCount);
 
     const session = await DecompositionSession.openDocument(await readFile(document));

@@ -27,6 +27,22 @@ function texturedPng(withHole = false): Uint8Array {
 }
 
 describe('deterministic decomposition and native Hyde export', () => {
+  it('returns a stable target diagnostic and rolls back the whole invalid edit batch', async () => {
+    const session = await DecompositionSession.importSources([{ bytes: propPng(), name: 'prop.png', mime: 'image/png' }], { mode: 'animation-ready' });
+    await session.analyze();
+    const before = session.snapshot(), revision = session.revision;
+    const result = await session.execute({ expectedRevision: revision, edits: [
+      { op: 'part.rename', partId: before.parts[0].id, name: 'Changed' },
+      { op: 'region.setColor', regionId: 'missing-region', color: '#aabbcc' },
+    ] });
+    expect(result).toMatchObject({ ok: false, revision, error: { code: 'TARGET_NOT_FOUND', targetId: 'missing-region', editIndex: 1 } });
+    expect(result.error?.suggestion).toContain('Reinspect');
+    expect(session.snapshot()).toEqual(before);
+    const invalid = await session.execute({ expectedRevision: revision, edits: [{ op: 'part.setPivot', partId: before.parts[0].id, x: Number.NaN, y: 0 }] });
+    expect(invalid).toMatchObject({ ok: false, revision, error: { code: 'INVALID_ARGUMENT', targetId: before.parts[0].id, editIndex: 0 } });
+    await session.close();
+  });
+
   it('groups adjacent paint into one editable part while retaining separate region paths', async () => {
     const width = 20, height = 12, rgba = new Uint8Array(width * height * 4);
     for (let y = 2; y < 10; y++) for (let x = 3; x < 17; x++)
