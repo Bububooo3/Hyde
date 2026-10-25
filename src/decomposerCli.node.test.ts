@@ -111,6 +111,10 @@ describe('hyde-decompose CLI', () => {
     expect(failedEdit.error.errors[0]).toMatchObject({ code: 'TARGET_NOT_FOUND', editIndex: 0, targetId: 'missing-region' });
     expect(failedEdit.error.errors[0].suggestion).toContain('Reinspect');
     expect(await readdir(folder)).not.toContain('invalid.hydecomp');
+    await writeFile(invalidRequest, JSON.stringify({ expectedRevision: 1, edits: [null] }));
+    const malformed = await run(['edit', document, '--request', invalidRequest, '--output', invalidOutput, '--json']);
+    expect(malformed).toMatchObject({ exit: 2, error: { errors: [{ code: 'INVALID_ARGUMENT' }] } });
+    expect(await readdir(folder)).not.toContain('invalid.hydecomp');
     expect((await run(['compare', document, '--json'])).result.result.regionCount).toBe(analyzed.result.regionCount);
 
     const session = await DecompositionSession.openDocument(await readFile(document));

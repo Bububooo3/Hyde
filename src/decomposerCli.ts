@@ -174,6 +174,8 @@ async function dispatch(argv: string[]): Promise<Record<string, unknown>> {
             ...(item.alphaPath ? { alpha: await readLimitedFile(item.alphaPath, 4_000_000) } : {}) }));
         }
       }
+      if (!Array.isArray(request.edits) || request.edits.some(item => !item || typeof item !== 'object' || Array.isArray(item) || typeof item.op !== 'string'))
+        throw new CliError('INVALID_ARGUMENT', 'Request edits must be an array of objects with operation names.');
       const edits = (request.edits as DecompositionEdit[]).map(item => item.op === 'region.refineMask' && handles.has(item.handle) ? { ...item, handle: handles.get(item.handle)! } : item);
       const expectedRevision = request.expectedRevision;
       if (!Number.isInteger(expectedRevision)) throw new CliError('INVALID_ARGUMENT', 'Request needs integer expectedRevision.');

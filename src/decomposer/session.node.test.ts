@@ -31,6 +31,8 @@ describe('deterministic decomposition and native Hyde export', () => {
     const session = await DecompositionSession.importSources([{ bytes: propPng(), name: 'prop.png', mime: 'image/png' }], { mode: 'animation-ready' });
     await session.analyze();
     const before = session.snapshot(), revision = session.revision;
+    expect(await session.execute({ expectedRevision: revision, edits: null as never })).toMatchObject({ ok: false, revision, error: { code: 'INVALID_ARGUMENT' } });
+    expect(await session.execute({ expectedRevision: revision, edits: [null as never] })).toMatchObject({ ok: false, revision, error: { code: 'INVALID_ARGUMENT', editIndex: 0 } });
     const result = await session.execute({ expectedRevision: revision, edits: [
       { op: 'part.rename', partId: before.parts[0].id, name: 'Changed' },
       { op: 'region.setColor', regionId: 'missing-region', color: '#aabbcc' },

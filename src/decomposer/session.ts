@@ -574,6 +574,9 @@ export class DecompositionSession {
   }
   async execute(request: { expectedRevision: number; edits: DecompositionEdit[]; dryRun?: boolean }): Promise<DecompositionEditResult> {
     this.ensureOpen();
+    if (!request || !Number.isSafeInteger(request.expectedRevision) || request.expectedRevision < 0 ||
+      !Array.isArray(request.edits) || request.dryRun !== undefined && typeof request.dryRun !== 'boolean')
+      return { ok: false, revision: this.revision, error: { code: 'INVALID_ARGUMENT', message: 'Edit request needs a nonnegative integer revision, an edits array, and an optional boolean dryRun.' } };
     if (request.expectedRevision !== this.currentRevision) return { ok: false, revision: this.revision, error: { code: 'DOCUMENT_CONFLICT', message: 'Expected revision differs from the current document.' } };
     if (!request.edits.length || request.edits.length > 1000) return { ok: false, revision: this.revision, error: { code: 'RESOURCE_LIMIT', message: 'A batch needs 1 to 1000 edits.' } };
     const candidate = structuredClone(this.document), masks = cloneMaskMap(this.masks), changed = new Set<string>();
@@ -584,6 +587,8 @@ export class DecompositionSession {
     try {
       for (const [editIndex, edit] of request.edits.entries()) {
         activeEditIndex = editIndex;
+        if (!edit || typeof edit !== 'object' || Array.isArray(edit) || typeof edit.op !== 'string')
+          fail('INVALID_ARGUMENT: Each edit must be an object with an operation name.');
         if (edit.op === 'region.setPath') { const target = region(edit.regionId); target.geometry.manualPath = structuredClone(edit.path); target.geometry.locked = true; target.locked.geometry = true; changed.add(target.id); }
         else if (edit.op === 'region.offsetPath') {
           const target = region(edit.regionId);
@@ -857,9 +862,10 @@ export class DecompositionSession {
       const explicit = /^([A-Z][A-Z_]+):\s*/.exec(message)?.[1];
       const code = explicit ?? (/\bdoes not exist\b|\bnot found\b/i.test(message) ? 'TARGET_NOT_FOUND' : 'INVALID_ARGUMENT');
       const edit = activeEditIndex === undefined ? undefined : request.edits[activeEditIndex];
-      const targetId = edit && ('regionId' in edit ? edit.regionId : 'partId' in edit ? edit.partId : 'sourceId' in edit ? edit.sourceId : 'firstId' in edit ? edit.firstId : undefined);
+      const targetId = edit && typeof edit === 'object' && !Array.isArray(edit)
+        ? 'regionId' in edit ? edit.regionId : 'partId' in edit ? edit.partId : 'sourceId' in edit ? edit.sourceId : 'firstId' in edit ? edit.firstId : undefined : undefined;
       return { ok: false, revision: this.revision, error: { code, message,
-        ...(activeEditIndex === undefined ? {} : { editIndex: activeEditIndex }), ...(targetId ? { targetId } : {}),
+        ...(activeEditIndex === undefined ? {} : { editIndex: activeEditIndex }), ...(typeof targetId === 'string' && targetId ? { targetId } : {}),
         ...(code === 'TARGET_NOT_FOUND' ? { suggestion: 'Reinspect the current document and use a current region, part, or source ID.' } : {}) } };
     }
   }
