@@ -11,7 +11,7 @@ import { proposeCrossViewOcclusion } from './multiviewOcclusion';
 import { proposeJunctionLayers } from './junction';
 import { renderDiagnosticTile } from './diagnosticTile';
 import type { DiagnosticTile, DiagnosticTileRequest } from './diagnosticTile';
-import { decodeSource, sourceColorMetadataWarning } from './image';
+import { decodeSource, encodePng, sourceColorMetadataWarning } from './image';
 import type { DecodedImage } from './image';
 import { defaultSettings } from './types';
 import type { CorrespondenceRecord, DecompositionDocumentV1, DecompositionMode, LayerRecord, PartRecord, ReconstructionSettings, RegionMask, RegionRecord, SourceInput, SourceReference } from './types';
@@ -264,6 +264,12 @@ export class DecompositionSession {
     this.ensureOpen(); const image = this.images.get(id);
     if (!image) throw new Error('Source does not exist.');
     return { width: image.width, height: image.height, rgba: Uint8Array.from(image.rgba) };
+  }
+  /** Encode a view directly from retained canonical pixels without another full RGBA copy. */
+  sourcePngFor(id: string): Uint8Array {
+    this.ensureOpen(); const image = this.images.get(id);
+    if (!image) throw new Error('Source does not exist.');
+    return encodePng(image);
   }
   maskFor(id: string): RegionMask { this.ensureOpen(); const mask = this.masks.get(id); if (!mask) throw new Error('Mask does not exist.'); return cloneRegionMask(mask); }
   stageMask(mask: RegionMask): string {

@@ -153,11 +153,12 @@ self.onmessage = async (event: MessageEvent<Request>) => {
     } else if (type === 'replacement.plan') {
       result = await requireSession().planAssemblyReplacement(payload.bytes as Uint8Array);
     } else if (type === 'source') {
-      const image = requireSession().sourcePixelsFor(payload.id);
-      const bytes = encodePng(image);
-      result = { bytes, ...(payload.pixels ? { rgba: image.rgba } : {}) };
+      const running = requireSession();
+      const image = payload.pixels ? running.sourcePixelsFor(payload.id) : undefined;
+      const bytes = image ? encodePng(image) : running.sourcePngFor(payload.id);
+      result = { bytes, ...(image ? { rgba: image.rgba } : {}) };
       transfers.push(bytes.buffer);
-      if (payload.pixels) transfers.push(image.rgba.buffer);
+      if (image) transfers.push(image.rgba.buffer);
     }
     else if (type === 'region.texturePreview') {
       const running = requireSession(), doc = running.snapshot();

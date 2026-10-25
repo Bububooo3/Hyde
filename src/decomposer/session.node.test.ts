@@ -68,6 +68,7 @@ describe('deterministic decomposition and native Hyde export', () => {
     const result = await first.analyze(); await second.analyze();
     expect(result.regionCount).toBe(2);
     const document = first.snapshot(), again = second.snapshot();
+    expect(decodePng(first.sourcePngFor(document.sources[0].id)).rgba).toEqual(first.sourcePixelsFor(document.sources[0].id).rgba);
     expect(document.regions.map(item => ({ id: item.id, path: item.geometry.generatedPath }))).toEqual(again.regions.map(item => ({ id: item.id, path: item.geometry.generatedPath })));
     expect(document.regions.every(item => item.geometry.quality.maskIoU > .9)).toBe(true);
     expect(document.regions.every(item => item.geometry.generatedPath.points.length >= 4)).toBe(true);
