@@ -40,6 +40,8 @@ export function renderRegionTextureCrop(region: RegionRecord, mask: RegionMask, 
   if (aligned && !alternate) throw new Error(`Alternate texture source ${aligned.sourceId} is unavailable.`);
   const [a, b, c, d, tx, ty] = aligned?.transformToPrimary ?? [1, 0, 0, 1, 0, 0];
   const determinant = a * d - b * c;
+  if (aligned && (![a, b, c, d, tx, ty].every(Number.isFinite) || Math.abs(determinant) < 1e-8))
+    throw new Error(`INVALID_ALIGNMENT: Alternate texture transform for ${region.id} is not invertible.`);
   const flat = [1, 3, 5].map(at => parseInt(region.color.slice(at, at + 2), 16));
   for (let y = 0; y < bounds.height; y++) for (let x = 0; x < bounds.width; x++) {
     const source = ((bounds.y + y) * image.width + bounds.x + x) * 4, target = (y * bounds.width + x) * 4;

@@ -1,5 +1,5 @@
 /// <reference lib="webworker" />
-import { analyzeImage, buildImagePyramid, DecompositionSession, defaultSettings } from '../decomposer';
+import { analyzeImage, buildImagePyramid, decodePng, DecompositionSession, defaultSettings, encodePng } from '../decomposer';
 import type { DecompositionEdit, DecompositionDocumentV1, HydeDecompositionExportOptions, RegionMask, RegionRecord, SourceInput } from '../decomposer';
 import { compareNativeRender } from '../decomposer/quality';
 import { renderRegionTextureCrop } from '../decomposer/export';
@@ -158,7 +158,9 @@ self.onmessage = async (event: MessageEvent<Request>) => {
       if (!region || !primary) throw new Error('No aligned texture exists on this current region.');
       const images = new Map([[primary.id, running.sourcePixelsFor(primary.id)],
         [region.alignedTexture!.sourceId, running.sourcePixelsFor(region.alignedTexture!.sourceId)]]);
-      const bytes = renderRegionTextureCrop(region, running.maskFor(region.maskId), images.get(primary.id)!, images);
+      const full = renderRegionTextureCrop(region, running.maskFor(region.maskId), images.get(primary.id)!, images);
+      const bytes = Math.max(region.bounds.width, region.bounds.height) > 512
+        ? encodePng(buildImagePyramid(decodePng(full), 512).at(-1)!) : full;
       result = { bytes };
       if (bytes.buffer instanceof ArrayBuffer) transfers.push(bytes.buffer);
     }

@@ -20,6 +20,9 @@ describe('public Node SDK', () => {
     const movieId = committed.idMap.$movie, assetId = committed.idMap.$videoAsset;
     const reopened = await sdk.openProject(await session.exportProject());
     expect(reopened.snapshot().assets.find(item => item.id === assetId)?.duration).toBe(10);
+    expect(await reopened.inspect({ target: 'asset', id: assetId, fields: ['id', 'kind', 'duration'] })).toMatchObject({
+      asset: { id: assetId, kind: 'video', duration: 10 },
+    });
     expect(reopened.snapshot().elements.find(item => item.id === movieId)).toMatchObject({
       kind: 'video', assetId, duration: 3, sourceOffset: 1, speed: 2, videoEndBehavior: 'hide',
       volume: .4, fadeIn: .25, fadeOut: .25, pitchSemitones: 2, linkSpeedPitch: false,
