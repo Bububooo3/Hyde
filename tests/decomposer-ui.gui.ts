@@ -60,8 +60,8 @@ test('a hidden region can use explicitly matched alternate pixels and undo that 
 });
 
 test('large import shows a bounded provisional pyramid preview before committing source-resolution regions', async ({ page }) => {
-  const width = 1024, height = 1024, rgba = new Uint8Array(width * height * 4);
-  for (let y = 128; y < 896; y++) for (let x = 160; x < 864; x++) rgba.set([180, 55, 38, 255], (y * width + x) * 4);
+  const width = 1536, height = 1024, rgba = new Uint8Array(width * height * 4);
+  for (let y = 128; y < 896; y++) for (let x = 160; x < 1376; x++) rgba.set([180, 55, 38, 255], (y * width + x) * 4);
   await page.goto('/decomposer.html');
   await page.evaluate(() => {
     (window as Window & { sawCoarsePreview?: boolean }).sawCoarsePreview = false;
@@ -74,6 +74,13 @@ test('large import shows a bounded provisional pyramid preview before committing
   expect(await page.evaluate(() => (window as Window & { sawCoarsePreview?: boolean }).sawCoarsePreview)).toBe(true);
   await expect(page.getByRole('note')).toHaveCount(0);
   await expect(page.locator('.left-pane .scroll-list').first().locator('.row')).toHaveCount(1);
+  await expect(page.locator('.canvas-card canvas').first()).toHaveJSProperty('width', 768);
+  await expect(page.locator('.canvas-card canvas').last()).toHaveJSProperty('width', 768);
+  await page.getByLabel('Canvas zoom').selectOption('1');
+  await expect(page.locator('.canvas-card canvas').first()).toHaveJSProperty('width', width);
+  await expect(page.locator('.canvas-card canvas').last()).toHaveJSProperty('width', width);
+  await page.getByLabel('Canvas zoom').selectOption('fit');
+  await expect(page.locator('.canvas-card canvas').last()).toHaveJSProperty('width', 768);
   await page.evaluate(() => { (window as Window & { sawCoarsePreview?: boolean }).sawCoarsePreview = false; });
   await page.getByRole('button', { name: 'Regenerate first pass' }).click();
   await expect(page.getByLabel('Regeneration impact preview')).toBeVisible({ timeout: 60_000 });

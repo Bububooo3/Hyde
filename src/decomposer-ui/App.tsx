@@ -25,6 +25,8 @@ const color = (hex: string): [number, number, number] => [1, 3, 5].map(at => par
 const current = (region: RegionRecord) => region.generationStatus !== 'historical';
 const active = (region: RegionRecord) => current(region) && !region.suppressed;
 const percentage = (value: number | null) => value === null ? 'n/a' : `${(value * 100).toFixed(1)}%`;
+const displayScaleFor = (width: number, height: number, zoom: 'fit' | number): number =>
+  zoom === 'fit' ? 2 ** Math.max(0, Math.ceil(Math.log2(Math.max(width, height) / 1024))) : 1;
 const download = (bytes: Uint8Array, name: string, mime: string) => {
   const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: mime }));
   const link = document.createElement('a'); link.href = url; link.download = name; link.click();
@@ -440,9 +442,12 @@ export default function App() {
     if (!source || !sourceImage.current) return;
     const image = sourceImage.current, rgba = sourcePixelsRef.current;
     if (!rgba) return;
+    const displayScale = displayScaleFor(source.width, source.height, zoom);
+    const displayWidth = Math.ceil(source.width / displayScale), displayHeight = Math.ceil(source.height / displayScale);
     const drawOriginal = (canvas: HTMLCanvasElement | null) => {
-      if (!canvas) return; canvas.width = source.width; canvas.height = source.height;
+      if (!canvas) return; canvas.width = displayWidth; canvas.height = displayHeight;
       const ctx = canvas.getContext('2d'); if (!ctx) return;
+      ctx.scale(1 / displayScale, 1 / displayScale);
       ctx.clearRect(0, 0, source.width, source.height); ctx.drawImage(image, 0, 0, source.width, source.height);
       const landmarks = documentModel?.correspondences.filter(item => item.kind === 'landmark' && item.landmarkPoints);
       for (const item of landmarks ?? []) {
@@ -461,24 +466,53 @@ export default function App() {
     };
     drawOriginal(originalCanvas.current);
     const canvas = reconstructionCanvas.current; if (!canvas) return;
-    canvas.width = source.width; canvas.height = source.height;
+    canvas.width = displayWidth; canvas.height = displayHeight;
     const context = canvas.getContext('2d'); if (!context) return;
-    const imageData = context.createImageData(source.width, source.height);
+    const imageData = context.createImageData(displayWidth, displayHeight);
     const ordered = [...visibleRegions].sort((a, b) => (documentModel?.parts.find(part => part.id === a.partId)?.zOrder ?? 0) - (documentModel?.parts.find(part => part.id === b.partId)?.zOrder ?? 0));
     for (const region of ordered) {
       if (region.geometry.status === 'inferred') continue;
       if (isolate && selectedRegionId && region.id !== selectedRegionId) continue;
       const mask = masks.get(region.id); if (!mask) continue;
       const rgb = color(region.color);
-      for (let y = 0; y < mask.height; y++) for (let x = 0; x < mask.width; x++) {
-        if (!mask.bytes[y * mask.width + x]) continue;
-        const index = ((region.bounds.y + y) * source.width + region.bounds.x + x) * 4;
-        if (region.geometry.texture === 'source-crop') imageData.data.set(rgba.subarray(index, index + 4), index);
-        else imageData.data.set([...rgb, rgba[index + 3]], index);
-        imageData.data[index + 3] = Math.round((rgba[index + 3] || 255) * (mask.alpha?.[y * mask.width + x] ?? 255) / 255);
+      for (let row = Math.floor(region.bounds.y / displayScale); row < Math.ceil((region.bounds.y + region.bounds.height) / displayScale); row++)
+        for (let column = Math.floor(region.bounds.x / displayScale); column < Math.ceil((region.bounds.x + region.bounds.width) / displayScale); column++) {
+          const left = column * displayScale, top = row * displayScale;
+          const right = Math.min(source.width, left + displayScale), bottom = Math.min(source.height, top + displayScale);
+          if (displayScale === 1) {
+            const x = left - region.bounds.x, y = top - region.bounds.y;
+            if (x < 0 || y < 0 || x >= mask.width || y >= mask.height || !mask.bytes[y * mask.width + x]) continue;
+            const index = (row * displayWidth + column) * 4, sourceIndex = (top * source.width + left) * 4;
+            if (region.geometry.texture === 'source-crop') imageData.data.set(rgba.subarray(sourceIndex, sourceIndex + 4), index);
+            else imageData.data.set([...rgb, rgba[sourceIndex + 3]], index);
+            imageData.data[index + 3] = Math.round((rgba[sourceIndex + 3] || 255) * (mask.alpha?.[y * mask.width + x] ?? 255) / 255);
+            continue;
+          }
+          let alpha = 0, red = 0, green = 0, blue = 0;
+          for (let sy = Math.max(top, region.bounds.y); sy < Math.min(bottom, region.bounds.y + mask.height); sy++)
+            for (let sx = Math.max(left, region.bounds.x); sx < Math.min(right, region.bounds.x + mask.width); sx++) {
+              const local = (sy - region.bounds.y) * mask.width + sx - region.bounds.x;
+              if (!mask.bytes[local]) continue;
+              const at = (sy * source.width + sx) * 4;
+              const coverage = (rgba[at + 3] || 255) * (mask.alpha?.[local] ?? 255) / 255;
+              const sourceColor = region.geometry.texture === 'source-crop';
+              alpha += coverage;
+              red += (sourceColor ? rgba[at] : rgb[0]) * coverage;
+              green += (sourceColor ? rgba[at + 1] : rgb[1]) * coverage;
+              blue += (sourceColor ? rgba[at + 2] : rgb[2]) * coverage;
+            }
+          if (!alpha) continue;
+          const area = (right - left) * (bottom - top), index = (row * displayWidth + column) * 4;
+          const incoming = alpha / (area * 255), previous = imageData.data[index + 3] / 255;
+          const combined = incoming + previous * (1 - incoming);
+          imageData.data[index] = Math.round((red / (area * 255) + imageData.data[index] * previous * (1 - incoming)) / combined);
+          imageData.data[index + 1] = Math.round((green / (area * 255) + imageData.data[index + 1] * previous * (1 - incoming)) / combined);
+          imageData.data[index + 2] = Math.round((blue / (area * 255) + imageData.data[index + 2] * previous * (1 - incoming)) / combined);
+          imageData.data[index + 3] = Math.round(combined * 255);
       }
     }
     context.putImageData(imageData, 0, 0);
+    context.scale(1 / displayScale, 1 / displayScale);
     if (view === 'overlay') { context.globalAlpha = overlayAlpha; context.drawImage(image, 0, 0, source.width, source.height); context.globalAlpha = 1; }
     if (showInferred) for (const region of inferredRegions) {
       if (isolate && selectedRegionId && region.id !== selectedRegionId) continue;
@@ -520,7 +554,7 @@ export default function App() {
       context.save(); context.strokeStyle = pointer.current.tool === 'paint-add' ? '#06f0aa' : '#ff6378'; context.lineWidth = Math.max(1, brushRadius * 2); context.lineCap = 'round';
       context.beginPath(); pointer.current.points.forEach((point, index) => index ? context.lineTo(point.x, point.y) : context.moveTo(point.x, point.y)); context.stroke(); context.restore();
     }
-  }, [source?.id, source?.width, source?.height, visibleRegions, inferredRegions, documentModel?.parts, documentModel?.correspondences, masks, selectedRegion, selectedRegionId, selectedPart, view, overlayAlpha, isolate, showInferred, selectedPoint, draftPoint, draftHandle, pendingLandmark, pendingRegeneration, coarsePreview, tool, brushRadius, renderVersion]);
+  }, [source?.id, source?.width, source?.height, zoom, visibleRegions, inferredRegions, documentModel?.parts, documentModel?.correspondences, masks, selectedRegion, selectedRegionId, selectedPart, view, overlayAlpha, isolate, showInferred, selectedPoint, draftPoint, draftHandle, pendingLandmark, pendingRegeneration, coarsePreview, tool, brushRadius, renderVersion]);
 
   const pointFromEvent = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     if (!source) return { x: 0, y: 0 };
