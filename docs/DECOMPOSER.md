@@ -25,6 +25,8 @@ For multiple references, `import --request manifest.json` accepts `{ "name": "Ar
 
 To update a prior assembly, `--dry-run` reports exact element and asset IDs the new native output will replace, add or remove. The target must contain this `.hydecomp` document's root ID. Export requires its reviewed SHA-256 plus `--replace-existing`; a changed target is refused. Writing to the same path also requires `--overwrite` and retains a `.bak` copy. In the GUI, **Review existing .hyproj** shows the same impact, and **Download replacement .hyproj** creates a new download without changing the selected file. Updating an assembly replaces its complete prior contents; inspect manually edited target elements listed in the impact before confirming.
 
+Chrome's local JPEG decoder applies EXIF orientation before the Decomposer records canonical RGBA coordinates. A 90°-rotated JPEG fixture checks oriented pixels, unchanged original bytes in `.hydecomp`, and native Hyde dimensions. Other orientation values and browsers still need representative verification.
+
 ## Source and quality contract
 
 Edge sensitivity is a recorded setting from 0.25 to 2. Higher values keep weaker paint boundaries separate; lower values allow more smooth-band merging. The default of 1 retains older v1 behavior. The staged regeneration panel previews this alongside color granularity, minimum feature size, thin-line preservation and path tolerance before committing full-resolution analysis.

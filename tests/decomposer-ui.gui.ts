@@ -172,6 +172,41 @@ test('JPEG and WebP import in the analysis worker and reopen with canonical pixe
   }
 });
 
+test('EXIF-rotated JPEG stores oriented canonical pixels and untouched original bytes', async ({ page }) => {
+  await page.goto('/decomposer.html');
+  const jpeg = Uint8Array.from(await page.evaluate(async () => {
+    const canvas = document.createElement('canvas'); canvas.width = 24; canvas.height = 16;
+    const context = canvas.getContext('2d')!;
+    for (const [x, y, fill] of [[0, 0, '#ff0000'], [12, 0, '#00ff00'], [0, 8, '#0000ff'], [12, 8, '#ffff00']] as const) {
+      context.fillStyle = fill; context.fillRect(x, y, 12, 8);
+    }
+    const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob(value => value ? resolve(value) : reject(new Error('JPEG encoding failed')), 'image/jpeg', 1));
+    return [...new Uint8Array(await blob.arrayBuffer())];
+  }));
+  const exif = Uint8Array.from([0xff, 0xe1, 0, 0x22, 0x45, 0x78, 0x69, 0x66, 0, 0,
+    0x49, 0x49, 0x2a, 0, 8, 0, 0, 0, 1, 0, 0x12, 1, 3, 0, 1, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0]);
+  const oriented = Uint8Array.from([...jpeg.subarray(0, 2), ...exif, ...jpeg.subarray(2)]);
+  await page.getByLabel('Import images').setInputFiles({ name: 'rotated.jpg', mimeType: 'image/jpeg', buffer: Buffer.from(oriented) });
+  await expect(page.getByRole('status')).toContainText('Automatic first pass found', { timeout: 30_000 });
+  const download = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Save source' }).click();
+  const documentBytes = new Uint8Array(await readFile(await (await download).path()));
+  const saved = await decodeDecompositionDocument(documentBytes);
+  const source = saved.document.sources[0], rgba = saved.pixels.get(source.id)!;
+  expect([source.width, source.height]).toEqual([16, 24]);
+  expect(saved.sourceBytes.get(source.id)).toEqual(oriented);
+  const sample = (x: number, y: number) => [...rgba.subarray((y * source.width + x) * 4, (y * source.width + x) * 4 + 3)];
+  expect(sample(3, 3)[2]).toBeGreaterThan(180); // original bottom-left blue rotates to top-left
+  expect(sample(12, 3)[0]).toBeGreaterThan(180); // original top-left red rotates to top-right
+  expect(sample(3, 20)[0]).toBeGreaterThan(180); // original bottom-right yellow rotates to bottom-left
+  expect(sample(12, 20)[1]).toBeGreaterThan(180); // original top-right green rotates to bottom-right
+  const reopened = await DecompositionSession.openDocument(documentBytes);
+  const native = await reopened.exportHyde({ format: 'hyde' });
+  expect([native.project.width, native.project.height]).toEqual([16, 24]);
+  expect(native.project.elements.filter(item => item.shapePath).length).toBeGreaterThan(1);
+  await reopened.close();
+});
+
 test('inspector shifts a whole contour in source pixels and undoes the pinned edit', async ({ page }) => {
   await page.goto('/decomposer.html');
   await page.getByLabel('Import images').setInputFiles({ name: 'prop.png', mimeType: 'image/png', buffer: fixture() });
