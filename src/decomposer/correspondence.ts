@@ -237,7 +237,8 @@ export function rankReferenceCorrespondences(primary: RegionRecord[], alternate:
     const margin = choices.length > 1 ? choices[1].score - choices[0].score : 1;
     const ambiguous = margin < (options.alternateSource?.transformToPrimary ? .05 : .1);
     if (ambiguous) result.diagnostics.push({ code: 'CORRESPONDENCE_AMBIGUOUS', severity: 'info', sourceId: alt.region.sourceId, regionId: alt.region.id,
-      message: 'Several primary regions have similar shape, color and neighborhood evidence for this reference region.', suggestion: 'Inspect the ranked candidates and confirm or reject the intended part correspondence.' });
+      message: 'Several primary regions have similar shape, color and neighborhood evidence for this reference region.', suggestion: 'Inspect the ranked candidates and confirm or reject the intended part correspondence.',
+      evidence: [`best combined heuristic distance ${choices[0].score.toFixed(3)}`, `runner-up distance ${choices[1].score.toFixed(3)}`, `distance margin ${margin.toFixed(3)} is below the uniqueness threshold`] });
     for (const [index, item] of choices.slice(0, limit).entries()) {
       const identityMargin = item.landmark === undefined || item.position !== undefined || choices.length < 2 ? 1
         : Math.min(...choices.filter(other => other !== item).map(other => other.independentScore)) - item.independentScore;

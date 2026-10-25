@@ -713,6 +713,8 @@ test('ambiguous repeated shapes present readable candidates and persist a manual
   const identity = page.getByLabel('Cross-reference identity');
   await expect(identity).toContainText('References are separate views, not animation frames.');
   await expect(identity.getByText('Unresolved candidate', { exact: false })).toHaveCount(2);
+  await expect(identity.locator('.match-candidate').first()).toContainText('Evidence: normalized contour distance');
+  await expect(page.locator('.diagnostic').filter({ hasText: 'CORRESPONDENCE_AMBIGUOUS' }).first()).toContainText('Heuristic evidence: best combined heuristic distance');
   await identity.getByRole('button', { name: 'Reject candidate' }).first().click();
   await expect(page.getByRole('status')).toContainText('reference.correspond saved');
   await expect(identity.getByText('Rejected manually', { exact: false })).toHaveCount(1);
