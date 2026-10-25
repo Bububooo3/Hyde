@@ -61,6 +61,35 @@ test('JPEG and WebP import in the analysis worker and reopen with canonical pixe
   }
 });
 
+test('inspector shifts a whole contour in source pixels and undoes the pinned edit', async ({ page }) => {
+  await page.goto('/decomposer.html');
+  await page.getByLabel('Import images').setInputFiles({ name: 'prop.png', mimeType: 'image/png', buffer: fixture() });
+  await expect(page.getByRole('status')).toContainText('Automatic first pass found');
+  const beforeDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Save source' }).click();
+  const before = await decodeDecompositionDocument(new Uint8Array(await readFile(await (await beforeDownload).path())));
+  const region = before.document.regions[0];
+  await page.locator('.left-pane .scroll-list').first().locator('.row').first().click();
+  await page.getByLabel('Contour shift X').fill('2');
+  await page.getByLabel('Contour shift Y').fill('-1');
+  await page.getByRole('button', { name: 'Shift and pin contour' }).click();
+  await expect(page.getByRole('status')).toContainText('region.offsetPath saved');
+  const afterDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Save source' }).click();
+  const after = await decodeDecompositionDocument(new Uint8Array(await readFile(await (await afterDownload).path())));
+  const shifted = after.document.regions.find(item => item.id === region.id)!;
+  expect(shifted.geometry.manualPath).toBeDefined();
+  expect(shifted.geometry.manualPath!.points[0].x - region.geometry.generatedPath.points[0].x).toBeCloseTo(2 / region.bounds.width);
+  expect(shifted.geometry.manualPath!.points[0].y - region.geometry.generatedPath.points[0].y).toBeCloseTo(-1 / region.bounds.height);
+  expect(after.masks.get(shifted.maskId)).toEqual(before.masks.get(region.maskId));
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Undo applied');
+  const undoDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Save source' }).click();
+  const undone = await decodeDecompositionDocument(new Uint8Array(await readFile(await (await undoDownload).path())));
+  expect(undone.document.regions.find(item => item.id === region.id)?.geometry.manualPath).toBeUndefined();
+});
+
 test('a hidden region can use explicitly matched alternate pixels and undo that choice', async ({ page }) => {
   const session = await DecompositionSession.importSources([
     { bytes: occlusionStill(true), name: 'primary.png', mime: 'image/png', role: 'primary' },

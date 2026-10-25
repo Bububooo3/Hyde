@@ -120,6 +120,42 @@ describe('deterministic decomposition and native Hyde export', () => {
     expect(reopened.snapshot().regions.find(item => item.id === first.id)?.geometry.manualPath).toEqual(path);
   });
 
+  it('offsets a pinned contour, handles and hole without moving its source mask', async () => {
+    const session = await DecompositionSession.importSources([{ bytes: propPng(), name: 'prop.png', mime: 'image/png' }]);
+    await session.analyze();
+    const region = session.snapshot().regions[0], originalMask = session.maskFor(region.maskId);
+    const original = structuredClone(region.geometry.generatedPath);
+    original.points[0].out = { x: original.points[0].x + .05, y: original.points[0].y + .1 };
+    original.holes = [{ points: [{ x: .3, y: .3 }, { x: .4, y: .3 }, { x: .4, y: .4 }, { x: .3, y: .4 }] }];
+    expect((await session.execute({ expectedRevision: session.revision, edits: [{ op: 'region.setPath', regionId: region.id, path: original }] })).ok).toBe(true);
+    const revision = session.revision;
+    const invalid = await session.execute({ expectedRevision: revision, edits: [{ op: 'region.offsetPath', regionId: region.id, dx: Infinity, dy: 0 }] });
+    expect(invalid.ok).toBe(false); expect(session.revision).toBe(revision);
+    expect(session.snapshot().regions[0].geometry.manualPath).toEqual(original);
+    expect((await session.execute({ expectedRevision: revision, edits: [{ op: 'region.offsetPath', regionId: region.id, dx: 2, dy: -1 }] })).ok).toBe(true);
+    const shifted = session.snapshot().regions[0].geometry.manualPath!;
+    const check = (before: { x: number; y: number }, after: { x: number; y: number }) => {
+      expect(after.x - before.x).toBeCloseTo(2 / region.bounds.width);
+      expect(after.y - before.y).toBeCloseTo(-1 / region.bounds.height);
+    };
+    check(original.points[0], shifted.points[0]);
+    check(original.points[0].out!, shifted.points[0].out!);
+    check(original.holes![0].points[0], shifted.holes![0].points[0]);
+    expect(session.maskFor(region.maskId)).toEqual(originalMask);
+    await session.analyze({ settings: { pathTolerance: 1.2 } });
+    expect(session.snapshot().regions.find(item => item.id === region.id)?.geometry.manualPath).toEqual(shifted);
+    const native = await session.exportHyde({ format: 'hyde' });
+    expect(native.project.elements.find(item => item.id === native.mapping.regionIds[region.id])?.shapePath).toEqual(shifted);
+    const reopened = await DecompositionSession.openDocument(await session.saveDocument());
+    expect(reopened.snapshot().regions[0].geometry.manualPath).toEqual(shifted);
+    expect(session.undo(session.revision)).toBe(true);
+    expect(session.undo(session.revision)).toBe(true);
+    expect(session.snapshot().regions[0].geometry.manualPath).toEqual(original);
+    expect(session.redo(session.revision)).toBe(true);
+    expect(session.snapshot().regions[0].geometry.manualPath).toEqual(shifted);
+    await reopened.close(); await session.close();
+  });
+
   it('preserves last complete candidate on cancellation and reports incomplete structure', async () => {
     const session = await DecompositionSession.importSources([{ bytes: propPng(), name: 'prop.png', mime: 'image/png' }]);
     await session.analyze();

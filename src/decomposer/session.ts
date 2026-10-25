@@ -18,6 +18,7 @@ import type { CorrespondenceRecord, DecompositionDocumentV1, DecompositionMode, 
 
 export type DecompositionEdit =
   | { op: 'region.setPath'; regionId: string; path: ShapePath }
+  | { op: 'region.offsetPath'; regionId: string; dx: number; dy: number }
   | { op: 'region.clearManualPath'; regionId: string }
   | { op: 'region.setSuppressed'; regionId: string; suppressed: boolean }
   | { op: 'region.setColor'; regionId: string; color: string | null }
@@ -572,6 +573,21 @@ export class DecompositionSession {
     try {
       for (const [editIndex, edit] of request.edits.entries()) {
         if (edit.op === 'region.setPath') { const target = region(edit.regionId); target.geometry.manualPath = structuredClone(edit.path); target.geometry.locked = true; target.locked.geometry = true; changed.add(target.id); }
+        else if (edit.op === 'region.offsetPath') {
+          const target = region(edit.regionId);
+          finite(edit.dx); finite(edit.dy);
+          const source = candidate.sources.find(item => item.id === target.sourceId)!;
+          if (Math.abs(edit.dx) > source.width || Math.abs(edit.dy) > source.height)
+            fail('INVALID_ARGUMENT: Path offset must stay within one source width and height.');
+          const path = structuredClone(target.geometry.manualPath ?? target.geometry.generatedPath);
+          const dx = edit.dx / target.bounds.width, dy = edit.dy / target.bounds.height;
+          for (const contour of [path, ...(path.holes ?? [])]) for (const point of contour.points) {
+            point.x += dx; point.y += dy;
+            if (point.in) { point.in.x += dx; point.in.y += dy; }
+            if (point.out) { point.out.x += dx; point.out.y += dy; }
+          }
+          target.geometry.manualPath = path; target.geometry.locked = true; target.locked.geometry = true; changed.add(target.id);
+        }
         else if (edit.op === 'region.clearManualPath') { const target = region(edit.regionId); if (target.locked.geometry) fail('DOCUMENT_CONFLICT: Unlock the contour before using its generated path.'); delete target.geometry.manualPath; target.geometry.locked = false; changed.add(target.id); }
         else if (edit.op === 'region.setSuppressed') {
           const target = candidate.regions.find(item => item.id === edit.regionId && item.generationStatus !== 'historical' && item.geometry.status === 'inferred') ?? fail('Only a current inferred region can be suppressed or restored.');
