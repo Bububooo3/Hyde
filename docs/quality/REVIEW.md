@@ -18,7 +18,7 @@ The owner found the part and pivot a plausible starting point but noticed the st
 
 Panels: primary | alternate | Hyde native primary pose. Yellow line is one illustrative user-confirmed cross-view identity.
 4 initial candidates were ambiguous. The reviewed .hydecomp saves one manual match and source evidence; the alternate reference creates no motion.
-The owner found the initial unlabelled sheet unclear. `03-ambiguous-multiview-explained.png` labels the four automatic possibilities, one illustrative manual decision, and the primary-only output. The app now shows candidate source names, positions, ambiguity and manual confirmation. The repeated circles cannot establish identity from these images alone; check a real supplied reference before trusting a match. Clarity of the revised explanation awaits another owner review.
+The owner found the initial unlabelled sheet unclear. `03-ambiguous-multiview-explained.png` labels the four automatic possibilities, one illustrative manual decision, and the primary-only output. The owner reviewed the revision and confirmed the workflow is clear. The app shows candidate source names, positions, ambiguity and manual confirmation. The repeated circles cannot establish identity from these images alone; check a real supplied reference before trusting a match.
 
 ## Review boundary
 

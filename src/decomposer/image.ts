@@ -154,12 +154,16 @@ export async function decodeSource(input: SourceInput): Promise<DecodedImage> {
     if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || width * height > MAX_IMAGE_PIXELS || rgba.length !== width * height * 4) throw new Error('DECODE_FAILURE');
     return { width, height, rgba: Uint8Array.from(rgba) };
   }
-  if (typeof createImageBitmap !== 'function' || typeof document === 'undefined') throw new Error('DECODE_FAILURE: JPEG/WebP needs a browser decoder or caller-supplied pixels.');
+  if (typeof createImageBitmap !== 'function' || (typeof OffscreenCanvas === 'undefined' && typeof document === 'undefined'))
+    throw new Error('DECODE_FAILURE: JPEG/WebP needs a browser canvas decoder or caller-supplied pixels.');
   const bitmap = await createImageBitmap(new Blob([input.bytes as BlobPart], { type: input.mime }), { imageOrientation: 'from-image', colorSpaceConversion: 'default' });
   try {
     if (bitmap.width * bitmap.height > MAX_IMAGE_PIXELS) throw new Error('IMAGE_TOO_LARGE');
-    const canvas = document.createElement('canvas'); canvas.width = bitmap.width; canvas.height = bitmap.height;
-    const context = canvas.getContext('2d', { willReadFrequently: true });
+    const canvas = typeof OffscreenCanvas !== 'undefined'
+      ? new OffscreenCanvas(bitmap.width, bitmap.height)
+      : document.createElement('canvas');
+    canvas.width = bitmap.width; canvas.height = bitmap.height;
+    const context = canvas.getContext('2d', { willReadFrequently: true }) as OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D | null;
     if (!context) throw new Error('DECODE_FAILURE: Canvas 2D is unavailable.');
     context.drawImage(bitmap, 0, 0);
     return { width: bitmap.width, height: bitmap.height, rgba: Uint8Array.from(context.getImageData(0, 0, bitmap.width, bitmap.height).data) };

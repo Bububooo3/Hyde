@@ -26,6 +26,36 @@ function occlusionStill(withFront: boolean): Uint8Array {
   return encodePng({ width, height, rgba });
 }
 
+test('JPEG and WebP import in the analysis worker and reopen with canonical pixels', async ({ page }) => {
+  await page.goto('/decomposer.html');
+  const png = [...fixture()];
+  for (const [mime, extension] of [['image/jpeg', 'jpg'], ['image/webp', 'webp']] as const) {
+    const encoded = await page.evaluate(async ({ png, mime }) => {
+      const image = await createImageBitmap(new Blob([new Uint8Array(png)], { type: 'image/png' }));
+      const canvas = document.createElement('canvas'); canvas.width = image.width; canvas.height = image.height;
+      canvas.getContext('2d')!.drawImage(image, 0, 0); image.close();
+      const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob(value => value ? resolve(value) : reject(new Error('Encoding failed')), mime, 1));
+      if (blob.type !== mime) throw new Error(`${mime} encoding is unavailable in this browser.`);
+      return [...new Uint8Array(await blob.arrayBuffer())];
+    }, { png, mime });
+    await page.getByLabel('Import images').setInputFiles({ name: `two-piece.${extension}`, mimeType: mime, buffer: Buffer.from(encoded) });
+    await expect(page.getByRole('status')).toContainText('Automatic first pass found', { timeout: 30_000 });
+    await expect(page.locator('.left-pane .scroll-list').first().locator('.row')).not.toHaveCount(0);
+    const saving = page.waitForEvent('download');
+    await page.getByRole('button', { name: 'Save source' }).click();
+    const saved = await decodeDecompositionDocument(new Uint8Array(await readFile(await (await saving).path())));
+    expect(saved.document.sources[0]).toMatchObject({ mime, width: 40, height: 32 });
+    const pixels = saved.pixels.get(saved.document.sources[0].id)!;
+    expect(pixels.length).toBe(40 * 32 * 4);
+    await page.getByLabel('Open .hydecomp').setInputFiles({ name: `two-piece.${extension}.hydecomp`, mimeType: 'application/zip', buffer: Buffer.from(await readFile(await (await saving).path())) });
+    await expect(page.locator('.left-pane .scroll-list').first().locator('.row')).not.toHaveCount(0);
+    const reopening = page.waitForEvent('download');
+    await page.getByRole('button', { name: 'Save source' }).click();
+    const reopened = await decodeDecompositionDocument(new Uint8Array(await readFile(await (await reopening).path())));
+    expect(reopened.pixels.get(reopened.document.sources[0].id)).toEqual(pixels);
+  }
+});
+
 test('a hidden region can use explicitly matched alternate pixels and undo that choice', async ({ page }) => {
   const session = await DecompositionSession.importSources([
     { bytes: occlusionStill(true), name: 'primary.png', mime: 'image/png', role: 'primary' },
