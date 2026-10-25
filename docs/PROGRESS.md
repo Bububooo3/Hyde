@@ -1,6 +1,6 @@
 # Hyde capability matrix
 
-Current Decomposer checkpoints: JPEG/WebP decode in the worker and display canonical pixels while preserving original files; numeric whole-contour offsets retain handles, holes, source masks, undo and native export; canceling a slow read cannot restart an import after checkpoint restoration; ambiguous multi-view candidates can be rejected or confirmed explicitly, with one manual decision per pair. Focused session and Chrome workflows cover import/reopen, 1536×1024 display, contour correction, cancel/reimport, and multi-view decisions. TypeScript and the independent build pass.
+Current Decomposer checkpoints: JPEG/WebP decode in the worker and display canonical pixels while preserving original files; numeric whole-contour offsets retain handles, holes, source masks, undo and native export; canceling a slow read cannot restart an import after checkpoint restoration; ambiguous multi-view candidates can be rejected or confirmed explicitly, with one manual decision per pair. At 1×–8× zoom, canvases render a bounded viewport tile with source-coordinate hit testing. All 18 Chrome GUI workflows pass, including a 1536×1024 scroll/pixel/selection check; TypeScript and the independent build pass. Full source pixels remain resident in the UI, and tile reuse is not yet cached.
 
 ## Agent SDK and Image Decomposer handoff
 

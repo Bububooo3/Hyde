@@ -59,6 +59,9 @@ h3 { font-size: 13px; margin: 0; }
 .canvas-label { position: absolute; top: 8px; left: 8px; z-index: 1; padding: 5px 7px; color: #eaf7f3; background: #0d242bbb; border-radius: 5px; font-size: 10px; }
 .canvas-card canvas { max-width: 95%; max-height: 75vh; width: min(95%, 640px); height: auto; object-fit: contain; image-rendering: auto; background: conic-gradient(#f4f6f1 25%, #d6dfdb 0 50%, #f4f6f1 0 75%, #d6dfdb 0) 0 0/16px 16px; box-shadow: 0 16px 36px #07151c8a; }
 .canvas-card canvas.zoomed { max-width: none; max-height: none; min-width: auto; min-height: auto; object-fit: none; image-rendering: pixelated; flex: none; }
+.canvas-plane { position: relative; flex: none; background: conic-gradient(#f4f6f1 25%, #d6dfdb 0 50%, #f4f6f1 0 75%, #d6dfdb 0) 0 0/16px 16px; }
+.canvas-plane:not(.normal) canvas { position: absolute; }
+.canvas-plane.normal { display: contents; }
 .reference-comparison { display: grid; gap: 7px; margin: 12px 14px 0; padding: 11px 13px; border: 1px solid #41646a; border-radius: 8px; background: #182f37; font-size: 11px; color: #d4e4df; }
 .reference-comparison p { margin: 0; line-height: 1.45; color: #aec9c4; }
 .reference-comparison-images { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }

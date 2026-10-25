@@ -27,6 +27,13 @@ const active = (region: RegionRecord) => current(region) && !region.suppressed;
 const percentage = (value: number | null) => value === null ? 'n/a' : `${(value * 100).toFixed(1)}%`;
 const displayScaleFor = (width: number, height: number, zoom: 'fit' | number): number =>
   zoom === 'fit' ? 2 ** Math.max(0, Math.ceil(Math.log2(Math.max(width, height) / 1024))) : 1;
+type CanvasTile = { x: number; y: number; width: number; height: number };
+const viewportTile = (width: number, height: number, zoom: number, scrollLeft = 0, scrollTop = 0, viewportWidth = 0, viewportHeight = 0): CanvasTile => {
+  const x = Math.min(width - 1, Math.floor(Math.max(0, scrollLeft) / zoom / 256) * 256);
+  const y = Math.min(height - 1, Math.floor(Math.max(0, scrollTop) / zoom / 256) * 256);
+  return { x, y, width: Math.min(width - x, Math.min(2048, Math.max(1024, Math.ceil(viewportWidth / zoom) + 256))),
+    height: Math.min(height - y, Math.min(2048, Math.max(1024, Math.ceil(viewportHeight / zoom) + 256))) };
+};
 const download = (bytes: Uint8Array, name: string, mime: string) => {
   const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: mime }));
   const link = document.createElement('a'); link.href = url; link.download = name; link.click();
@@ -155,6 +162,8 @@ export default function App() {
   const [selectedPartId, setSelectedPartId] = useState<string>();
   const [view, setView] = useState<View>('side-by-side'), [tool, setTool] = useState<Tool>('select');
   const [zoom, setZoom] = useState<'fit' | number>('fit');
+  const [tileView, setTileView] = useState<{ key: string; original?: CanvasTile; reconstruction?: CanvasTile }>({ key: '' });
+  const originalCardRef = useRef<HTMLDivElement | null>(null), reconstructionCardRef = useRef<HTMLDivElement | null>(null);
   const [brushRadius, setBrushRadius] = useState(3), [brushHardness, setBrushHardness] = useState(1), [overlayAlpha, setOverlayAlpha] = useState(.5);
   const [featherRadius, setFeatherRadius] = useState(2), [featherStrength, setFeatherStrength] = useState(.65);
   const [selectedPoint, setSelectedPoint] = useState<number>(), [draftPoint, setDraftPoint] = useState<{ x: number; y: number }>();
@@ -256,6 +265,31 @@ export default function App() {
   }
   const alignmentLandmarkIds = documentModel?.correspondences.filter(item => item.kind === 'landmark' && item.accepted && primarySourceId && source && item.sourceIds.includes(primarySourceId) && item.sourceIds.includes(source.id)).map(item => item.id) ?? [];
   const canvasZoomStyle = source && zoom !== 'fit' ? { width: source.width * zoom, height: source.height * zoom } : undefined;
+  const tiled = Boolean(source && zoom !== 'fit' && Math.max(source.width, source.height) > 1024);
+  const tileKey = source && tiled ? `${source.id}:${zoom}` : '';
+  const fallbackTile = source && zoom !== 'fit' ? viewportTile(source.width, source.height, zoom) : undefined;
+  const originalTile = tileView.key === tileKey ? tileView.original ?? fallbackTile : fallbackTile;
+  const reconstructionTile = tileView.key === tileKey ? tileView.reconstruction ?? fallbackTile : fallbackTile;
+  const updateTile = (side: 'original' | 'reconstruction', card: HTMLDivElement) => {
+    if (!source || zoom === 'fit' || !tiled) return;
+    const next = viewportTile(source.width, source.height, zoom, card.scrollLeft, card.scrollTop, card.clientWidth, card.clientHeight);
+    setTileView(previous => {
+      const current = previous.key === tileKey ? previous : { key: tileKey };
+      const old = current[side];
+      return old && old.x === next.x && old.y === next.y && old.width === next.width && old.height === next.height
+        ? previous : { ...current, [side]: next };
+    });
+  };
+  useEffect(() => {
+    if (!tiled || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => {
+      if (originalCardRef.current) updateTile('original', originalCardRef.current);
+      if (reconstructionCardRef.current) updateTile('reconstruction', reconstructionCardRef.current);
+    });
+    if (originalCardRef.current) observer.observe(originalCardRef.current);
+    if (reconstructionCardRef.current) observer.observe(reconstructionCardRef.current);
+    return () => observer.disconnect();
+  }, [tileKey, view, tiled]);
 
   const readSource = useCallback(async (sourceId: string, doc: DecompositionDocumentV1) => {
     const generation = workGeneration.current;
@@ -502,11 +536,14 @@ export default function App() {
     const image = sourceImage.current, rgba = sourcePixelsRef.current;
     if (!rgba) return;
     const displayScale = displayScaleFor(source.width, source.height, zoom);
-    const displayWidth = Math.ceil(source.width / displayScale), displayHeight = Math.ceil(source.height / displayScale);
+    const fullWindow: CanvasTile = { x: 0, y: 0, width: source.width, height: source.height };
+    const originalWindow = tiled && originalTile ? originalTile : fullWindow;
+    const reconstructionWindow = tiled && reconstructionTile ? reconstructionTile : fullWindow;
+    const displayWidth = Math.ceil(reconstructionWindow.width / displayScale), displayHeight = Math.ceil(reconstructionWindow.height / displayScale);
     const drawOriginal = (canvas: HTMLCanvasElement | null) => {
-      if (!canvas) return; canvas.width = displayWidth; canvas.height = displayHeight;
+      if (!canvas) return; canvas.width = Math.ceil(originalWindow.width / displayScale); canvas.height = Math.ceil(originalWindow.height / displayScale);
       const ctx = canvas.getContext('2d'); if (!ctx) return;
-      ctx.scale(1 / displayScale, 1 / displayScale);
+      ctx.setTransform(1 / displayScale, 0, 0, 1 / displayScale, -originalWindow.x / displayScale, -originalWindow.y / displayScale);
       ctx.clearRect(0, 0, source.width, source.height); ctx.drawImage(image, 0, 0, source.width, source.height);
       const landmarks = documentModel?.correspondences.filter(item => item.kind === 'landmark' && item.landmarkPoints);
       for (const item of landmarks ?? []) {
@@ -534,14 +571,14 @@ export default function App() {
       if (isolate && selectedRegionId && region.id !== selectedRegionId) continue;
       const mask = masks.get(region.id); if (!mask) continue;
       const rgb = color(region.color);
-      for (let row = Math.floor(region.bounds.y / displayScale); row < Math.ceil((region.bounds.y + region.bounds.height) / displayScale); row++)
-        for (let column = Math.floor(region.bounds.x / displayScale); column < Math.ceil((region.bounds.x + region.bounds.width) / displayScale); column++) {
+      for (let row = Math.max(Math.floor(region.bounds.y / displayScale), Math.floor(reconstructionWindow.y / displayScale)); row < Math.min(Math.ceil((region.bounds.y + region.bounds.height) / displayScale), Math.ceil((reconstructionWindow.y + reconstructionWindow.height) / displayScale)); row++)
+        for (let column = Math.max(Math.floor(region.bounds.x / displayScale), Math.floor(reconstructionWindow.x / displayScale)); column < Math.min(Math.ceil((region.bounds.x + region.bounds.width) / displayScale), Math.ceil((reconstructionWindow.x + reconstructionWindow.width) / displayScale)); column++) {
           const left = column * displayScale, top = row * displayScale;
           const right = Math.min(source.width, left + displayScale), bottom = Math.min(source.height, top + displayScale);
           if (displayScale === 1) {
             const x = left - region.bounds.x, y = top - region.bounds.y;
             if (x < 0 || y < 0 || x >= mask.width || y >= mask.height || !mask.bytes[y * mask.width + x]) continue;
-            const index = (row * displayWidth + column) * 4, sourceIndex = (top * source.width + left) * 4;
+            const index = ((row - reconstructionWindow.y) * displayWidth + column - reconstructionWindow.x) * 4, sourceIndex = (top * source.width + left) * 4;
             if (region.geometry.texture === 'source-crop') imageData.data.set(rgba.subarray(sourceIndex, sourceIndex + 4), index);
             else imageData.data.set([...rgb, rgba[sourceIndex + 3]], index);
             imageData.data[index + 3] = Math.round((rgba[sourceIndex + 3] || 255) * (mask.alpha?.[y * mask.width + x] ?? 255) / 255);
@@ -561,7 +598,7 @@ export default function App() {
               blue += (sourceColor ? rgba[at + 2] : rgb[2]) * coverage;
             }
           if (!alpha) continue;
-          const area = (right - left) * (bottom - top), index = (row * displayWidth + column) * 4;
+          const area = (right - left) * (bottom - top), index = ((row - reconstructionWindow.y / displayScale) * displayWidth + column - reconstructionWindow.x / displayScale) * 4;
           const incoming = alpha / (area * 255), previous = imageData.data[index + 3] / 255;
           const combined = incoming + previous * (1 - incoming);
           imageData.data[index] = Math.round((red / (area * 255) + imageData.data[index] * previous * (1 - incoming)) / combined);
@@ -571,7 +608,7 @@ export default function App() {
       }
     }
     context.putImageData(imageData, 0, 0);
-    context.scale(1 / displayScale, 1 / displayScale);
+    context.setTransform(1 / displayScale, 0, 0, 1 / displayScale, -reconstructionWindow.x / displayScale, -reconstructionWindow.y / displayScale);
     if (view === 'overlay') { context.globalAlpha = overlayAlpha; context.drawImage(image, 0, 0, source.width, source.height); context.globalAlpha = 1; }
     if (showInferred) for (const region of inferredRegions) {
       if (isolate && selectedRegionId && region.id !== selectedRegionId) continue;
@@ -613,12 +650,15 @@ export default function App() {
       context.save(); context.strokeStyle = pointer.current.tool === 'paint-add' ? '#06f0aa' : '#ff6378'; context.lineWidth = Math.max(1, brushRadius * 2); context.lineCap = 'round';
       context.beginPath(); pointer.current.points.forEach((point, index) => index ? context.lineTo(point.x, point.y) : context.moveTo(point.x, point.y)); context.stroke(); context.restore();
     }
-  }, [source?.id, source?.width, source?.height, zoom, visibleRegions, inferredRegions, documentModel?.parts, documentModel?.correspondences, masks, selectedRegion, selectedRegionId, selectedPart, view, overlayAlpha, isolate, showInferred, selectedPoint, draftPoint, draftHandle, pendingLandmark, pendingRegeneration, coarsePreview, tool, brushRadius, renderVersion]);
+  }, [source?.id, source?.width, source?.height, zoom, tiled, originalTile?.x, originalTile?.y, originalTile?.width, originalTile?.height, reconstructionTile?.x, reconstructionTile?.y, reconstructionTile?.width, reconstructionTile?.height, visibleRegions, inferredRegions, documentModel?.parts, documentModel?.correspondences, masks, selectedRegion, selectedRegionId, selectedPart, view, overlayAlpha, isolate, showInferred, selectedPoint, draftPoint, draftHandle, pendingLandmark, pendingRegeneration, coarsePreview, tool, brushRadius, renderVersion]);
 
   const pointFromEvent = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     if (!source) return { x: 0, y: 0 };
     const rect = event.currentTarget.getBoundingClientRect();
-    return { x: Math.max(0, Math.min(source.width, (event.clientX - rect.left) / rect.width * source.width)), y: Math.max(0, Math.min(source.height, (event.clientY - rect.top) / rect.height * source.height)) };
+    const tileX = Number(event.currentTarget.dataset.tileX ?? 0), tileY = Number(event.currentTarget.dataset.tileY ?? 0);
+    const tileWidth = Number(event.currentTarget.dataset.tileWidth ?? source.width), tileHeight = Number(event.currentTarget.dataset.tileHeight ?? source.height);
+    return { x: Math.max(0, Math.min(source.width, tileX + (event.clientX - rect.left) / rect.width * tileWidth)),
+      y: Math.max(0, Math.min(source.height, tileY + (event.clientY - rect.top) / rect.height * tileHeight)) };
   };
   function onPointerDown(event: ReactPointerEvent<HTMLCanvasElement>) {
     if (!documentModel || busy || !source) return;
@@ -765,8 +805,8 @@ export default function App() {
           {inferredRegions.length > 0 && <label><input aria-label="Show inferred overlay" type="checkbox" checked={showInferred} onChange={event => setShowInferred(event.target.checked)}/> Show {inferredRegions.length} uncertain hidden contour{inferredRegions.length === 1 ? '' : 's'} in amber</label>}
         </div>}
         <div className={`canvas-grid ${view === 'side-by-side' ? 'two' : ''}`}>{source ? <>
-          {(view === 'original' || view === 'side-by-side') && <div className="canvas-card"><div className="canvas-label">Original · {source.name}</div><canvas ref={originalCanvas} style={canvasZoomStyle} className={`${zoom !== 'fit' ? 'zoomed ' : ''}${tool === 'landmark' || tool === 'background' ? 'interactive-canvas' : ''}`} onPointerDown={tool === 'landmark' || tool === 'background' ? onPointerDown : undefined}/></div>}
-          {(view !== 'original') && <div className="canvas-card"><div className="canvas-label">{view === 'overlay' ? 'Overlay' : 'Reconstruction'} · source masks and geometry</div><canvas ref={reconstructionCanvas} style={canvasZoomStyle} className={`interactive-canvas${zoom !== 'fit' ? ' zoomed' : ''}`} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}/></div>}
+          {(view === 'original' || view === 'side-by-side') && <div ref={originalCardRef} className="canvas-card" onScroll={event => updateTile('original', event.currentTarget)}><div className="canvas-label">Original · {source.name}</div><div className={`canvas-plane${tiled ? '' : ' normal'}`} style={tiled && zoom !== 'fit' ? { width: source.width * zoom, height: source.height * zoom } : undefined}><canvas ref={originalCanvas} style={tiled && originalTile && zoom !== 'fit' ? { width: originalTile.width * zoom, height: originalTile.height * zoom, left: originalTile.x * zoom, top: originalTile.y * zoom } : canvasZoomStyle} data-tile-x={tiled ? originalTile?.x : undefined} data-tile-y={tiled ? originalTile?.y : undefined} data-tile-width={tiled ? originalTile?.width : undefined} data-tile-height={tiled ? originalTile?.height : undefined} className={`${zoom !== 'fit' ? 'zoomed ' : ''}${tool === 'landmark' || tool === 'background' ? 'interactive-canvas' : ''}`} onPointerDown={tool === 'landmark' || tool === 'background' ? onPointerDown : undefined}/></div></div>}
+          {(view !== 'original') && <div ref={reconstructionCardRef} className="canvas-card" onScroll={event => updateTile('reconstruction', event.currentTarget)}><div className="canvas-label">{view === 'overlay' ? 'Overlay' : 'Reconstruction'} · source masks and geometry</div><div className={`canvas-plane${tiled ? '' : ' normal'}`} style={tiled && zoom !== 'fit' ? { width: source.width * zoom, height: source.height * zoom } : undefined}><canvas ref={reconstructionCanvas} style={tiled && reconstructionTile && zoom !== 'fit' ? { width: reconstructionTile.width * zoom, height: reconstructionTile.height * zoom, left: reconstructionTile.x * zoom, top: reconstructionTile.y * zoom } : canvasZoomStyle} data-tile-x={tiled ? reconstructionTile?.x : undefined} data-tile-y={tiled ? reconstructionTile?.y : undefined} data-tile-width={tiled ? reconstructionTile?.width : undefined} data-tile-height={tiled ? reconstructionTile?.height : undefined} className={`interactive-canvas${zoom !== 'fit' ? ' zoomed' : ''}`} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}/></div></div>}
         </> : <div className="empty-state"><div className="empty-art">◇</div><h1>Turn illustrations into editable Hyde art</h1><p>Import a stylized image to get an automatic first pass. Refine regions, inspect uncertainty, and export a native project or assembly.</p><label className="button accent">Choose images<input type="file" accept="image/png,image/jpeg,image/webp" multiple hidden onChange={importImages}/></label></div>}</div>
         {previewUrl && <div className="native-preview">
           <div className="section-heading"><h3>{posePreview ? 'Temporary Hyde joint pose' : 'Native Hyde render · primary reference'}</h3><button onClick={clearNativePreview}>Close</button></div>
