@@ -21,14 +21,15 @@ export async function loadProjectFile(file: File): Promise<Project> { if (!/\.(h
 export async function saveAssemblyBlob(assembly: Assembly): Promise<Blob> { return new Blob([encodeAssemblyBytes(assembly).buffer as ArrayBuffer], { type: 'application/zip' }); }
 export async function loadAssemblyFile(file: File): Promise<Assembly> { if (!/\.hyproj$/i.test(file.name)) throw new Error('Hyde: Choose a .hyproj assembly file.'); return decodeAssemblyBytes(await readBytes(file)); }
 
-/** Import is intentionally a local independent copy; only identical binary
- * asset representations are deduplicated in this first model. */
+/** Import is intentionally a local independent copy. Reuse an asset only when
+ * its bytes and playback/license meaning are identical. */
 export function importAssembly(project: Project, assembly: Assembly): Project {
   validate(project, false); validate(assembly, true);
   const assetIds = new Map<string, string>(), elementIds = new Map(assembly.elements.map(element => [element.id, uid()]));
   const assets: Asset[] = [...project.assets];
   for (const asset of assembly.assets) {
-    const existing = assets.find(candidate => candidate.mime === asset.mime && candidate.dataUrl === asset.dataUrl);
+    const existing = assets.find(candidate => candidate.kind === asset.kind && candidate.mime === asset.mime &&
+      candidate.dataUrl === asset.dataUrl && candidate.duration === asset.duration && candidate.licenseNotice === asset.licenseNotice);
     if (existing) assetIds.set(asset.id, existing.id);
     else { const next = { ...structuredClone(asset), id: uid() }; assets.push(next); assetIds.set(asset.id, next.id); }
   }

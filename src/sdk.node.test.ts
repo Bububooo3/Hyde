@@ -3,6 +3,53 @@ import { describe, expect, it } from 'vitest';
 import { HydeSDK, HYDE_EXECUTE_SCHEMA_V1 } from './sdk';
 
 describe('public Node SDK', () => {
+  it('keeps differing source durations separate when importing byte-identical assembly media', async () => {
+    const sdk = new HydeSDK();
+    const videoBytes = Uint8Array.from([0, 0, 0, 16, 102, 116, 121, 112, 105, 115, 111, 109, 0, 0, 0, 0]);
+    const source = await sdk.createProject({ duration: 8 });
+    const sourceHandle = source.stageAsset(videoBytes, 'video/mp4', 'video');
+    const made = await source.execute({ protocolVersion: 1, expectedRevision: 0, commands: [
+      { op: 'asset.add', args: { id: 'shared_video', handle: sourceHandle, name: 'Long source', duration: 10 } },
+      { op: 'element.create', args: { id: 'movie', kind: 'video', properties: { assetId: 'shared_video', duration: 7 } } },
+      { op: 'video.setSourceTiming', args: { id: 'movie', inTime: 1, outTime: 8 } },
+    ] });
+    expect(made.ok, JSON.stringify(made)).toBe(true);
+    const assembly = await source.exportAssembly('movie');
+    const recipient = await sdk.createProject({ duration: 8 });
+    const recipientHandle = recipient.stageAsset(videoBytes, 'video/mp4', 'video');
+    const existing = await recipient.execute({ protocolVersion: 1, expectedRevision: 0, commands: [
+      { op: 'asset.add', args: { id: 'shared_video', handle: recipientHandle, name: 'Short source', duration: 6 } },
+      { op: 'element.create', args: { id: 'movie', kind: 'ellipse', properties: { name: 'Existing object' } } },
+    ] });
+    expect(existing.ok, JSON.stringify(existing)).toBe(true);
+    const importHandle = recipient.stageAssembly(assembly);
+    const imported = await recipient.execute({ protocolVersion: 1, expectedRevision: 1, commands: [
+      { op: 'assembly.import', args: { handle: importHandle, timeSeconds: 0, alias: '$imported' } },
+    ] });
+    expect(imported.ok, JSON.stringify(imported)).toBe(true);
+    if (imported.ok) {
+      const reopened = await sdk.openProject(await recipient.exportProject());
+      const project = reopened.snapshot(), importedMovie = project.elements.find(item => item.id === imported.idMap.$imported)!;
+      expect(importedMovie.id).not.toBe('movie');
+      expect(importedMovie.assetId).not.toBe('shared_video');
+      expect(project.assets.map(item => item.duration).sort((a, b) => (a ?? 0) - (b ?? 0))).toEqual([6, 10]);
+      expect(project.assets.find(item => item.id === importedMovie.assetId)?.duration).toBe(10);
+      expect(importedMovie).toMatchObject({ kind: 'video', sourceOffset: 1, duration: 7 });
+      expect(project.elements.find(item => item.id === 'movie')?.name).toBe('Existing object');
+      await reopened.close();
+      const sameHandle = recipient.stageAssembly(assembly);
+      const again = await recipient.execute({ protocolVersion: 1, expectedRevision: 2, commands: [
+        { op: 'assembly.import', args: { handle: sameHandle, timeSeconds: 0, alias: '$again' } },
+      ] });
+      expect(again.ok, JSON.stringify(again)).toBe(true);
+      if (again.ok) {
+        expect(recipient.snapshot().assets).toHaveLength(2);
+        expect(recipient.snapshot().elements.find(item => item.id === again.idMap.$again)?.assetId).toBe(importedMovie.assetId);
+      }
+    }
+    await source.close(); await recipient.close();
+  });
+
   it('identifies a missing media duration before source timing changes', async () => {
     const session = await new HydeSDK().createProject();
     const bytes = Uint8Array.from([0, 0, 0, 16, 102, 116, 121, 112, 105, 115, 111, 109, 0, 0, 0, 0]);
