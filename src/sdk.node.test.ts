@@ -44,6 +44,14 @@ describe('public Node SDK', () => {
       clipInstances: [{ id: made.idMap.$second, timelineStart: 4, overrideCount: 1, gapTransitionCount: 1, priorityOverrideCount: 1 }],
       visibleClipInstanceCount: 1, clipInstancesTruncated: false,
     });
+    const sceneId = session.snapshot().sequences[0].id;
+    const firstPage = await session.inspect({ target: 'scene', id: sceneId, limit: 1 });
+    expect(firstPage).toMatchObject({ elementCount: 2, nextCursor: 1, elements: [{ id: 'arm', trackCount: 1 }] });
+    expect(firstPage.elements?.[0]).not.toHaveProperty('tracks');
+    const secondPage = await session.inspect({ target: 'scene', id: sceneId, limit: 1, cursor: 1 });
+    expect(secondPage).toMatchObject({ elementCount: 2, elements: [{ id: 'rig', clipCount: 1, instanceCount: 2 }] });
+    expect(secondPage.elements?.[0]).not.toHaveProperty('assemblyClips');
+    expect((await session.inspect({ target: 'element', id: 'rig' })).element).toHaveProperty('assemblyClips');
     const before = await session.evaluate(5);
     const reopened = await sdk.openProject(await session.exportProject());
     expect(reopened.snapshot()).toEqual(session.snapshot());

@@ -253,6 +253,12 @@ function inspectedScene(project: Project, scene: Project['sequences'][number]) {
     ...(source && scene.duration > 0 ? { speed: ((scene.sourceOut ?? source.duration) - (scene.sourceIn ?? 0)) / scene.duration } : {}),
   };
 }
+function inspectedElementSummary(item: StoryElement) {
+  const { tracks, assemblyClips, clipInstances, motionBehaviors, shapePath, ...summary } = item;
+  return { ...summary, trackCount: tracks.length, clipCount: assemblyClips?.length ?? 0,
+    instanceCount: clipInstances?.length ?? 0, motionCount: motionBehaviors?.length ?? 0,
+    pathPointCount: shapePath?.points.length ?? 0 };
+}
 
 export class HydeAuthoringSession {
   private project: Project;
@@ -345,7 +351,10 @@ export class HydeAuthoringSession {
     if (query.target === 'scene') {
       const scene = this.project.sequences.find(item => item.id === query.id);
       if (!scene) return { revision: this.revision, error: { ...diagnostic('TARGET_NOT_FOUND', 'Scene does not exist.'), targetId: query.id } };
-      return { revision: this.revision, scene: projectFields(inspectedScene(this.project, scene), query.fields), elements: this.project.elements.filter(item => item.sceneId === scene.id).slice(cursor, cursor + limit).map(item => structuredClone(item)), nextCursor: cursor + limit < this.project.elements.filter(item => item.sceneId === scene.id).length ? cursor + limit : undefined };
+      const elements = this.project.elements.filter(item => item.sceneId === scene.id).sort((a, b) => a.id.localeCompare(b.id));
+      return { revision: this.revision, scene: projectFields(inspectedScene(this.project, scene), query.fields),
+        elements: elements.slice(cursor, cursor + limit).map(item => structuredClone(inspectedElementSummary(item))),
+        elementCount: elements.length, nextCursor: cursor + limit < elements.length ? cursor + limit : undefined };
     }
     if (query.target === 'tree' || query.target === 'assembly') {
       const assemblyRoot = query.target === 'assembly' ? this.project.elements.find(item => item.id === query.id) : undefined;
@@ -381,7 +390,7 @@ export class HydeAuthoringSession {
     }
     const list = query.target === 'scenes' ? this.project.sequences.map(scene => inspectedScene(this.project, scene)) : query.target === 'assets'
       ? this.project.assets.map(({ dataUrl: _bytes, ...metadata }) => metadata)
-      : this.project.elements.filter(item => query.sceneId === undefined || item.sceneId === query.sceneId).map(({ tracks, assemblyClips, clipInstances, motionBehaviors, shapePath, ...summary }) => ({ ...summary, trackCount: tracks.length, clipCount: assemblyClips?.length ?? 0, instanceCount: clipInstances?.length ?? 0, motionCount: motionBehaviors?.length ?? 0, pathPointCount: shapePath?.points.length ?? 0 }));
+      : this.project.elements.filter(item => query.sceneId === undefined || item.sceneId === query.sceneId).map(inspectedElementSummary);
     const ordered = [...list].sort((a, b) => a.id.localeCompare(b.id));
     return { revision: this.revision, items: structuredClone(ordered.slice(cursor, cursor + limit)).map(item => projectFields(item as Record<string, unknown>, query.fields)), nextCursor: cursor + limit < ordered.length ? cursor + limit : undefined };
   }
