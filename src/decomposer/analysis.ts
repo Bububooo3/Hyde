@@ -386,15 +386,20 @@ export function fitMaskGeometry(id: string, mask: RegionMask, bounds: Box, setti
   };
 }
 
-function backgroundMask(image: DecodedImage, settings: ReconstructionSettings, diagnostics: DecompositionDiagnostic[], sourceId: string): Uint8Array {
+function backgroundMask(image: DecodedImage, settings: ReconstructionSettings, diagnostics: DecompositionDiagnostic[], source: SourceReference): Uint8Array {
   const { width, height, rgba } = image, total = width * height;
   const foreground = new Uint8Array(total);
   let transparent = 0;
   for (let index = 0; index < total; index++) if (rgba[index * 4 + 3] < settings.alphaThreshold) transparent++;
   if (transparent > total * .002) {
+    if (source.backgroundColor !== undefined) diagnostics.push({ code: 'BACKGROUND_OVERRIDE_INACTIVE', severity: 'info', sourceId: source.id,
+      message: 'This reference has significant transparency; source alpha determines foreground and the opaque background choice is inactive.',
+      suggestion: 'Refine the alpha mask or use an opaque reference if border-color selection is needed.' });
     for (let index = 0; index < total; index++) foreground[index] = rgba[index * 4 + 3] >= settings.alphaThreshold ? 1 : 0;
     return foreground;
   }
+  if (source.backgroundColor === null) { foreground.fill(1); return foreground; }
+  const explicitColor = source.backgroundColor;
   // Opaque artwork: use the largest quantized border color as a *candidate* background.
   const border = new Map<string, { count: number; r: number; g: number; b: number }>();
   const observe = (x: number, y: number) => {
@@ -409,11 +414,12 @@ function backgroundMask(image: DecodedImage, settings: ReconstructionSettings, d
   const ordered = [...border.values()].sort((a, b) => b.count - a.count);
   const dominant = ordered[0];
   const borderCount = width * 2 + Math.max(0, height - 2) * 2;
-  if (!dominant || dominant.count / borderCount < .6) {
-    diagnostics.push({ code: 'BACKGROUND_AMBIGUOUS', severity: 'warning', sourceId, message: 'Opaque border has no dominant color; the first pass retains all pixels as foreground.', suggestion: 'Mark background or provide a foreground mask.' });
+  if (!explicitColor && (!dominant || dominant.count / borderCount < .6)) {
+    diagnostics.push({ code: 'BACKGROUND_AMBIGUOUS', severity: 'warning', sourceId: source.id, message: 'Opaque border has no dominant color; the first pass retains all pixels as foreground.', suggestion: 'Mark background or provide a foreground mask.' });
     foreground.fill(1); return foreground;
   }
-  const color = { r: dominant.r / dominant.count, g: dominant.g / dominant.count, b: dominant.b / dominant.count };
+  const color = explicitColor ? { r: parseInt(explicitColor.slice(1, 3), 16), g: parseInt(explicitColor.slice(3, 5), 16), b: parseInt(explicitColor.slice(5, 7), 16) }
+    : { r: dominant!.r / dominant!.count, g: dominant!.g / dominant!.count, b: dominant!.b / dominant!.count };
   foreground.fill(1);
   const queue = new Int32Array(total); let head = 0, tail = 0;
   const seed = (index: number) => {
@@ -429,6 +435,9 @@ function backgroundMask(image: DecodedImage, settings: ReconstructionSettings, d
     if (x > 0) seed(index - 1); if (x + 1 < width) seed(index + 1);
     if (y > 0) seed(index - width); if (y + 1 < height) seed(index + width);
   }
+  if (explicitColor && !tail) diagnostics.push({ code: 'BACKGROUND_AMBIGUOUS', severity: 'warning', sourceId: source.id,
+    message: `The chosen background color ${explicitColor} does not touch this reference border; all opaque pixels remain foreground.`,
+    suggestion: 'Choose a color from the source border or keep all pixels explicitly.' });
   return foreground;
 }
 
@@ -463,7 +472,7 @@ function colorPyramid(image: DecodedImage, foreground: Uint8Array, scale: 2 | 4,
 export function analyzeImage(image: DecodedImage, source: SourceReference, mode: DecompositionMode, settings: ReconstructionSettings, settingsFingerprint: string, signal?: AbortSignal): AnalysisResult {
   const { width, height, rgba } = image, total = width * height;
   const diagnostics: DecompositionDiagnostic[] = [];
-  const foreground = backgroundMask(image, settings, diagnostics, source.id);
+  const foreground = backgroundMask(image, settings, diagnostics, source);
   const edgeSensitivity = settings.edgeSensitivity ?? 1;
   const labels = new Int32Array(total); labels.fill(-1);
   const queue = new Int32Array(total);

@@ -11,6 +11,44 @@ function fixture(): Buffer {
   return Buffer.from(encodePng({ width, height, rgba }));
 }
 
+function opaqueFixture(): Buffer {
+  const width = 24, height = 24, rgba = new Uint8Array(width * height * 4);
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++)
+    rgba.set(x >= 8 && x < 16 && y >= 8 && y < 16 ? [184, 50, 38, 255] : [255, 255, 255, 255], (y * width + x) * 4);
+  return Buffer.from(encodePng({ width, height, rgba }));
+}
+
+test('opaque background correction is previewed and saved per reference', async ({ page }) => {
+  await page.goto('/decomposer.html');
+  await page.getByLabel('Import images').setInputFiles({ name: 'opaque.png', mimeType: 'image/png', buffer: opaqueFixture() });
+  await expect(page.getByRole('status')).toContainText('Automatic first pass found 1 editable regions.');
+  const correction = page.getByLabel('Opaque background correction');
+  await expect(correction).toContainText('Automatic border estimate');
+  await correction.getByRole('button', { name: 'Keep all opaque pixels' }).click();
+  await expect(page.getByRole('status')).toContainText('reference.setBackground saved');
+  await correction.getByRole('button', { name: 'Preview background impact' }).click();
+  await expect(page.getByLabel('Regeneration impact preview')).toContainText('1 current → 2 proposed active regions');
+  await page.getByRole('button', { name: 'Confirm regeneration' }).click();
+  await expect(page.getByRole('status')).toContainText('Apply background correction applied');
+  await page.getByRole('button', { name: 'Original', exact: true }).click();
+  await page.getByLabel('Canvas tool').selectOption('background');
+  const box = await page.locator('canvas.interactive-canvas').boundingBox();
+  expect(box).toBeTruthy();
+  await page.mouse.click(box!.x + box!.width * .1, box!.y + box!.height * .1);
+  await expect(page.getByRole('status')).toContainText('reference.setBackground saved');
+  await expect(correction).toContainText('Chosen border color #ffffff');
+  await correction.getByRole('button', { name: 'Preview background impact' }).click();
+  await expect(page.getByLabel('Regeneration impact preview')).toContainText('2 current → 1 proposed active regions');
+  await page.getByRole('button', { name: 'Confirm regeneration' }).click();
+  const saving = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Save source' }).click();
+  const saved = await decodeDecompositionDocument(new Uint8Array(await readFile(await (await saving).path())));
+  expect(saved.document.sources[0].backgroundColor).toBe('#ffffff');
+  await page.getByLabel('Open .hydecomp').setInputFiles({ name: 'corrected.hydecomp', mimeType: 'application/zip', buffer: Buffer.from(await readFile(await (await saving).path())) });
+  await expect(page.getByRole('status')).toContainText('Opened corrected.hydecomp');
+  await expect(correction).toContainText('Chosen border color #ffffff');
+});
+
 test('import, edit, save/reopen and export native editable assembly', async ({ page }, testInfo) => {
   await page.goto('/decomposer.html');
   await expect(page.getByText('Turn illustrations into editable Hyde art')).toBeVisible();

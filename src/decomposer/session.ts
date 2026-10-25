@@ -38,6 +38,7 @@ export type DecompositionEdit =
   | { op: 'layer.rejectProposal'; frontRegionId: string; backRegionId: string }
   | { op: 'reference.correspond'; correspondence: CorrespondenceRecord }
   | { op: 'reference.setTransform'; sourceId: string; transformToPrimary?: [number, number, number, number, number, number] }
+  | { op: 'reference.setBackground'; sourceId: string; color?: string | null }
   | { op: 'reference.alignFromLandmarks'; sourceId: string; landmarkIds: string[] }
   | { op: 'annotation.lock'; regionId?: string; partId?: string; target: 'mask' | 'geometry' | 'part' | 'pivot' | 'transform' | 'attachment'; locked: boolean }
   | { op: 'regenerate.selected'; regionIds: string[]; settings?: Partial<ReconstructionSettings> };
@@ -748,6 +749,13 @@ export class DecompositionSession {
           const source = candidate.sources.find(item => item.id === edit.sourceId) ?? fail('INVALID_ARGUMENT: Source does not exist.');
           if (source.role === 'primary') fail('INVALID_ARGUMENT: The primary source defines canonical coordinates.');
           source.transformToPrimary = edit.transformToPrimary ? [...edit.transformToPrimary] as typeof edit.transformToPrimary : undefined;
+          changed.add(source.id);
+        } else if (edit.op === 'reference.setBackground') {
+          const source = candidate.sources.find(item => item.id === edit.sourceId) ?? fail('INVALID_ARGUMENT: Source does not exist.');
+          if (edit.color !== undefined && edit.color !== null && (typeof edit.color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(edit.color)))
+            fail('INVALID_ARGUMENT: Background color must be a six-digit hex value, null, or omitted for automatic selection.');
+          if (edit.color === undefined) delete source.backgroundColor;
+          else source.backgroundColor = edit.color === null ? null : edit.color.toLowerCase();
           changed.add(source.id);
         } else if (edit.op === 'reference.alignFromLandmarks') {
           const source = candidate.sources.find(item => item.id === edit.sourceId) ?? fail('INVALID_ARGUMENT: Source does not exist.');

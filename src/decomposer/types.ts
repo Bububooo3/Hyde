@@ -4,7 +4,7 @@ export type DecompositionMode = 'appearance' | 'animation-ready';
 export type SourceRole = 'primary' | 'alternate-view' | 'alternate-pose' | 'detail' | 'mask-guide';
 export type DecompositionDiagnosticCode =
   | 'UNSUPPORTED_SOURCE' | 'IMAGE_TOO_LARGE' | 'DECODE_FAILURE' | 'COLOR_SPACE_WARNING'
-  | 'BACKGROUND_AMBIGUOUS' | 'INSUFFICIENT_STRUCTURE' | 'LOW_CONTRAST_BOUNDARY' | 'LOW_SOURCE_RESOLUTION' | 'AMBIGUOUS_REGION' | 'AUTO_COMPLEXITY_REDUCTION'
+  | 'BACKGROUND_AMBIGUOUS' | 'BACKGROUND_OVERRIDE_INACTIVE' | 'INSUFFICIENT_STRUCTURE' | 'LOW_CONTRAST_BOUNDARY' | 'LOW_SOURCE_RESOLUTION' | 'AMBIGUOUS_REGION' | 'AUTO_COMPLEXITY_REDUCTION'
   | 'CORRESPONDENCE_AMBIGUOUS' | 'LAYER_CONFLICT' | 'OCCLUSION_UNDERCONSTRAINED' | 'HIDDEN_GEOMETRY_INFERRED'
   | 'PATH_SELF_INTERSECTS' | 'PATH_TOO_COMPLEX' | 'HOLE_NOT_REPRESENTABLE' | 'TEXTURE_APPROXIMATION'
   | 'PART_PARENT_CYCLE' | 'INVALID_JOINT_LIMIT' | 'UNSUPPORTED_NATIVE_FEATURE' | 'EXPORT_VALIDATION_FAILED'
@@ -55,6 +55,8 @@ export interface SourceReference {
   colorSpace: 'srgb-assumed';
   transformToPrimary?: [number, number, number, number, number, number];
   alphaFraction: number;
+  /** undefined: automatic opaque-border estimate; null: retain all opaque pixels; hex: flood from matching border color. */
+  backgroundColor?: string | null;
 }
 
 export interface RegionGeometry {
