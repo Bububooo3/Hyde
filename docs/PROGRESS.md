@@ -1,5 +1,7 @@
 # Hyde capability matrix
 
+Current resilience checkpoint: canceling a slow file read no longer submits stale import work to the restarted worker. The app holds the restoration boundary until the previous analyzed document or empty workspace is ready. Focused Chrome cancel/reimport, 1536×1024 import, and contour-offset workflows pass; TypeScript and the independent Decomposer build pass.
+
 Current correction checkpoint: `region.offsetPath` shifts all manual contour anchors, handles and holes by source-pixel amounts through one undoable edit. The inspector exposes numeric X/Y shifts. Focused session and Chrome tests pass undo, mask preservation, regeneration, `.hydecomp` reopen and native Hyde path export.
 
 Latest Decomposer verification: JPEG and WebP import in the worker, create editable regions, and save/reopen `.hydecomp` with original bytes and canonical RGBA intact. The visible original canvas samples those same canonical pixels. TypeScript, the independent build, focused Chrome import/reopen, and 1536×1024 import/zoom pass.

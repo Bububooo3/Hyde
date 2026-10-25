@@ -174,6 +174,8 @@ export default function App() {
   const [pendingRegeneration, setPendingRegeneration] = useState<{ label: string; request: RegenerationRequest; impact: RegenerationImpact }>();
   const [coarsePreview, setCoarsePreview] = useState<CoarsePreview>();
   const [busy, setBusy] = useState(false), [status, setStatus] = useState('Import one or more illustrations to begin.');
+  const [restoring, setRestoring] = useState(false);
+  const [cancellable, setCancellable] = useState(false);
   const [exportFormat, setExportFormat] = useState<'hyde' | 'hyproj'>('hyproj'), [allowHoleApproximation, setAllowHoleApproximation] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string>();
   const [posePreview, setPosePreview] = useState(false), [poseOffset, setPoseOffset] = useState(0);
@@ -187,7 +189,7 @@ export default function App() {
   const [quality, setQuality] = useState<{ meanSampledMaskIoU: number; pointCount: number }>();
   const pointer = useRef<{ tool: Tool; points: { x: number; y: number }[]; anchor?: number; side?: 'in' | 'out' } | undefined>(undefined);
   const checkpoint = useRef<Uint8Array | undefined>(undefined);
-  const canceling = useRef(false);
+  const workGeneration = useRef(0);
 
   const clearNativePreview = useCallback(() => {
     if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
@@ -254,16 +256,20 @@ export default function App() {
   const canvasZoomStyle = source && zoom !== 'fit' ? { width: source.width * zoom, height: source.height * zoom } : undefined;
 
   const readSource = useCallback(async (sourceId: string, doc: DecompositionDocumentV1) => {
+    const generation = workGeneration.current;
     const metadata = doc.sources.find(item => item.id === sourceId); if (!metadata) return;
     const response = await client.current.call<{ bytes: Uint8Array; rgba: Uint8Array }>('source', { id: sourceId, pixels: true });
+    if (generation !== workGeneration.current) return;
     const url = URL.createObjectURL(new Blob([response.bytes as BlobPart], { type: 'image/png' }));
     const image = new Image(); image.src = url; await image.decode();
+    if (generation !== workGeneration.current) { URL.revokeObjectURL(url); return; }
     if (sourceUrl.current) URL.revokeObjectURL(sourceUrl.current);
     sourceUrl.current = url; sourceImage.current = image; sourcePixelsRef.current = new Uint8ClampedArray(response.rgba.buffer);
     setLoadedSourceId(sourceId);
     setRenderVersion(value => value + 1);
   }, []);
   const refresh = useCallback(async (state: WorkerState, loadSource = false) => {
+    const generation = workGeneration.current;
     clearNativePreview();
     setCoarsePreview(undefined);
     setPendingRegeneration(undefined); setDraftSettings(state.document.settings);
@@ -274,78 +280,113 @@ export default function App() {
     if (sourceId) {
       setSelectedSourceId(sourceId);
       const response = await client.current.call<{ id: string; mask: RegionMask }[]>('masks', { sourceId });
+      if (generation !== workGeneration.current) return;
       setMasks(new Map(response.map(item => [item.id, item.mask])));
       if (loadSource || sourceImage.current === undefined || source?.id !== sourceId) await readSource(sourceId, state.document);
+      if (generation !== workGeneration.current) return;
     }
-    setQuality(await client.current.call('compare'));
+    const comparison = await client.current.call('compare');
+    if (generation !== workGeneration.current) return;
+    setQuality(comparison);
     setRenderVersion(value => value + 1);
   }, [clearNativePreview, readSource, selectedSourceId, source?.id]);
 
   const perform = useCallback(async (edits: DecompositionEdit[], mask?: RegionMask) => {
     if (!documentModel || busy) return;
+    const generation = workGeneration.current;
     setBusy(true);
     try {
       const response = await client.current.call<{ result: { ok: boolean; error?: { message: string } }; revision: number; document: DecompositionDocumentV1 }>('execute', { expectedRevision: revision, edits, mask });
+      if (generation !== workGeneration.current) return;
       if (!response.result.ok) throw new Error(response.result.error?.message ?? 'Edit failed.');
       await refresh(response);
+      if (generation !== workGeneration.current) return;
       setStatus(`${edits.map(item => item.op).join(', ')} saved in revision ${response.revision}.`);
-    } catch (error) { setStatus(error instanceof Error ? error.message : 'Edit failed.'); }
-    finally { setBusy(false); }
+    } catch (error) { if (generation === workGeneration.current) setStatus(error instanceof Error ? error.message : 'Edit failed.'); }
+    finally { if (generation === workGeneration.current) setBusy(false); }
   }, [documentModel, busy, revision, refresh]);
 
   async function importImages(event: ChangeEvent<HTMLInputElement>) {
     const files = [...(event.target.files ?? [])]; event.target.value = '';
-    if (!files.length) return;
-    setBusy(true); setCoarsePreview(undefined); setStatus('Importing original references locally…');
+    if (!files.length || busy) return;
+    const generation = workGeneration.current;
+    setBusy(true); setCancellable(true); setCoarsePreview(undefined); setStatus('Importing original references locally…');
     try {
       if (documentModel) checkpoint.current = (await client.current.call<{ bytes: Uint8Array }>('save')).bytes;
+      if (generation !== workGeneration.current) return;
       const inputs = await Promise.all(files.map(async (file, index) => ({ name: file.name, mime: file.type, role: index === 0 ? 'primary' : 'alternate-view', bytes: new Uint8Array(await file.arrayBuffer()) })));
+      if (generation !== workGeneration.current) return;
       const imported = await client.current.call<WorkerState>('import', { inputs, options: { name: files[0].name.replace(/\.[^.]+$/, '') } });
+      if (generation !== workGeneration.current) return;
       setLoadedSourceId(undefined);
-      await refresh(imported, true); setSelectedRegionId(undefined); setSelectedPartId(undefined); setPendingLandmark(undefined);
+      await refresh(imported, true);
+      if (generation !== workGeneration.current) return;
+      setSelectedRegionId(undefined); setSelectedPartId(undefined); setPendingLandmark(undefined);
       checkpoint.current = (await client.current.call<{ bytes: Uint8Array }>('save')).bytes;
+      if (generation !== workGeneration.current) return;
       setStatus(`Imported ${files.length} reference${files.length === 1 ? '' : 's'}. Analyzing…`);
       await new Promise(resolve => window.setTimeout(resolve, 0));
+      if (generation !== workGeneration.current) return;
       const analyzed = await client.current.call<WorkerState>('analyze', { coarsePreview: true }, (progress: CoarsePreview) => {
-        if (progress.kind !== 'coarse-preview' || canceling.current) return;
+        if (progress.kind !== 'coarse-preview' || generation !== workGeneration.current) return;
         setCoarsePreview(progress);
         setStatus(`Coarse ${progress.scale}× source preview: ${progress.regionCount} provisional regions. Full-resolution analysis continues…`);
       });
+      if (generation !== workGeneration.current) return;
       await refresh(analyzed, true);
+      if (generation !== workGeneration.current) return;
+      checkpoint.current = (await client.current.call<{ bytes: Uint8Array }>('save')).bytes;
+      if (generation !== workGeneration.current) return;
       setStatus(`Automatic first pass found ${analyzed.document.regions.filter(active).length} editable regions. Inspect boundaries and diagnostics before export.`);
-    } catch (error) { if (!canceling.current) setStatus(error instanceof Error ? error.message : 'Import failed.'); }
-    finally { setCoarsePreview(undefined); setBusy(false); }
+    } catch (error) { if (generation === workGeneration.current) setStatus(error instanceof Error ? error.message : 'Import failed.'); }
+    finally { if (generation === workGeneration.current) { setCoarsePreview(undefined); setCancellable(false); setBusy(false); } }
   }
   async function openDocument(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0]; event.target.value = ''; if (!file) return;
-    setBusy(true);
+    const file = event.target.files?.[0]; event.target.value = ''; if (!file || busy) return;
+    const generation = workGeneration.current;
+    setBusy(true); setCancellable(true);
     try {
-      const opened = await client.current.call<WorkerState>('open', { bytes: new Uint8Array(await file.arrayBuffer()) });
+      if (documentModel) checkpoint.current = (await client.current.call<{ bytes: Uint8Array }>('save')).bytes;
+      if (generation !== workGeneration.current) return;
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      if (generation !== workGeneration.current) return;
+      const opened = await client.current.call<WorkerState>('open', { bytes });
+      if (generation !== workGeneration.current) return;
       setLoadedSourceId(undefined);
-      await refresh(opened, true); setSelectedRegionId(undefined); setSelectedPartId(undefined); setPendingLandmark(undefined); setStatus(`Opened ${file.name}; original references and edits are available.`);
-    } catch (error) { setStatus(error instanceof Error ? error.message : 'Open failed.'); }
-    finally { setBusy(false); }
+      await refresh(opened, true);
+      if (generation !== workGeneration.current) return;
+      checkpoint.current = bytes;
+      setSelectedRegionId(undefined); setSelectedPartId(undefined); setPendingLandmark(undefined); setStatus(`Opened ${file.name}; original references and edits are available.`);
+    } catch (error) { if (generation === workGeneration.current) setStatus(error instanceof Error ? error.message : 'Open failed.'); }
+    finally { if (generation === workGeneration.current) { setCancellable(false); setBusy(false); } }
   }
   async function saveDocument() {
     if (!documentModel || busy) return;
+    const generation = workGeneration.current;
     setBusy(true);
-    try { const response = await client.current.call<{ bytes: Uint8Array }>('save'); download(response.bytes, `${documentModel.name}.hydecomp`, 'application/zip'); setStatus('Editable .hydecomp document saved.'); }
-    catch (error) { setStatus(error instanceof Error ? error.message : 'Save failed.'); }
-    finally { setBusy(false); }
+    try { const response = await client.current.call<{ bytes: Uint8Array }>('save'); if (generation !== workGeneration.current) return; checkpoint.current = response.bytes; download(response.bytes, `${documentModel.name}.hydecomp`, 'application/zip'); setStatus('Editable .hydecomp document saved.'); }
+    catch (error) { if (generation === workGeneration.current) setStatus(error instanceof Error ? error.message : 'Save failed.'); }
+    finally { if (generation === workGeneration.current) setBusy(false); }
   }
   async function nativeExport(preview = false, pose?: { partId: string; value: number }) {
     if (!documentModel || busy) return;
-    setBusy(true); setStatus(preview ? 'Rendering the native Hyde project…' : `Exporting editable .${exportFormat}…`);
+    const generation = workGeneration.current;
+    setBusy(true); setCancellable(true); setStatus(preview ? 'Rendering the native Hyde project…' : `Exporting editable .${exportFormat}…`);
     try {
+      checkpoint.current = (await client.current.call<{ bytes: Uint8Array }>('save')).bytes;
+      if (generation !== workGeneration.current) return;
       const result = await client.current.call<HydeDecompositionExport>('export', { options: { format: preview ? 'hyde' : exportFormat, allowHoleApproximation } });
+      if (generation !== workGeneration.current) return;
       if (preview) {
         clearNativePreview();
         const posed = pose ? poseNativeDecomposition(result, pose.partId, pose.value) : undefined;
         const renderProject = posed?.project ?? result.project;
         const { HydeRenderHost } = await import('../browserHost');
+        if (generation !== workGeneration.current) return;
         const host = await HydeRenderHost.connect(() => renderProject);
         try {
           const frame = await host.renderFrame({ timeSeconds: 0, width: renderProject.width, height: renderProject.height });
+          if (generation !== workGeneration.current) return;
           const url = URL.createObjectURL(new Blob([frame.bytes as BlobPart], { type: frame.mime }));
           previewUrlRef.current = url;
           setPreviewUrl(url);
@@ -353,43 +394,48 @@ export default function App() {
           if (posed) setStatus(`Temporary Hyde joint pose ready at ${posed.appliedValue.toFixed(1)} ${renderProject.elements.find(item => item.id === result.mapping.partIds[pose!.partId])?.attachment?.type === 'hinge' ? 'degrees' : 'pixels'}. No motion or pose was saved.`);
           else try {
             const comparison = await client.current.call<{ report: NativeQualityReport; overlayPng: Uint8Array }>('native.compare', { renderedPng: frame.bytes });
+            if (generation !== workGeneration.current) return;
             const overlayUrl = URL.createObjectURL(new Blob([comparison.overlayPng as BlobPart], { type: 'image/png' }));
             residualUrlRef.current = overlayUrl;
             setResidualUrl(overlayUrl);
             setNativeQuality(comparison.report);
             setStatus(`Native Hyde preview and measured pixel comparison ready. ${result.warnings.length} export warning${result.warnings.length === 1 ? '' : 's'}.`);
           } catch (error) {
-            setStatus(`Native Hyde preview rendered, but pixel comparison failed: ${error instanceof Error ? error.message : 'unknown error'}`);
+            if (generation === workGeneration.current) setStatus(`Native Hyde preview rendered, but pixel comparison failed: ${error instanceof Error ? error.message : 'unknown error'}`);
           }
         } finally { host.close(); }
       } else {
         download(result.bytes, `${documentModel.name}.${exportFormat}`, 'application/zip');
         setStatus(`Editable .${exportFormat} exported through Hyde SDK. ${result.warnings.map(item => item.message).join(' ')}`);
       }
-    } catch (error) { setStatus(error instanceof Error ? error.message : 'Native export failed.'); }
-    finally { setBusy(false); }
+    } catch (error) { if (generation === workGeneration.current) setStatus(error instanceof Error ? error.message : 'Native export failed.'); }
+    finally { if (generation === workGeneration.current) { setCancellable(false); setBusy(false); } }
   }
   async function planRegeneration(label: string, request: RegenerationRequest) {
     if (!documentModel || busy || pendingRegeneration) return;
-    setBusy(true); setCoarsePreview(undefined); setStatus(`Preparing ${label.toLowerCase()} impact preview…`);
+    const generation = workGeneration.current;
+    setBusy(true); setCancellable(true); setCoarsePreview(undefined); setStatus(`Preparing ${label.toLowerCase()} impact preview…`);
     try {
       checkpoint.current = (await client.current.call<{ bytes: Uint8Array }>('save')).bytes;
+      if (generation !== workGeneration.current) return;
       const impact = await client.current.call<RegenerationImpact>('regeneration.preview', { ...request, expectedRevision: revision }, (progress: CoarsePreview) => {
-        if (progress.kind !== 'coarse-preview' || canceling.current) return;
+        if (progress.kind !== 'coarse-preview' || generation !== workGeneration.current) return;
         setCoarsePreview(progress);
         setStatus(`Coarse ${progress.scale}× settings preview ready; calculating full-resolution impact…`);
       });
+      if (generation !== workGeneration.current) return;
       setCoarsePreview(undefined);
       setPendingRegeneration({ label, request, impact });
       setStatus(`Review ${label.toLowerCase()}: ${impact.changedUnlockedIds.length} unlocked changed, ${impact.removedUnlockedIds.length} removed, ${impact.addedIds.length} added. Current document is unchanged.`);
-    } catch (error) { if (!canceling.current) setStatus(error instanceof Error ? error.message : 'Regeneration preview failed.'); }
-    finally { setCoarsePreview(undefined); setRequestedMode(undefined); setRequestedInference(undefined); setBusy(false); }
+    } catch (error) { if (generation === workGeneration.current) setStatus(error instanceof Error ? error.message : 'Regeneration preview failed.'); }
+    finally { if (generation === workGeneration.current) { setCoarsePreview(undefined); setRequestedMode(undefined); setRequestedInference(undefined); setCancellable(false); setBusy(false); } }
   }
   async function applyPlannedRegeneration() {
     if (!pendingRegeneration || busy) return;
+    const generation = workGeneration.current;
     const { request, impact, label } = pendingRegeneration;
     if (impact.changedProtectedIds.length || impact.removedProtectedIds.length) return;
-    setBusy(true); setStatus(`Applying ${label.toLowerCase()}…`);
+    setBusy(true); setCancellable(true); setStatus(`Applying ${label.toLowerCase()}…`);
     try {
       let state: WorkerState;
       if (request.kind === 'analysis') state = await client.current.call<WorkerState>('analyze', {
@@ -402,10 +448,14 @@ export default function App() {
         if (!response.result.ok) throw new Error(response.result.error?.message ?? 'Selected regeneration failed.');
         state = response;
       }
+      if (generation !== workGeneration.current) return;
       await refresh(state);
+      if (generation !== workGeneration.current) return;
+      checkpoint.current = (await client.current.call<{ bytes: Uint8Array }>('save')).bytes;
+      if (generation !== workGeneration.current) return;
       setStatus(`${label} applied in revision ${state.revision}; ${state.document.regions.filter(active).length} regions active.`);
-    } catch (error) { setStatus(error instanceof Error ? error.message : 'Regeneration failed.'); }
-    finally { setBusy(false); }
+    } catch (error) { if (generation === workGeneration.current) setStatus(error instanceof Error ? error.message : 'Regeneration failed.'); }
+    finally { if (generation === workGeneration.current) { setCancellable(false); setBusy(false); } }
   }
   async function setHiddenContinuations(enabled: boolean) {
     if (!documentModel || busy || pendingRegeneration || documentModel.mode !== 'animation-ready') return;
@@ -415,13 +465,23 @@ export default function App() {
     });
   }
   async function cancelWork() {
-    if (!busy) return;
-    canceling.current = true;
+    if (!busy || !cancellable || restoring) return;
+    setRestoring(true);
+    workGeneration.current++;
     client.current.restart();
-    setCoarsePreview(undefined); setBusy(false); setStatus('Canceled. Restoring the last complete document checkpoint…');
-    try { if (checkpoint.current) await refresh(await client.current.call<WorkerState>('open', { bytes: checkpoint.current }), true); }
+    setCoarsePreview(undefined); setStatus('Canceled. Restoring the last complete document checkpoint…');
+    try {
+      if (checkpoint.current) await refresh(await client.current.call<WorkerState>('open', { bytes: checkpoint.current }), true);
+      else {
+        setDocumentModel(undefined); setSelectedSourceId(undefined); setSelectedRegionId(undefined); setSelectedPartId(undefined);
+        sourceImage.current = undefined; sourcePixelsRef.current = undefined; setMasks(new Map());
+        if (sourceUrl.current) URL.revokeObjectURL(sourceUrl.current);
+        sourceUrl.current = undefined;
+      }
+      setStatus('Canceled. The last complete document has been restored.');
+    }
     catch (error) { setStatus(error instanceof Error ? error.message : 'Could not restore checkpoint.'); }
-    finally { canceling.current = false; }
+    finally { setRestoring(false); setCancellable(false); setBusy(false); }
   }
   async function undoRedo(direction: 'undo' | 'redo') {
     if (!documentModel || busy) return;
@@ -719,7 +779,7 @@ export default function App() {
             <p className="hint">Pixel measurements at source resolution; judge visual quality from the rendered image.</p>
           </>}
         </div>}
-        <div className="status-panel"><div className="section-heading"><h3>{busy ? 'Processing' : 'Status'}</h3>{busy && <button onClick={() => void cancelWork()}>Cancel and restore</button>}</div><p role="status">{status}</p>{quality && <p className="metric">Sampled path to mask IoU: {(quality.meanSampledMaskIoU * 100).toFixed(1)}% · {quality.pointCount} path anchors. Color and texture fidelity require the native render preview.</p>}</div>
+        <div className="status-panel"><div className="section-heading"><h3>{busy ? 'Processing' : 'Status'}</h3>{busy && cancellable && <button disabled={restoring} onClick={() => void cancelWork()}>{restoring ? 'Restoring…' : 'Cancel and restore'}</button>}</div><p role="status">{status}</p>{quality && <p className="metric">Sampled path to mask IoU: {(quality.meanSampledMaskIoU * 100).toFixed(1)}% · {quality.pointCount} path anchors. Color and texture fidelity require the native render preview.</p>}</div>
       </main>
       <aside className="right-pane pane"><h2>Reconstruction</h2>
         {documentModel && <><label>Mode<select aria-label="Reconstruction mode" value={pendingRegeneration?.impact.mode ?? requestedMode ?? documentModel.mode} disabled={busy || Boolean(pendingRegeneration)} onChange={event => { const mode = event.target.value as DecompositionMode; setRequestedMode(mode); void planRegeneration(`Switch to ${mode}`, { kind: 'analysis', mode }); }}><option value="appearance">Appearance first</option><option value="animation-ready">Animation ready</option></select></label>

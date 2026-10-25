@@ -90,6 +90,40 @@ test('inspector shifts a whole contour in source pixels and undoes the pinned ed
   expect(undone.document.regions.find(item => item.id === region.id)?.geometry.manualPath).toBeUndefined();
 });
 
+test('cancel during file read cannot import into the restarted worker', async ({ page }) => {
+  await page.goto('/decomposer.html');
+  await page.evaluate(() => {
+    const read = File.prototype.arrayBuffer;
+    File.prototype.arrayBuffer = function () {
+      if (this.name !== 'slow.png') return read.call(this);
+      return new Promise<ArrayBuffer>(resolve => {
+        (window as Window & { releaseSlowRead?: () => Promise<void> }).releaseSlowRead = async () => resolve(await read.call(this));
+      });
+    };
+  });
+  await page.getByLabel('Import images').setInputFiles({ name: 'slow.png', mimeType: 'image/png', buffer: fixture() });
+  await expect(page.getByRole('status')).toContainText('Importing original references');
+  await page.getByRole('button', { name: 'Cancel and restore' }).click();
+  await expect(page.getByRole('status')).toContainText('last complete document has been restored');
+  await page.evaluate(async () => { await (window as Window & { releaseSlowRead: () => Promise<void> }).releaseSlowRead(); });
+  await expect(page.getByRole('heading', { name: 'Turn illustrations into editable Hyde art' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Save source' })).toBeDisabled();
+  await page.getByLabel('Import images').setInputFiles({ name: 'prop.png', mimeType: 'image/png', buffer: fixture() });
+  await expect(page.getByRole('status')).toContainText('Automatic first pass found');
+  await expect(page.locator('.left-pane .scroll-list').first().locator('.row')).toHaveCount(2);
+  await page.getByLabel('Import images').setInputFiles({ name: 'slow.png', mimeType: 'image/png', buffer: opaqueFixture() });
+  await expect(page.getByRole('status')).toContainText('Importing original references');
+  await page.getByRole('button', { name: 'Cancel and restore' }).click();
+  await expect(page.getByRole('status')).toContainText('last complete document has been restored');
+  await page.evaluate(async () => { await (window as Window & { releaseSlowRead: () => Promise<void> }).releaseSlowRead(); });
+  await expect(page.locator('.left-pane .scroll-list').first().locator('.row')).toHaveCount(2);
+  const saved = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Save source' }).click();
+  const reopened = await decodeDecompositionDocument(new Uint8Array(await readFile(await (await saved).path())));
+  expect(reopened.document.sources[0].name).toBe('prop.png');
+  expect(reopened.document.regions.filter(item => item.generationStatus !== 'historical')).toHaveLength(2);
+});
+
 test('a hidden region can use explicitly matched alternate pixels and undo that choice', async ({ page }) => {
   const session = await DecompositionSession.importSources([
     { bytes: occlusionStill(true), name: 'primary.png', mime: 'image/png', role: 'primary' },
