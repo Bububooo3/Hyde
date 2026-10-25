@@ -77,12 +77,12 @@ export interface CatalogContext {
 }
 
 export class CatalogError extends Error {
-  constructor(public readonly code: 'INVALID_ARGUMENT' | 'TARGET_NOT_FOUND' | 'INVALID_REFERENCE' | 'INVALID_TIMING' | 'INVALID_ATTACHMENT' | 'INVALID_ASSET' | 'ASSET_MISSING' | 'CAPABILITY_UNAVAILABLE' | 'DUPLICATE_ID', message: string) {
+  constructor(public readonly code: 'INVALID_ARGUMENT' | 'TARGET_NOT_FOUND' | 'INVALID_REFERENCE' | 'INVALID_TIMING' | 'INVALID_ATTACHMENT' | 'INVALID_ASSET' | 'ASSET_MISSING' | 'CAPABILITY_UNAVAILABLE' | 'DUPLICATE_ID', message: string, public readonly field?: string) {
     super(message);
     this.name = 'CatalogError';
   }
 }
-function fail(message: string, code: CatalogError['code'] = 'INVALID_ARGUMENT'): never { throw new CatalogError(code, message); }
+function fail(message: string, code: CatalogError['code'] = 'INVALID_ARGUMENT', field?: string): never { throw new CatalogError(code, message, field); }
 function record(value: unknown, allowed: readonly string[], label: string): asserts value is Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) fail(`${label} must be an object.`);
   for (const key of Object.keys(value)) if (!allowed.includes(key) || ['__proto__', 'prototype', 'constructor'].includes(key)) fail(`${label} does not support ${key}.`);
@@ -377,7 +377,7 @@ export function applyCatalogCommand(project: Project, command: CatalogCommand, c
       const selected = args.ids === undefined ? next.assets.filter(item => !used.has(item.id)).map(item => item.id) : refs(args.ids, context, 'Assets to remove');
       for (const id of selected) {
         asset(next, id, context);
-        if (used.has(id)) fail(`Asset ${id} is still referenced.`, 'INVALID_REFERENCE');
+        if (used.has(id)) fail(`Asset ${id} is still referenced.`, 'INVALID_REFERENCE', 'ids');
       }
       const remove = new Set(selected);
       next.assets = next.assets.filter(item => !remove.has(item.id));

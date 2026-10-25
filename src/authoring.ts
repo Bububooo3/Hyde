@@ -131,6 +131,7 @@ function commandDiagnostic(cause: unknown, command: HydeCommand, commandIndex: n
         : ['id', 'elementId', 'sceneId', 'assetId', 'sourceId', 'parentId', 'targetId', 'clipId', 'instanceId']
           .map(key => args[key]).find(value => typeof value === 'string') as string | undefined;
   const unsupported = /\bdoes not support ([A-Za-z][A-Za-z0-9_]*)\b/.exec(message);
+  const explicitField = cause instanceof MediaAuthoringError || cause instanceof CatalogError ? cause.field : undefined;
   const patch = op === 'element.updateAppearance' ? args.appearance
     : op === 'element.setTransform' ? args.transform
       : op === 'project.updateMetadata' ? args : undefined;
@@ -138,7 +139,7 @@ function commandDiagnostic(cause: unknown, command: HydeCommand, commandIndex: n
   return {
     ...diagnostic(failureCode(cause), message, commandIndex),
     ...(requested ? { targetId: aliases.get(requested) ?? requested } : {}),
-    ...(unsupported ? { field: unsupported[1] } : patchKeys.length === 1 ? { field: patchKeys[0] } : {}),
+    ...(explicitField ? { field: explicitField } : unsupported ? { field: unsupported[1] } : patchKeys.length === 1 ? { field: patchKeys[0] } : {}),
   };
 }
 function failureCode(cause: unknown): string {

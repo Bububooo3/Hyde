@@ -70,14 +70,14 @@ export const MEDIA_AUTHORING_COMMAND_KEYS = {
 export const MEDIA_AUTHORING_OPERATIONS = Object.keys(MEDIA_AUTHORING_COMMAND_KEYS) as Array<keyof typeof MEDIA_AUTHORING_COMMAND_KEYS>;
 
 export class MediaAuthoringError extends Error {
-  constructor(public readonly code: 'INVALID_ARGUMENT' | 'TARGET_NOT_FOUND' | 'INVALID_ASSET' | 'CAPABILITY_UNAVAILABLE', message: string) {
+  constructor(public readonly code: 'INVALID_ARGUMENT' | 'TARGET_NOT_FOUND' | 'INVALID_ASSET' | 'CAPABILITY_UNAVAILABLE', message: string, public readonly field?: string) {
     super(message);
     this.name = 'MediaAuthoringError';
   }
 }
 
-function fail(message: string, code: MediaAuthoringError['code'] = 'INVALID_ARGUMENT'): never {
-  throw new MediaAuthoringError(code, message);
+function fail(message: string, code: MediaAuthoringError['code'] = 'INVALID_ARGUMENT', field?: string): never {
+  throw new MediaAuthoringError(code, message, field);
 }
 function record(value: unknown, label: string, keys: readonly string[]): asserts value is Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) fail(`${label} must be an object.`);
@@ -205,7 +205,7 @@ export function applyMediaAuthoringCommand(project: Project, command: MediaAutho
       visual(item); visualAsset(next, item);
       if (args.corners === null) delete item.mediaPin;
       else {
-        if (!Array.isArray(args.corners) || !validPinCorners(args.corners)) fail('Media pin must be a strictly convex four-corner quadrilateral.');
+        if (!Array.isArray(args.corners) || !validPinCorners(args.corners)) fail('Media pin must be a strictly convex four-corner quadrilateral.', 'INVALID_ARGUMENT', 'corners');
         item.mediaPin = structuredClone(args.corners);
       }
       return next;

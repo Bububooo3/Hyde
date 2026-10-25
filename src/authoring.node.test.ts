@@ -4,6 +4,50 @@ import { HydeAuthoringSession } from './authoring';
 import { decodeProjectBytes } from './archive';
 
 describe('authoring transactions in Node', () => {
+  it('keeps media placement, pinning and asset references editable across native archive reopen', async () => {
+    const session = HydeAuthoringSession.create('Pinned image');
+    const png = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lXcAAAAASUVORK5CYII=', 'base64'));
+    const image = session.stageAsset(png, 'image/png', 'image');
+    const pin = [{ x: 0, y: 0 }, { x: 1.1, y: .1 }, { x: .9, y: 1 }, { x: -.1, y: .9 }] as const;
+    const created = await session.execute({ protocolVersion: 1, expectedRevision: 0, commands: [
+      { op: 'asset.add', args: { alias: '$texture', handle: image, name: 'texture.png' } },
+      { op: 'element.create', args: { alias: '$card', kind: 'rectangle', properties: { name: 'Card', x: 120, y: 90, width: 80, height: 60 } } },
+      { op: 'media.setFill', args: { id: '$card', assetId: '$texture', fit: 'fill' } },
+      { op: 'media.setPlacement', args: { id: '$card', transform: { x: .05, y: -.1, scaleX: 1.2, scaleY: .8, rotation: 12 } } },
+      { op: 'media.setPin', args: { id: '$card', corners: pin } },
+      { op: 'media.setOpacity', args: { id: '$card', opacity: .6 } },
+    ] });
+    expect(created.ok, JSON.stringify(created)).toBe(true);
+    if (!created.ok) return;
+    const cardId = created.idMap.$card, textureId = created.idMap.$texture;
+    const reopened = HydeAuthoringSession.open(session.exportProject());
+    expect(reopened.snapshot().elements.find(item => item.id === cardId)).toMatchObject({
+      assetId: textureId, mediaFit: 'fill', mediaOpacity: .6,
+      mediaTransform: { x: .05, y: -.1, scaleX: 1.2, scaleY: .8, rotation: 12 }, mediaPin: pin,
+    });
+    const original = reopened.snapshot();
+    const invalid = await reopened.execute({ protocolVersion: 1, expectedRevision: 0, commands: [
+      { op: 'media.setPin', args: { id: cardId, corners: [{ x: 0, y: 0 }, { x: 1, y: 1 }, { x: 1, y: 0 }, { x: 0, y: 1 }] } },
+    ] });
+    expect(invalid.ok).toBe(false);
+    if (!invalid.ok) expect(invalid.errors[0]).toMatchObject({ code: 'INVALID_ARGUMENT', commandIndex: 0, targetId: cardId, field: 'corners' });
+    expect(reopened.snapshot()).toEqual(original);
+    const referenced = await reopened.execute({ protocolVersion: 1, expectedRevision: 0, commands: [
+      { op: 'asset.removeUnused', args: { ids: [textureId] } },
+    ] });
+    expect(referenced.ok).toBe(false);
+    if (!referenced.ok) expect(referenced.errors[0]).toMatchObject({ code: 'INVALID_REFERENCE', commandIndex: 0, field: 'ids' });
+    expect(reopened.snapshot()).toEqual(original);
+    const cleared = await reopened.execute({ protocolVersion: 1, expectedRevision: 0, commands: [
+      { op: 'media.setPin', args: { id: cardId, corners: null } },
+      { op: 'media.setFill', args: { id: cardId, assetId: null } },
+      { op: 'asset.removeUnused', args: { ids: [textureId] } },
+    ] });
+    expect(cleared.ok, JSON.stringify(cleared)).toBe(true);
+    expect(HydeAuthoringSession.open(reopened.exportProject()).snapshot().assets).toHaveLength(0);
+    expect(reopened.snapshot().elements.find(item => item.id === cardId)?.mediaPin).toBeUndefined();
+  });
+
   it('reuses identical staged assets only when requested and preserves aliases across archive reopen', async () => {
     const session = HydeAuthoringSession.create('Deduplicated media');
     const bytes = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lXcAAAAASUVORK5CYII=', 'base64'));
