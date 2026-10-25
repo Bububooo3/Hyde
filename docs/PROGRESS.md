@@ -1,12 +1,6 @@
 # Hyde capability matrix
 
-Current multi-view checkpoint: the inspector can now explicitly reject an ambiguous candidate while confirming another. Both decisions remain visible after `.hydecomp` reopen; focused Chrome passes. Automatic correspondence ranking already honors manual rejection on reanalysis.
-
-Current resilience checkpoint: canceling a slow file read no longer submits stale import work to the restarted worker. The app holds the restoration boundary until the previous analyzed document or empty workspace is ready. Focused Chrome cancel/reimport, 1536×1024 import, and contour-offset workflows pass; TypeScript and the independent Decomposer build pass.
-
-Current correction checkpoint: `region.offsetPath` shifts all manual contour anchors, handles and holes by source-pixel amounts through one undoable edit. The inspector exposes numeric X/Y shifts. Focused session and Chrome tests pass undo, mask preservation, regeneration, `.hydecomp` reopen and native Hyde path export.
-
-Latest Decomposer verification: JPEG and WebP import in the worker, create editable regions, and save/reopen `.hydecomp` with original bytes and canonical RGBA intact. The visible original canvas samples those same canonical pixels. TypeScript, the independent build, focused Chrome import/reopen, and 1536×1024 import/zoom pass.
+Current Decomposer checkpoints: JPEG/WebP decode in the worker and display canonical pixels while preserving original files; numeric whole-contour offsets retain handles, holes, source masks, undo and native export; canceling a slow read cannot restart an import after checkpoint restoration; ambiguous multi-view candidates can be rejected or confirmed explicitly, with one manual decision per pair. Focused session and Chrome workflows cover import/reopen, 1536×1024 display, contour correction, cancel/reimport, and multi-view decisions. TypeScript and the independent build pass.
 
 ## Agent SDK and Image Decomposer handoff
 

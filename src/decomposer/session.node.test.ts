@@ -156,6 +156,32 @@ describe('deterministic decomposition and native Hyde export', () => {
     await reopened.close(); await session.close();
   });
 
+  it('replaces a rejected cross-reference pair when the user confirms it later', async () => {
+    const bytes = propPng();
+    const session = await DecompositionSession.importSources([
+      { bytes, name: 'primary.png', mime: 'image/png', role: 'primary' },
+      { bytes, name: 'alternate.png', mime: 'image/png', role: 'alternate-view' },
+    ]);
+    await session.analyze();
+    const [first, second] = session.snapshot().sources;
+    const pair: [string, string] = [session.snapshot().regions.find(item => item.sourceId === first.id)!.id,
+      session.snapshot().regions.find(item => item.sourceId === second.id)!.id];
+    const correspondence = (id: string, accepted: boolean) => ({ id, sourceIds: [first.id, second.id] as [string, string],
+      regionIds: pair, kind: 'same-part' as const, origin: 'manual' as const, accepted, evidence: ['user choice'] });
+    expect((await session.execute({ expectedRevision: session.revision, edits: [
+      { op: 'reference.correspond', correspondence: correspondence('rejected-pair', false) },
+    ] })).ok).toBe(true);
+    expect((await session.execute({ expectedRevision: session.revision, edits: [
+      { op: 'reference.correspond', correspondence: correspondence('confirmed-pair', true) },
+    ] })).ok).toBe(true);
+    const manual = session.snapshot().correspondences.filter(item => item.origin === 'manual' && item.regionIds?.includes(pair[0]) && item.regionIds?.includes(pair[1]));
+    expect(manual).toEqual([expect.objectContaining({ id: 'confirmed-pair', accepted: true })]);
+    const reopened = await DecompositionSession.openDocument(await session.saveDocument());
+    expect(reopened.snapshot().correspondences.filter(item => item.origin === 'manual' && item.regionIds?.includes(pair[0]) && item.regionIds?.includes(pair[1])))
+      .toEqual(manual);
+    await reopened.close(); await session.close();
+  });
+
   it('preserves last complete candidate on cancellation and reports incomplete structure', async () => {
     const session = await DecompositionSession.importSources([{ bytes: propPng(), name: 'prop.png', mime: 'image/png' }]);
     await session.analyze();

@@ -778,7 +778,12 @@ export class DecompositionSession {
             backRegionId: edit.backRegionId, origin: 'manual', status: 'rejected', evidence: [...proposal!.evidence, 'user rejected this automatic layer proposal'] };
           candidate.layers.push(rejected); changed.add(rejected.id);
         } else if (edit.op === 'reference.correspond') {
-          candidate.correspondences = candidate.correspondences.filter(item => item.id !== edit.correspondence.id);
+          const pair = edit.correspondence.regionIds;
+          candidate.correspondences = candidate.correspondences.filter(item => item.id !== edit.correspondence.id && !(
+            pair?.length === 2 && ['same-part', 'possible-match'].includes(edit.correspondence.kind) &&
+            item.regionIds?.length === 2 && ['same-part', 'possible-match'].includes(item.kind) &&
+            item.regionIds.includes(pair[0]) && item.regionIds.includes(pair[1])
+          ));
           candidate.correspondences.push({ ...structuredClone(edit.correspondence), origin: 'manual' }); changed.add(edit.correspondence.id);
         } else if (edit.op === 'reference.setTransform') {
           const source = candidate.sources.find(item => item.id === edit.sourceId) ?? fail('INVALID_ARGUMENT: Source does not exist.');
