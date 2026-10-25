@@ -33,6 +33,12 @@ test('large import shows a bounded provisional pyramid preview before committing
   expect(await page.evaluate(() => (window as Window & { sawCoarsePreview?: boolean }).sawCoarsePreview)).toBe(true);
   await expect(page.getByRole('note')).toHaveCount(0);
   await expect(page.locator('.left-pane .scroll-list').first().locator('.row')).toHaveCount(1);
+  await page.evaluate(() => { (window as Window & { sawCoarsePreview?: boolean }).sawCoarsePreview = false; });
+  await page.getByRole('button', { name: 'Regenerate first pass' }).click();
+  await expect(page.getByLabel('Regeneration impact preview')).toBeVisible({ timeout: 60_000 });
+  expect(await page.evaluate(() => (window as Window & { sawCoarsePreview?: boolean }).sawCoarsePreview)).toBe(true);
+  await expect(page.getByRole('note')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Cancel preview' }).click();
 });
 
 test('opaque background correction is previewed and saved per reference', async ({ page }) => {

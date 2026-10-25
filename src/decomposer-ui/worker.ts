@@ -1,5 +1,5 @@
 /// <reference lib="webworker" />
-import { analyzeImage, buildImagePyramid, DecompositionSession } from '../decomposer';
+import { analyzeImage, buildImagePyramid, DecompositionSession, defaultSettings } from '../decomposer';
 import type { DecompositionEdit, DecompositionDocumentV1, HydeDecompositionExportOptions, RegionMask, RegionRecord, SourceInput } from '../decomposer';
 import { compareNativeRender } from '../decomposer/quality';
 
@@ -63,6 +63,33 @@ function regenerationImpact(before: DecompositionDocumentV1, after: Decompositio
     previewContours, omittedPreviewContours };
 }
 
+function emitCoarsePreview(id: number, running: DecompositionSession, request: { mode?: DecompositionDocumentV1['mode']; settings?: Partial<DecompositionDocumentV1['settings']> }): void {
+  const current = running.snapshot(), primary = current.sources.find(source => source.role === 'primary');
+  if (!primary || Math.max(primary.width, primary.height) <= 512) return;
+  try {
+    const pyramid = buildImagePyramid(running.sourcePixelsFor(primary.id));
+    const coarse = pyramid[pyramid.length - 1], scale = coarse.scale;
+    const mode = request.mode ?? current.mode;
+    const fullSettings = { ...(request.mode && request.mode !== current.mode ? defaultSettings(mode) : current.settings), ...request.settings };
+    const settings = { ...fullSettings,
+      minRegionPixels: Math.max(1, Math.ceil(fullSettings.minRegionPixels / (scale * scale))),
+      pathTolerance: fullSettings.pathTolerance / scale };
+    const preview = analyzeImage(coarse, { ...primary, width: coarse.width, height: coarse.height }, mode, settings, 'provisional-pyramid-preview');
+    const contours: { id: string; sourceId: string; bounds: RegionRecord['bounds']; path: RegionRecord['geometry']['generatedPath']; kind: 'after' }[] = [];
+    let points = 0;
+    for (const region of preview.regions) {
+      const path = region.geometry.generatedPath, count = path.points.length + (path.holes ?? []).reduce((sum, hole) => sum + hole.points.length, 0);
+      if (contours.length >= 64 || points + count > 8192) break;
+      contours.push({ id: region.id, sourceId: primary.id,
+        bounds: { x: region.bounds.x * scale, y: region.bounds.y * scale, width: region.bounds.width * scale, height: region.bounds.height * scale },
+        path, kind: 'after' });
+      points += count;
+    }
+    self.postMessage({ id, progress: { kind: 'coarse-preview', scale, regionCount: preview.regions.length, contours,
+      omitted: Math.max(0, preview.regions.length - contours.length) } });
+  } catch { /* Coarse evidence is optional; full-resolution analysis remains authoritative. */ }
+}
+
 self.onmessage = async (event: MessageEvent<Request>) => {
   const { id, type, payload } = event.data;
   try {
@@ -79,6 +106,7 @@ self.onmessage = async (event: MessageEvent<Request>) => {
     } else if (type === 'regeneration.preview') {
       const running = requireSession();
       if (payload.expectedRevision !== running.revision) throw new Error('The document changed before the regeneration preview. Preview it again.');
+      if (payload.kind === 'analysis') emitCoarsePreview(id, running, payload);
       const before = running.snapshot();
       const preview = await DecompositionSession.openDocument(await running.saveDocument());
       try {
@@ -99,27 +127,7 @@ self.onmessage = async (event: MessageEvent<Request>) => {
       const running = requireSession();
       if (payload.expectedRevision !== undefined && payload.expectedRevision !== running.revision)
         throw new Error('The document changed after the regeneration preview. Preview it again.');
-      const current = running.snapshot(), primary = current.sources.find(source => source.role === 'primary');
-      if (primary && Math.max(primary.width, primary.height) > 512) try {
-        const pyramid = buildImagePyramid(running.sourcePixelsFor(primary.id));
-        const coarse = pyramid[pyramid.length - 1], scale = coarse.scale;
-        const settings = { ...current.settings,
-          minRegionPixels: Math.max(1, Math.ceil(current.settings.minRegionPixels / (scale * scale))),
-          pathTolerance: current.settings.pathTolerance / scale };
-        const preview = analyzeImage(coarse, { ...primary, width: coarse.width, height: coarse.height }, payload.mode ?? current.mode, settings, 'provisional-pyramid-preview');
-        const contours: { id: string; sourceId: string; bounds: RegionRecord['bounds']; path: RegionRecord['geometry']['generatedPath']; kind: 'after' }[] = [];
-        let points = 0;
-        for (const region of preview.regions) {
-          const path = region.geometry.generatedPath, count = path.points.length + (path.holes ?? []).reduce((sum, hole) => sum + hole.points.length, 0);
-          if (contours.length >= 64 || points + count > 8192) break;
-          contours.push({ id: region.id, sourceId: primary.id,
-            bounds: { x: region.bounds.x * scale, y: region.bounds.y * scale, width: region.bounds.width * scale, height: region.bounds.height * scale },
-            path, kind: 'after' });
-          points += count;
-        }
-        self.postMessage({ id, progress: { kind: 'coarse-preview', scale, regionCount: preview.regions.length, contours,
-          omitted: Math.max(0, preview.regions.length - contours.length) } });
-      } catch { /* Coarse evidence is optional; full-resolution analysis remains authoritative. */ }
+      if (payload.coarsePreview) emitCoarsePreview(id, running, payload);
       const analysis = await running.analyze(payload);
       result = { analysis, revision: running.revision, document: running.snapshot() };
     } else if (type === 'snapshot') result = { revision: requireSession().revision, document: requireSession().snapshot() };

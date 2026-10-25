@@ -293,7 +293,7 @@ export default function App() {
       checkpoint.current = (await client.current.call<{ bytes: Uint8Array }>('save')).bytes;
       setStatus(`Imported ${files.length} reference${files.length === 1 ? '' : 's'}. Analyzing…`);
       await new Promise(resolve => window.setTimeout(resolve, 0));
-      const analyzed = await client.current.call<WorkerState>('analyze', {}, (progress: CoarsePreview) => {
+      const analyzed = await client.current.call<WorkerState>('analyze', { coarsePreview: true }, (progress: CoarsePreview) => {
         if (progress.kind !== 'coarse-preview' || canceling.current) return;
         setCoarsePreview(progress);
         setStatus(`Coarse ${progress.scale}× source preview: ${progress.regionCount} provisional regions. Full-resolution analysis continues…`);
@@ -358,14 +358,19 @@ export default function App() {
   }
   async function planRegeneration(label: string, request: RegenerationRequest) {
     if (!documentModel || busy || pendingRegeneration) return;
-    setBusy(true); setStatus(`Preparing ${label.toLowerCase()} impact preview…`);
+    setBusy(true); setCoarsePreview(undefined); setStatus(`Preparing ${label.toLowerCase()} impact preview…`);
     try {
       checkpoint.current = (await client.current.call<{ bytes: Uint8Array }>('save')).bytes;
-      const impact = await client.current.call<RegenerationImpact>('regeneration.preview', { ...request, expectedRevision: revision });
+      const impact = await client.current.call<RegenerationImpact>('regeneration.preview', { ...request, expectedRevision: revision }, (progress: CoarsePreview) => {
+        if (progress.kind !== 'coarse-preview' || canceling.current) return;
+        setCoarsePreview(progress);
+        setStatus(`Coarse ${progress.scale}× settings preview ready; calculating full-resolution impact…`);
+      });
+      setCoarsePreview(undefined);
       setPendingRegeneration({ label, request, impact });
       setStatus(`Review ${label.toLowerCase()}: ${impact.changedUnlockedIds.length} unlocked changed, ${impact.removedUnlockedIds.length} removed, ${impact.addedIds.length} added. Current document is unchanged.`);
     } catch (error) { if (!canceling.current) setStatus(error instanceof Error ? error.message : 'Regeneration preview failed.'); }
-    finally { setRequestedMode(undefined); setRequestedInference(undefined); setBusy(false); }
+    finally { setCoarsePreview(undefined); setRequestedMode(undefined); setRequestedInference(undefined); setBusy(false); }
   }
   async function applyPlannedRegeneration() {
     if (!pendingRegeneration || busy) return;
