@@ -1,5 +1,5 @@
 import { decodeAssemblyBytes, decodeProjectBytes, encodeAssemblyBytes, encodeProjectBytes, validateDocument } from './archive';
-import { evaluateProject } from './engine';
+import { evaluateCamera, evaluateProject } from './engine';
 import { createElement, createProject, uid } from './model';
 import type { AnimProperty, Assembly, Asset, Attachment, ElementKind, Keyframe, Project, ShapePath, StoryElement } from './model';
 import { descendantIds, makeAssembly, parentId, reparentElement, worldPoses } from './editing';
@@ -315,6 +315,10 @@ export class HydeAuthoringSession {
   exportProject(): Uint8Array { return encodeProjectBytes(this.project); }
   exportAssembly(rootId: string, timeSeconds?: number): Uint8Array { return encodeAssemblyBytes(makeAssembly(this.project, [rootId], timeSeconds)); }
   evaluate(timeSeconds: number): StoryElement[] { return evaluateProject(this.project, timeSeconds).map(item => structuredClone(item)); }
+  evaluateFrame(timeSeconds: number): { timeSeconds: number; camera: ReturnType<typeof evaluateCamera>; elements: StoryElement[] } {
+    if (!Number.isFinite(timeSeconds) || timeSeconds < 0 || timeSeconds > this.project.duration) throw new Error('Evaluation time is outside project duration.');
+    return { timeSeconds, camera: evaluateCamera(this.project, timeSeconds), elements: this.evaluate(timeSeconds) };
+  }
   inspect(query: InspectRequest) {
     const invalid = (field: string, message: string) => ({ revision: this.revision, error: { ...diagnostic('INVALID_ARGUMENT', message), field } });
     if (!query || typeof query !== 'object' || Array.isArray(query)) return invalid('query', 'Inspection query must be an object.');

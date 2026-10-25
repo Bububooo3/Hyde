@@ -3,7 +3,6 @@ import type { ArchiveMigrationResult } from './archive';
 import { unzipSync } from 'fflate';
 import { HydeAuthoringSession } from './authoring';
 import type { ExecuteRequest, ExecuteResult, HydeDiagnostic } from './authoring';
-import { evaluateCamera } from './engine';
 import { createProject } from './model';
 import type { Assembly, Asset, Project } from './model';
 import type { HydeRenderHost } from './browserHost';
@@ -71,11 +70,7 @@ export class HydeSession {
     try { validateDocument(this.ready().snapshot(), false); return Promise.resolve([]); }
     catch (cause) { return Promise.resolve([{ code: 'INVALID_REFERENCE', severity: 'error', message: cause instanceof Error ? cause.message : 'Invalid project.' }]); }
   }
-  evaluate(timeSeconds: number): Promise<{ timeSeconds: number; camera: ReturnType<typeof evaluateCamera>; elements: ReturnType<HydeAuthoringSession['evaluate']> }> {
-    const session = this.ready();
-    if (!Number.isFinite(timeSeconds) || timeSeconds < 0 || timeSeconds > session.snapshot().duration) throw new Error('Evaluation time is outside project duration.');
-    return Promise.resolve({ timeSeconds, camera: evaluateCamera(session.snapshot(), timeSeconds), elements: session.evaluate(timeSeconds) });
-  }
+  evaluate(timeSeconds: number): Promise<ReturnType<HydeAuthoringSession['evaluateFrame']>> { return Promise.resolve(this.ready().evaluateFrame(timeSeconds)); }
   stageAsset(bytes: Uint8Array, mime: string, kind: Asset['kind'], licenseNotice?: string): string { return this.ready().stageAsset(bytes, mime, kind, licenseNotice); }
   discardAsset(handle: string): void { this.ready().discardAsset(handle); }
   stageAssembly(bytes: Uint8Array): string { return this.ready().stageAssembly(bytes); }

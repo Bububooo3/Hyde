@@ -66,6 +66,7 @@ it('inspects project summaries and asset pages without cloning embedded media', 
   expect(await session.inspect({ target: 'scenes' })).toHaveProperty('items');
   expect(await session.inspect({ target: 'assets', fields: 'id,name' })).toMatchObject({ items: [{ id: 'large', name: 'large.bin' }] });
   expect(await session.inspect({ target: 'asset', id: 'large', fields: 'id,byteLength' })).toMatchObject({ asset: { id: 'large', byteLength: 3 * 1024 * 1024 } });
+  expect(await session.evaluate(0)).toMatchObject({ timeSeconds: 0, elements: [] });
   expect(snapshot).not.toHaveBeenCalled();
 });
 
