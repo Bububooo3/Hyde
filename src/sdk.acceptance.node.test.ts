@@ -6,6 +6,58 @@ import { decodeProjectBytes, encodeProjectBytes } from './archive';
 import { createPrimaryShowcase } from './showcase';
 
 describe('public SDK acceptance story', () => {
+  it('remaps a native assembly with clips, attachment limits and audio across existing ID collisions', async () => {
+    const { sdk, session, ids } = await makeSDKAcceptanceStory();
+    const expanded = await session.execute({ protocolVersion: 1, expectedRevision: session.revision, commands: [
+      { op: 'assembly.attach', args: { id: ids.$audio, parentId: ids.$assembly, type: 'fixed' } },
+      { op: 'clip.capture', args: { rootId: ids.$assembly, sourceStart: 0, duration: 2, name: 'Beam turn', alias: '$turn' } },
+      { op: 'clip.place', args: { rootId: ids.$assembly, clipId: '$turn', at: 0.5, alias: '$placed' } },
+      { op: 'clip.setPriority', args: { rootId: ids.$assembly, instanceId: '$placed', elementId: ids.$beam, property: 'rotation', priority: 2 } },
+    ] });
+    expect(expanded.ok, JSON.stringify(expanded)).toBe(true);
+    if (!expanded.ok) return;
+    const assembly = await session.exportAssembly(ids.$assembly);
+    const sourceAsset = session.snapshot().assets.find(asset => asset.id === ids.$tone)!;
+    const conflictingBytes = Uint8Array.from(Buffer.from(sourceAsset.dataUrl.split(',')[1], 'base64'));
+    conflictingBytes[conflictingBytes.length - 1] ^= 1;
+    const recipient = await sdk.createProject({ name: 'Collision recipient', duration: 6 });
+    const handle = recipient.stageAsset(conflictingBytes, 'audio/wav', 'audio');
+    const existing = await recipient.execute({ protocolVersion: 1, expectedRevision: 0, commands: [
+      { op: 'asset.add', args: { id: ids.$tone, handle, name: 'Existing other tone' } },
+      { op: 'element.create', args: { id: ids.$assembly, kind: 'ellipse', properties: { name: 'Existing root ID' } } },
+      { op: 'element.create', args: { id: ids.$beam, kind: 'ellipse', properties: { name: 'Existing beam ID' } } },
+    ] });
+    expect(existing.ok, JSON.stringify(existing)).toBe(true);
+    const imported = await recipient.execute({ protocolVersion: 1, expectedRevision: recipient.revision, commands: [
+      { op: 'assembly.import', args: { handle: recipient.stageAssembly(assembly), timeSeconds: 0, alias: '$copy' } },
+    ] });
+    expect(imported.ok, JSON.stringify(imported)).toBe(true);
+    if (!imported.ok) return;
+    const reopened = await sdk.openProject(await recipient.exportProject());
+    const project = reopened.snapshot(), root = project.elements.find(item => item.id === imported.idMap.$copy)!;
+    const beam = project.elements.find(item => item.name === 'Hinged beam')!, audio = project.elements.find(item => item.name === 'Ambient tone')!;
+    expect(root.id).not.toBe(ids.$assembly);
+    expect(beam.id).not.toBe(ids.$beam);
+    expect(beam.parentId).toBe(root.id);
+    expect(beam.attachment).toMatchObject({ type: 'hinge', parentId: root.id, min: -25, max: 25 });
+    expect(audio.parentId).toBe(root.id);
+    expect(audio.assetId).not.toBe(ids.$tone);
+    expect(project.assets).toHaveLength(3);
+    expect(project.assets.find(asset => asset.id === audio.assetId)?.dataUrl).toBe(sourceAsset.dataUrl);
+    expect(project.assets.find(asset => asset.id === ids.$tone)?.dataUrl).not.toBe(sourceAsset.dataUrl);
+    const clip = root.assemblyClips![0], placed = root.clipInstances![0];
+    expect(clip.id).not.toBe(expanded.idMap.$turn);
+    expect(placed.id).not.toBe(expanded.idMap.$placed);
+    expect(placed.clipId).toBe(clip.id);
+    expect(clip.tracks.some(track => track.elementId === beam.id)).toBe(true);
+    const sourceClip = session.snapshot().elements.find(item => item.id === ids.$assembly)!.assemblyClips![0];
+    expect(clip.tracks.flatMap(track => track.keyframes.map(key => key.id))).not.toEqual(sourceClip.tracks.flatMap(track => track.keyframes.map(key => key.id)));
+    expect(placed.priorityOverrides?.[0]).toMatchObject({ elementId: beam.id, property: 'rotation', priority: 2 });
+    expect(project.elements.find(item => item.id === ids.$assembly)?.name).toBe('Existing root ID');
+    expect(await reopened.diagnostics()).toEqual([]);
+    await reopened.close(); await recipient.close(); await session.close();
+  });
+
   it('opens the current Story Studio showcase and preserves unrelated native content after a focused SDK edit', async () => {
     const original = decodeProjectBytes(encodeProjectBytes(createPrimaryShowcase())), sdk = new HydeSDK();
     const session = await sdk.openProject(encodeProjectBytes(original));
