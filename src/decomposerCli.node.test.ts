@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { runDecomposerCli } from './decomposerCli';
 import { decodePng, encodePng } from './decomposer/image';
 import { DecompositionSession } from './decomposer/session';
-import { decodeProjectBytes } from './archive';
+import { decodeAssemblyBytes, decodeProjectBytes } from './archive';
 import { launchLocalChromium } from './cliBrowserRunner';
 
 const folders: string[] = [];
@@ -18,6 +18,39 @@ async function run(args: string[]) {
 }
 
 describe('hyde-decompose CLI', () => {
+  it('reviews and replaces only the selected existing assembly with an exact fingerprint', async () => {
+    const folder = await mkdtemp(join(process.cwd(), '.hyde-decompose-replace-')); folders.push(folder);
+    const rgba = new Uint8Array(24 * 24 * 4);
+    for (let y = 4; y < 20; y++) for (let x = 4; x < 20; x++) rgba.set([185, 68, 42, 255], (y * 24 + x) * 4);
+    const source = join(folder, 'icon.png'), document = join(folder, 'icon.hydecomp'), target = join(folder, 'icon.hyproj');
+    await writeFile(source, encodePng({ width: 24, height: 24, rgba }));
+    expect((await run(['import', '--source', source, '--output', document])).exit).toBe(0);
+    expect((await run(['analyze', document, '--output', document, '--overwrite'])).exit).toBe(0);
+    expect((await run(['export', document, '--format', 'hyproj', '--output', target])).exit).toBe(0);
+    const original = await readFile(target);
+    const session = await DecompositionSession.openDocument(await readFile(document));
+    const part = session.snapshot().parts[0];
+    expect((await session.execute({ expectedRevision: session.revision, edits: [
+      { op: 'part.rename', partId: part.id, name: 'Revised section' },
+    ] })).ok).toBe(true);
+    await writeFile(document, await session.saveDocument()); await session.close();
+    const planned = await run(['export', document, '--format', 'hyproj', '--target', target, '--dry-run', '--json']);
+    expect(planned.exit, JSON.stringify(planned.error)).toBe(0);
+    expect(planned.result.replacementImpact.replacedIds).toContain(`hc_${part.id}`);
+    const fingerprint = planned.result.replacementImpact.targetFingerprint as string;
+    const refused = await run(['export', document, '--format', 'hyproj', '--target', target, '--output', target, '--overwrite']);
+    expect(refused.error.errors[0].code).toBe('REPLACEMENT_REQUIRES_CONFIRMATION');
+    const changed = await run(['export', document, '--format', 'hyproj', '--target', target, '--output', target,
+      '--overwrite', '--replace-existing', '--expected-target', '0'.repeat(64)]);
+    expect(changed.error.errors[0].code).toBe('TARGET_CHANGED');
+    expect(await readFile(target)).toEqual(original);
+    const applied = await run(['export', document, '--format', 'hyproj', '--target', target, '--output', target,
+      '--overwrite', '--replace-existing', '--expected-target', fingerprint, '--json']);
+    expect(applied.exit, JSON.stringify(applied.error)).toBe(0);
+    expect(applied.result.replacementImpact.targetFingerprint).toBe(fingerprint);
+    expect(decodeAssemblyBytes(await readFile(target)).elements.find(item => item.id === `hc_${part.id}`)?.name).toBe('Revised section');
+    expect((await readdir(folder)).some(name => name.includes('.bak'))).toBe(true);
+  });
   it('accepts a soft coverage file alongside an editable binary mask', async () => {
     const folder = await mkdtemp(join(process.cwd(), '.hyde-decompose-soft-')); folders.push(folder);
     const rgba = new Uint8Array(16 * 16 * 4);

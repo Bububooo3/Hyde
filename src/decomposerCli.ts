@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { atomicWrite, readLimitedFile } from './atomicFile';
 import { launchLocalChromium, runBrowserTask } from './cliBrowserRunner';
 import { DecompositionSession } from './decomposer/session';
+import { sha256 } from './decomposer/codec';
 import { compareNativeRender } from './decomposer/quality';
 import type { Box, DecompositionEdit, DecompositionMode, DiagnosticTileView, SourceInput, SourceRole } from './decomposer';
 
@@ -23,7 +24,7 @@ function parse(argv: string[]): { command: string; args: string[]; flags: Flags 
     if (!token.startsWith('--')) { args.push(token); continue; }
     const name = token.slice(2);
     if (!name || Object.hasOwn(flags, name)) throw new CliError('INVALID_ARGUMENT', `Duplicate or invalid --${name}.`);
-    if (['json', 'overwrite', 'dry-run', 'native', 'allow-hole-approximation'].includes(name)) flags[name] = true;
+    if (['json', 'overwrite', 'dry-run', 'native', 'allow-hole-approximation', 'replace-existing'].includes(name)) flags[name] = true;
     else {
       const value = rest[++index];
       if (!value || value.startsWith('--')) throw new CliError('INVALID_ARGUMENT', `--${name} requires a value.`);
@@ -201,14 +202,33 @@ async function dispatch(argv: string[]): Promise<Record<string, unknown>> {
     finally { await session.close(); }
   }
   if (command === 'export') {
-    allow(flags, ['format', 'output', 'name', 'allow-hole-approximation', 'overwrite', 'json']);
+    allow(flags, ['format', 'output', 'name', 'allow-hole-approximation', 'overwrite', 'json', 'target', 'expected-target', 'replace-existing', 'dry-run']);
     const [path] = positional(args, 1), format = value(flags, 'format', true);
     if (format !== 'hyde' && format !== 'hyproj') throw new CliError('INVALID_ARGUMENT', 'Format must be hyde or hyproj.');
     const session = await openDocument(path);
     try {
-      const result = await session.exportHyde({ format, name: value(flags, 'name'), allowHoleApproximation: Boolean(flags['allow-hole-approximation']) });
+      const targetPath = value(flags, 'target');
+      if (!targetPath && (flags['expected-target'] || flags['replace-existing'] || flags['dry-run']))
+        throw new CliError('INVALID_ARGUMENT', 'Replacement flags require --target with an existing .hyproj assembly.');
+      let targetBytes: Uint8Array | undefined, replacementImpact;
+      if (targetPath) {
+        if (format !== 'hyproj') throw new CliError('INVALID_ARGUMENT', 'Assembly replacement requires --format hyproj.');
+        targetBytes = await readLimitedFile(targetPath, DOCUMENT_LIMIT);
+        replacementImpact = await session.planAssemblyReplacement(targetBytes);
+        if (flags['dry-run']) {
+          if (flags['replace-existing'] || flags['expected-target'] || flags.output || flags.overwrite)
+            throw new CliError('INVALID_ARGUMENT', 'A replacement dry run only needs --target and --format hyproj.');
+          return { command, format, dryRun: true, replacementImpact };
+        }
+        if (!flags['replace-existing']) throw new CliError('REPLACEMENT_REQUIRES_CONFIRMATION', 'Review --dry-run, then pass --replace-existing and --expected-target.', 4);
+      }
+      const result = await session.exportHyde({ format, name: value(flags, 'name'), allowHoleApproximation: Boolean(flags['allow-hole-approximation']),
+        ...(targetBytes ? { targetAssemblyBytes: targetBytes, expectedTargetFingerprint: value(flags, 'expected-target', true), replaceExisting: true } : {}) });
+      if (targetPath && await sha256(await readLimitedFile(targetPath, DOCUMENT_LIMIT)) !== replacementImpact!.targetFingerprint)
+        throw new CliError('TARGET_CHANGED', 'Target assembly changed after replacement planning; inspect it again.', 4);
       const output = await save(value(flags, 'output', true)!, result.bytes, flags);
-      return { command, format, warnings: result.warnings, mapping: result.mapping, ...output };
+      return { command, format, warnings: result.warnings, mapping: result.mapping,
+        ...(result.replacementImpact ? { replacementImpact: result.replacementImpact } : {}), ...output };
     } finally { await session.close(); }
   }
   throw new CliError('INVALID_ARGUMENT', 'Use import, analyze, inspect, edit, compare or export.');

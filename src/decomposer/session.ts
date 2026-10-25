@@ -4,8 +4,8 @@ import { proposePartAttachments } from './articulation';
 import { featherMaskOutward } from './feather';
 import { rankReferenceCorrespondences } from './correspondence';
 import { decodeDecompositionDocument, encodeDecompositionDocument, sha256, validateDecompositionDocument } from './codec';
-import { exportNativeDecomposition } from './export';
-import type { HydeDecompositionExport, HydeDecompositionExportOptions } from './export';
+import { exportNativeDecomposition, planNativeAssemblyReplacement } from './export';
+import type { HydeAssemblyReplacementImpact, HydeDecompositionExport, HydeDecompositionExportOptions } from './export';
 import { proposeHiddenContinuations } from './hidden';
 import { proposeCrossViewOcclusion } from './multiviewOcclusion';
 import { proposeJunctionLayers } from './junction';
@@ -534,6 +534,10 @@ export class DecompositionSession {
   async saveDocument(): Promise<Uint8Array> {
     this.ensureOpen();
     return encodeDecompositionDocument(this.document, this.sourceBytes, this.masks, new Map([...this.images].map(([id, image]) => [id, image.rgba])));
+  }
+  async planAssemblyReplacement(targetBytes: Uint8Array): Promise<HydeAssemblyReplacementImpact> {
+    this.ensureOpen();
+    return planNativeAssemblyReplacement(this.document, this.masks, targetBytes);
   }
   async exportHyde(options: HydeDecompositionExportOptions): Promise<HydeDecompositionExport> {
     this.ensureOpen();

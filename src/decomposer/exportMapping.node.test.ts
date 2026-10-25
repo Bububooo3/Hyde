@@ -3,6 +3,7 @@ import { expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 import { makeSyntheticFixture } from '../../tests/decomposerSyntheticFixtures';
 import { DecompositionSession } from './session';
+import { decodeAssemblyBytes } from '../archive';
 
 it('records a versioned native mapping in the recoverable source and invalidates it after an edit', async () => {
   const fixture = makeSyntheticFixture('simple-icon');
@@ -30,6 +31,47 @@ it('records a versioned native mapping in the recoverable source and invalidates
       edits: [{ op: 'part.rename', partId: part.id, name: 'Edited part' }] });
     expect(changed.ok).toBe(true);
     expect(reopened.snapshot().exportMapping).toBeUndefined();
+    await reopened.close();
+  } finally { await session.close(); }
+});
+
+it('plans and explicitly replaces a matching native assembly without losing stable IDs', async () => {
+  const fixture = makeSyntheticFixture('simple-icon');
+  const session = await DecompositionSession.importSources([fixture.input]);
+  try {
+    await session.analyze();
+    const first = await session.exportHyde({ format: 'hyproj', name: 'Initial icon' });
+    const root = `hc_${session.snapshot().id}_root`;
+    const part = session.snapshot().parts[0];
+    expect((await session.execute({ expectedRevision: session.revision, edits: [
+      { op: 'part.rename', partId: part.id, name: 'Revised part' },
+    ] })).ok).toBe(true);
+    expect(session.snapshot().exportMapping).toBeUndefined();
+    const impact = await session.planAssemblyReplacement(first.bytes);
+    expect(impact).toMatchObject({ targetName: 'Initial icon assembly', targetFingerprint: first.mapping.outputFingerprint,
+      addedIds: [], removedIds: [] });
+    expect(impact.replacedIds).toContain(root);
+    expect(impact.replacedIds).toContain(first.mapping.partIds[part.id]);
+    const unrelated = await DecompositionSession.importSources([makeSyntheticFixture('occlusion').input]);
+    try {
+      await unrelated.analyze();
+      const otherAssembly = await unrelated.exportHyde({ format: 'hyproj' });
+      await expect(session.planAssemblyReplacement(otherAssembly.bytes)).rejects.toThrow('TARGET_MISMATCH');
+    } finally { await unrelated.close(); }
+    const beforeFailure = session.snapshot();
+    await expect(session.exportHyde({ format: 'hyproj', targetAssemblyBytes: first.bytes,
+      expectedTargetFingerprint: impact.targetFingerprint })).rejects.toThrow('REPLACEMENT_REQUIRES_CONFIRMATION');
+    await expect(session.exportHyde({ format: 'hyproj', targetAssemblyBytes: first.bytes,
+      expectedTargetFingerprint: '0'.repeat(64), replaceExisting: true })).rejects.toThrow('TARGET_CHANGED');
+    expect(session.snapshot()).toEqual(beforeFailure);
+    const replacement = await session.exportHyde({ format: 'hyproj', name: 'Revised icon', targetAssemblyBytes: first.bytes,
+      expectedTargetFingerprint: impact.targetFingerprint, replaceExisting: true });
+    expect(replacement.replacementImpact).toEqual(impact);
+    expect(replacement.mapping.partIds[part.id]).toBe(first.mapping.partIds[part.id]);
+    expect(decodeAssemblyBytes(first.bytes).elements.find(item => item.id === first.mapping.partIds[part.id])?.name).not.toBe('Revised part');
+    expect(decodeAssemblyBytes(replacement.bytes).elements.find(item => item.id === first.mapping.partIds[part.id])?.name).toBe('Revised part');
+    const reopened = await DecompositionSession.openDocument(await session.saveDocument());
+    expect(reopened.snapshot().exportMapping).toEqual(replacement.mapping);
     await reopened.close();
   } finally { await session.close(); }
 });

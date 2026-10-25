@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, PointerEvent as ReactPointerEvent } from 'react';
-import type { DecompositionDocumentV1, DecompositionEdit, DecompositionMode, HydeDecompositionExport, PartRecord, ReconstructionSettings, RegionMask, RegionRecord } from '../decomposer';
+import type { DecompositionDocumentV1, DecompositionEdit, DecompositionMode, HydeAssemblyReplacementImpact, HydeDecompositionExport, PartRecord, ReconstructionSettings, RegionMask, RegionRecord } from '../decomposer';
 import { poseNativeDecomposition } from '../decomposer/pose';
 import type { ReconstructionQualityReport } from '../decomposer/quality';
 import type { ShapePath } from '../model';
@@ -21,6 +21,7 @@ type RegenerationImpact = { baseRevision: number; kind: RegenerationRequest['kin
 type NativeQualityReport = Omit<ReconstructionQualityReport, 'residualOverlayPng'>;
 type CoarsePreview = { kind: 'coarse-preview'; scale: number; regionCount: number; omitted: number;
   contours: RegenerationImpact['previewContours'] };
+type AssemblyReview = { name: string; bytes: Uint8Array; impact: HydeAssemblyReplacementImpact; revision: number; documentId: string };
 const color = (hex: string): [number, number, number] => [1, 3, 5].map(at => parseInt(hex.slice(at, at + 2), 16)) as [number, number, number];
 const current = (region: RegionRecord) => region.generationStatus !== 'historical';
 const active = (region: RegionRecord) => current(region) && !region.suppressed;
@@ -186,6 +187,7 @@ export default function App() {
   const [restoring, setRestoring] = useState(false);
   const [cancellable, setCancellable] = useState(false);
   const [exportFormat, setExportFormat] = useState<'hyde' | 'hyproj'>('hyproj'), [allowHoleApproximation, setAllowHoleApproximation] = useState(false);
+  const [assemblyReview, setAssemblyReview] = useState<AssemblyReview>();
   const [previewUrl, setPreviewUrl] = useState<string>();
   const [posePreview, setPosePreview] = useState(false), [poseOffset, setPoseOffset] = useState(0);
   const previewUrlRef = useRef<string | undefined>(undefined);
@@ -404,16 +406,37 @@ export default function App() {
     catch (error) { if (generation === workGeneration.current) setStatus(error instanceof Error ? error.message : 'Save failed.'); }
     finally { if (generation === workGeneration.current) setBusy(false); }
   }
-  async function nativeExport(preview = false, pose?: { partId: string; value: number }) {
+  async function reviewAssembly(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]; event.target.value = '';
+    setAssemblyReview(undefined);
+    if (!file || !documentModel || busy) return;
+    if (file.size > 256 * 1024 * 1024) { setStatus('Selected assembly exceeds the 256 MiB review limit.'); return; }
+    const generation = workGeneration.current, documentId = documentModel.id, baseRevision = revision;
+    setBusy(true); setStatus(`Reviewing ${file.name} against the current decomposition…`);
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      if (generation !== workGeneration.current) return;
+      const impact = await client.current.call<HydeAssemblyReplacementImpact>('replacement.plan', { bytes });
+      if (generation !== workGeneration.current) return;
+      setAssemblyReview({ name: file.name, bytes, impact, revision: baseRevision, documentId });
+      setStatus(`Review ready for ${file.name}. Inspect the native IDs before exporting a replacement.`);
+    } catch (error) { if (generation === workGeneration.current) setStatus(error instanceof Error ? error.message : 'Assembly review failed.'); }
+    finally { if (generation === workGeneration.current) setBusy(false); }
+  }
+  async function nativeExport(preview = false, pose?: { partId: string; value: number }, replacement?: AssemblyReview) {
     if (!documentModel || busy) return;
+    if (replacement && (replacement.revision !== revision || replacement.documentId !== documentModel.id)) {
+      setStatus('The decomposition changed after this review. Select the target assembly again.'); return;
+    }
     const generation = workGeneration.current;
     const renderAbort = new AbortController();
     if (preview) activeRenderAbort.current = renderAbort;
-    setBusy(true); setCancellable(true); setStatus(preview ? 'Rendering the native Hyde project…' : `Exporting editable .${exportFormat}…`);
+    setBusy(true); setCancellable(true); setStatus(preview ? 'Rendering the native Hyde project…' : replacement ? `Preparing replacement for ${replacement.name}…` : `Exporting editable .${exportFormat}…`);
     try {
       checkpoint.current = (await client.current.call<{ bytes: Uint8Array }>('save')).bytes;
       if (generation !== workGeneration.current) return;
-      const result = await client.current.call<HydeDecompositionExport>('export', { options: { format: preview ? 'hyde' : exportFormat, allowHoleApproximation } });
+      const result = await client.current.call<HydeDecompositionExport>('export', { options: { format: replacement ? 'hyproj' : preview ? 'hyde' : exportFormat, allowHoleApproximation,
+        ...(replacement ? { targetAssemblyBytes: replacement.bytes, expectedTargetFingerprint: replacement.impact.targetFingerprint, replaceExisting: true } : {}) } });
       if (generation !== workGeneration.current) return;
       if (preview) {
         clearNativePreview();
@@ -443,8 +466,10 @@ export default function App() {
           }
         } finally { host.close(); }
       } else {
-        download(result.bytes, `${documentModel.name}.${exportFormat}`, 'application/zip');
-        setStatus(`Editable .${exportFormat} exported through Hyde SDK. ${result.warnings.map(item => item.message).join(' ')}`);
+        download(result.bytes, replacement ? replacement.name : `${documentModel.name}.${exportFormat}`, 'application/zip');
+        setStatus(replacement ? `Replacement .hyproj downloaded for ${replacement.name}; the selected source file remains available for recovery. ${result.warnings.map(item => item.message).join(' ')}`
+          : `Editable .${exportFormat} exported through Hyde SDK. ${result.warnings.map(item => item.message).join(' ')}`);
+        if (replacement) setAssemblyReview(undefined);
       }
     } catch (error) { if (generation === workGeneration.current) setStatus(error instanceof Error ? error.message : 'Native export failed.'); }
     finally { if (activeRenderAbort.current === renderAbort) activeRenderAbort.current = undefined; if (generation === workGeneration.current) { setCancellable(false); setBusy(false); } }
@@ -892,7 +917,10 @@ export default function App() {
           <button disabled={!partTarget || !selectedRegion || busy} onClick={() => { if (partTarget && selectedRegion) void perform([{ op: 'part.assignRegion', regionId: selectedRegion.id, partId: partTarget }]); }}>Reassign region</button>
         </div> : <p className="hint">Parts keep stable IDs as regions are refined.</p>}
         {documentModel && <div className="inspector"><button disabled={busy} onClick={() => { const id = `manual_part_${Date.now()}`; void perform([{ op: 'part.create', id, name: `Part ${documentModel.parts.length + 1}`, regionIds: selectedRegion ? [selectedRegion.id] : [] }]); }}>New part {selectedRegion ? 'from region' : ''}</button></div>}
-        <div className="divider"/><h2>Native delivery</h2><div className="inspector"><label>Format<select aria-label="Export format" value={exportFormat} onChange={event => setExportFormat(event.target.value as 'hyde' | 'hyproj')}><option value="hyproj">Editable assembly · .hyproj</option><option value="hyde">Editable story · .hyde</option></select></label><label><input type="checkbox" checked={allowHoleApproximation} onChange={event => setAllowHoleApproximation(event.target.checked)}/> Allow raster fallback for unrepresentable holes</label><div className="inline-actions"><button disabled={!documentModel || busy} onClick={() => void nativeExport(true)}>Preview in Hyde</button><button className="accent" disabled={!documentModel || busy} onClick={() => void nativeExport(false)}>Export</button></div></div>
+        <div className="divider"/><h2>Native delivery</h2><div className="inspector"><label>Format<select aria-label="Export format" value={exportFormat} onChange={event => setExportFormat(event.target.value as 'hyde' | 'hyproj')}><option value="hyproj">Editable assembly · .hyproj</option><option value="hyde">Editable story · .hyde</option></select></label><label><input type="checkbox" checked={allowHoleApproximation} onChange={event => setAllowHoleApproximation(event.target.checked)}/> Allow raster fallback for unrepresentable holes</label><div className="inline-actions"><button disabled={!documentModel || busy} onClick={() => void nativeExport(true)}>Preview in Hyde</button><button className="accent" disabled={!documentModel || busy} onClick={() => void nativeExport(false)}>Export</button></div>
+          <div className="inferred-callout"><strong>Update an exported assembly</strong><span>Choose a previous .hyproj from this decomposition. Review the IDs that will be replaced, added, or removed, then download a replacement. Your selected file is not changed.</span><label className="button">Review existing .hyproj<input type="file" accept=".hyproj" hidden disabled={busy} onChange={event => void reviewAssembly(event)}/></label>
+            {assemblyReview && <div aria-label="Assembly replacement impact"><p><strong>{assemblyReview.name}</strong> · {assemblyReview.impact.targetName}</p><p>SHA-256: <code>{assemblyReview.impact.targetFingerprint}</code></p><p>Elements: {assemblyReview.impact.replacedIds.length} replaced, {assemblyReview.impact.addedIds.length} added, {assemblyReview.impact.removedIds.length} removed. Assets: {assemblyReview.impact.replacedAssetIds.length} replaced, {assemblyReview.impact.addedAssetIds.length} added, {assemblyReview.impact.removedAssetIds.length} removed.</p><details><summary>Show affected native IDs</summary>{(['replacedIds', 'addedIds', 'removedIds', 'replacedAssetIds', 'addedAssetIds', 'removedAssetIds'] as const).map(kind => <p key={kind}><strong>{kind}</strong>: {assemblyReview.impact[kind].join(', ') || 'none'}</p>)}</details>{(assemblyReview.revision !== revision || assemblyReview.documentId !== documentModel?.id) && <p>This review is stale. Select the assembly again.</p>}<div className="inline-actions"><button onClick={() => setAssemblyReview(undefined)}>Dismiss</button><button className="accent" disabled={busy || assemblyReview.revision !== revision || assemblyReview.documentId !== documentModel?.id} onClick={() => void nativeExport(false, undefined, assemblyReview)}>Download replacement .hyproj</button></div></div>}
+          </div></div>
       </aside>
     </div>
     <footer className="diagnostics"><strong>Diagnostics</strong><div className="diagnostic-list">{documentModel?.diagnostics.length ? documentModel.diagnostics.map((item, index) => <div key={`${item.code}-${index}`} className={`diagnostic ${item.severity}`}><b>{item.code}</b><span>{item.message}</span>{item.suggestion && <small>{item.suggestion}</small>}</div>) : <span className="hint">No diagnostics yet. Automatic suggestions are heuristic evidence, not certainty.</span>}</div></footer>

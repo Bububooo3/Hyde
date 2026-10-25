@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { decodeDecompositionDocument } from '../src/decomposer/codec';
 import { encodePng } from '../src/decomposer/image';
 import { DecompositionSession } from '../src/decomposer/session';
+import { decodeAssemblyBytes } from '../src/archive';
 import { makeRepeatedMultiviewFixture, makeSyntheticFixture } from './decomposerSyntheticFixtures';
 
 function fixture(): Buffer {
@@ -25,6 +26,33 @@ function occlusionStill(withFront: boolean): Uint8Array {
   if (withFront) for (let y = 6; y < 23; y++) for (let x = 19; x < 25; x++) rgba.set([33, 103, 182, 255], (y * width + x) * 4);
   return encodePng({ width, height, rgba });
 }
+
+test('reviews an earlier assembly before downloading a native replacement', async ({ page }) => {
+  await page.goto('/decomposer.html');
+  await page.getByLabel('Import images').setInputFiles({ name: 'replace.png', mimeType: 'image/png', buffer: fixture() });
+  await expect(page.getByRole('status')).toContainText('Automatic first pass found 2 editable regions.');
+  const firstDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export', exact: true }).click();
+  const first = await firstDownload, firstBytes = await readFile(await first.path());
+  const firstAssembly = decodeAssemblyBytes(firstBytes);
+  await page.locator('.left-pane .scroll-list').first().locator('.row').first().click();
+  const name = page.getByLabel('Part name');
+  await name.fill('Revised arm'); await name.blur();
+  await expect(page.getByRole('status')).toContainText('part.rename saved');
+  await page.getByLabel('Review existing .hyproj').setInputFiles({ name: first.suggestedFilename(), mimeType: 'application/zip', buffer: firstBytes });
+  const impact = page.getByLabel('Assembly replacement impact');
+  await expect(impact).toContainText('Elements:');
+  await expect(impact).toContainText('SHA-256:');
+  const replacementDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Download replacement .hyproj' }).click();
+  const replacement = await replacementDownload;
+  expect(replacement.suggestedFilename()).toBe(first.suggestedFilename());
+  const updated = decodeAssemblyBytes(await readFile(await replacement.path()));
+  expect(updated.elements.find(item => item.name === 'Revised arm')).toBeDefined();
+  expect(firstAssembly.elements.some(item => item.id === updated.elements.find(element => element.name === 'Revised arm')?.id)).toBe(true);
+  expect(firstAssembly.elements.some(item => item.name === 'Revised arm')).toBe(false);
+  await expect(page.getByRole('status')).toContainText('selected source file remains available for recovery');
+});
 
 test('JPEG and WebP import in the analysis worker and reopen with canonical pixels', async ({ page }) => {
   await page.goto('/decomposer.html');

@@ -150,6 +150,8 @@ self.onmessage = async (event: MessageEvent<Request>) => {
     else if (type === 'export') {
       const exported = await requireSession().exportHyde(payload.options as HydeDecompositionExportOptions);
       result = exported;
+    } else if (type === 'replacement.plan') {
+      result = await requireSession().planAssemblyReplacement(payload.bytes as Uint8Array);
     } else if (type === 'source') {
       const image = requireSession().sourcePixelsFor(payload.id);
       const bytes = encodePng(image);

@@ -15,6 +15,21 @@ export interface HydeDecompositionExportOptions {
   duration?: number;
   /** Explicit fallback only for source holes that exceed native contour fitting limits. */
   allowHoleApproximation?: boolean;
+  /** Exact prior .hyproj bytes selected for an explicit replacement. */
+  targetAssemblyBytes?: Uint8Array;
+  expectedTargetFingerprint?: string;
+  replaceExisting?: boolean;
+}
+
+export interface HydeAssemblyReplacementImpact {
+  targetFingerprint: string;
+  targetName: string;
+  replacedIds: string[];
+  addedIds: string[];
+  removedIds: string[];
+  replacedAssetIds: string[];
+  addedAssetIds: string[];
+  removedAssetIds: string[];
 }
 
 export interface HydeDecompositionExport {
@@ -22,6 +37,7 @@ export interface HydeDecompositionExport {
   warnings: DecompositionDiagnostic[];
   mapping: HydeExportMapping;
   project: Project;
+  replacementImpact?: HydeAssemblyReplacementImpact;
 }
 
 function activeRegions(document: DecompositionDocumentV1): RegionRecord[] {
@@ -30,6 +46,29 @@ function activeRegions(document: DecompositionDocumentV1): RegionRecord[] {
   return document.regions.filter(region => region.sourceId === primary.id && region.generationStatus !== 'historical' && !region.suppressed);
 }
 function regionPath(region: RegionRecord): ShapePath { return region.geometry.manualPath ?? region.geometry.generatedPath; }
+
+export async function planNativeAssemblyReplacement(document: DecompositionDocumentV1, masks: ReadonlyMap<string, RegionMask>, targetBytes: Uint8Array): Promise<HydeAssemblyReplacementImpact> {
+  const target = decodeAssemblyBytes(targetBytes);
+  const rootId = `hc_${document.id}_root`;
+  if (!target.elements.some(element => element.id === rootId && element.kind === 'group'))
+    throw new Error('TARGET_MISMATCH: Assembly does not contain this decomposition document root.');
+  const active = activeRegions(document), activeIds = new Set(active.map(region => region.id));
+  const nextIds = new Set([rootId,
+    ...document.parts.filter(part => part.regionIds.some(id => activeIds.has(id))).map(part => `hc_${part.id}`),
+    ...active.map(region => `hc_${region.id}`)]);
+  const previousIds = new Set(target.elements.map(element => element.id));
+  const nextAssets = new Set(active.filter(region => region.alignedTexture || region.geometry.texture === 'source-crop' ||
+    region.holeCount > (regionPath(region).holes?.length ?? 0) || Boolean(masks.get(region.maskId)?.alpha)).map(region => `hc_${region.id}_texture`));
+  const previousAssets = new Set(target.assets.map(asset => asset.id));
+  const sorted = (items: Iterable<string>) => [...items].sort();
+  return { targetFingerprint: await sha256(targetBytes), targetName: target.name,
+    replacedIds: sorted([...nextIds].filter(id => previousIds.has(id))),
+    addedIds: sorted([...nextIds].filter(id => !previousIds.has(id))),
+    removedIds: sorted([...previousIds].filter(id => !nextIds.has(id))),
+    replacedAssetIds: sorted([...nextAssets].filter(id => previousAssets.has(id))),
+    addedAssetIds: sorted([...nextAssets].filter(id => !previousAssets.has(id))),
+    removedAssetIds: sorted([...previousAssets].filter(id => !nextAssets.has(id))) };
+}
 
 /** The native asset and the guided inspector preview share this exact crop. */
 export function renderRegionTextureCrop(region: RegionRecord, mask: RegionMask, image: DecodedImage, images: ReadonlyMap<string, DecodedImage>): Uint8Array {
@@ -121,6 +160,16 @@ function orderedRegions(document: DecompositionDocumentV1, regions: RegionRecord
 
 /** The only native conversion path is a typed SDK transaction and canonical export. */
 export async function exportNativeDecomposition(document: DecompositionDocumentV1, masks: Map<string, RegionMask>, images: Map<string, DecodedImage>, options: HydeDecompositionExportOptions): Promise<HydeDecompositionExport> {
+  let replacementImpact: HydeAssemblyReplacementImpact | undefined;
+  if (options.targetAssemblyBytes !== undefined || options.expectedTargetFingerprint !== undefined || options.replaceExisting !== undefined) {
+    if (options.format !== 'hyproj' || !(options.targetAssemblyBytes instanceof Uint8Array))
+      throw new Error('INVALID_ARGUMENT: Assembly replacement requires .hyproj target bytes.');
+    replacementImpact = await planNativeAssemblyReplacement(document, masks, options.targetAssemblyBytes);
+    if (options.expectedTargetFingerprint !== replacementImpact.targetFingerprint)
+      throw new Error('TARGET_CHANGED: Target assembly fingerprint differs from the reviewed bytes.');
+    if (options.replaceExisting !== true)
+      throw new Error('REPLACEMENT_REQUIRES_CONFIRMATION: Review the replacement impact and explicitly allow replacement.');
+  }
   const primary = document.sources.find(source => source.role === 'primary');
   if (!primary) throw new Error('No primary reference exists.');
   const image = images.get(primary.id);
@@ -210,5 +259,5 @@ export async function exportNativeDecomposition(document: DecompositionDocumentV
     options: { name: projectName, width, height, duration, allowHoleApproximation: Boolean(options.allowHoleApproximation) },
     warnings: warnings.map(item => item.code), sourceFingerprint, outputFingerprint: await sha256(bytes),
   };
-  return { bytes, warnings, mapping, project: sdk.snapshot() };
+  return { bytes, warnings, mapping, project: sdk.snapshot(), ...(replacementImpact ? { replacementImpact } : {}) };
 }
