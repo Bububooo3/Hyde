@@ -344,6 +344,11 @@ test('large import shows a bounded provisional pyramid preview before committing
       return create(width, height);
     }) as typeof context.createImageData;
   });
+  await page.locator('.canvas-card').last().evaluate(card => { card.scrollTop = 0; });
+  await expect(page.locator('.canvas-card canvas').last()).toHaveAttribute('data-tile-y', '0');
+  await page.locator('.canvas-card').last().evaluate(card => { card.scrollTop = 300; });
+  await expect(page.locator('.canvas-card canvas').last()).toHaveAttribute('data-tile-y', '256');
+  expect(await page.evaluate(() => (window as Window & { rasterAllocations?: number }).rasterAllocations)).toBe(0);
   const tileBox = await page.locator('.canvas-card canvas').last().boundingBox();
   expect(tileBox).toBeTruthy();
   await page.mouse.click(tileBox!.x + 1500 - 1024, tileBox!.y + 500 - 256);

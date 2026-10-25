@@ -157,7 +157,8 @@ export default function App() {
   const sourcePixelsRef = useRef<Uint8ClampedArray | undefined>(undefined);
   const originalCanvas = useRef<HTMLCanvasElement>(null), reconstructionCanvas = useRef<HTMLCanvasElement>(null);
   const reconstructionRaster = useRef<{ document: DecompositionDocumentV1 | undefined; masks: Map<string, RegionMask>;
-    pixels: Uint8ClampedArray; sourceId: string; scale: number; tile: CanvasTile; isolateId: string | undefined; image: ImageData } | undefined>(undefined);
+    pixels: Uint8ClampedArray; sourceId: string; scale: number; isolateId: string | undefined;
+    tiles: { tile: CanvasTile; image: ImageData }[] } | undefined>(undefined);
   const [documentModel, setDocumentModel] = useState<DecompositionDocumentV1>();
   const [revision, setRevision] = useState(0), [selectedSourceId, setSelectedSourceId] = useState<string>();
   const [masks, setMasks] = useState<Map<string, RegionMask>>(new Map());
@@ -630,13 +631,19 @@ export default function App() {
     const canvas = reconstructionCanvas.current; if (!canvas) return;
     canvas.width = displayWidth; canvas.height = displayHeight;
     const context = canvas.getContext('2d'); if (!context) return;
-    // Keep one bounded base tile; path handles and review overlays can redraw without rewalking every region mask.
+    // Keep a few bounded base tiles so backscroll and overlay changes avoid rewalking every region mask.
     const isolateId = isolate ? selectedRegionId : undefined;
-    const cache = reconstructionRaster.current;
-    const cached = cache && cache.document === documentModel && cache.masks === masks && cache.pixels === rgba && cache.sourceId === source.id &&
-      cache.scale === displayScale && cache.isolateId === isolateId && cache.tile.x === reconstructionWindow.x &&
-      cache.tile.y === reconstructionWindow.y && cache.tile.width === reconstructionWindow.width && cache.tile.height === reconstructionWindow.height;
-    const imageData = cached ? cache.image : context.createImageData(displayWidth, displayHeight);
+    let cache = reconstructionRaster.current;
+    if (!cache || cache.document !== documentModel || cache.masks !== masks || cache.pixels !== rgba || cache.sourceId !== source.id ||
+      cache.scale !== displayScale || cache.isolateId !== isolateId) {
+      cache = { document: documentModel, masks, pixels: rgba, sourceId: source.id, scale: displayScale, isolateId, tiles: [] };
+      reconstructionRaster.current = cache;
+    }
+    const cachedIndex = cache.tiles.findIndex(entry => entry.tile.x === reconstructionWindow.x && entry.tile.y === reconstructionWindow.y &&
+      entry.tile.width === reconstructionWindow.width && entry.tile.height === reconstructionWindow.height);
+    const cached = cachedIndex >= 0;
+    const imageData = cached ? cache.tiles[cachedIndex].image : context.createImageData(displayWidth, displayHeight);
+    if (cached && cachedIndex !== cache.tiles.length - 1) cache.tiles.push(cache.tiles.splice(cachedIndex, 1)[0]);
     if (!cached) {
       const ordered = [...visibleRegions].sort((a, b) => (documentModel?.parts.find(part => part.id === a.partId)?.zOrder ?? 0) - (documentModel?.parts.find(part => part.id === b.partId)?.zOrder ?? 0));
       for (const region of ordered) {
@@ -686,8 +693,8 @@ export default function App() {
           imageData.data[index + 3] = Math.round(combined * 255);
       }
       }
-      reconstructionRaster.current = { document: documentModel, masks, pixels: rgba, sourceId: source.id, scale: displayScale,
-        tile: reconstructionWindow, isolateId, image: imageData };
+      cache.tiles.push({ tile: reconstructionWindow, image: imageData });
+      if (cache.tiles.length > 3) cache.tiles.shift();
     }
     context.putImageData(imageData, 0, 0);
     context.setTransform(1 / displayScale, 0, 0, 1 / displayScale, -reconstructionWindow.x / displayScale, -reconstructionWindow.y / displayScale);
