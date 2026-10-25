@@ -239,10 +239,12 @@ async function dispatch(args: string[], io: Output): Promise<{ command: string; 
     case 'assembly inspect': {
       allowed(flags, ['json', 'limit', 'cursor']); noExtra(positionals, 3);
       const assembly = await assemblyFrom(input(positionals, 2, 'Assembly archive'));
-      const limit = Math.min(100, Math.max(1, numeric(flags, 'limit', 25)!));
-      const cursor = Math.max(0, Math.floor(numeric(flags, 'cursor', 0)!));
+      const limit = inspectInteger(flags, 'limit', 1, 100) ?? 25;
+      const cursor = inspectInteger(flags, 'cursor', 0, Number.MAX_SAFE_INTEGER) ?? 0;
       const elements = [...assembly.elements].sort((a, b) => a.id.localeCompare(b.id));
-      return { command: key, result: bounded({ ...assemblySummary(assembly), items: elements.slice(cursor, cursor + limit).map(({ tracks, assemblyClips, clipInstances, motionBehaviors, shapePath, ...item }) => ({ ...item, trackCount: tracks.length, clipCount: assemblyClips?.length ?? 0, instanceCount: clipInstances?.length ?? 0, motionCount: motionBehaviors?.length ?? 0, pathPointCount: shapePath?.points.length ?? 0 })), nextCursor: cursor + limit < elements.length ? cursor + limit : undefined, assetInventory: assembly.assets.map(({ dataUrl: _data, ...asset }) => asset) }) };
+      const assets = [...assembly.assets].sort((a, b) => a.id.localeCompare(b.id));
+      return { command: key, result: bounded({ ...assemblySummary(assembly), items: elements.slice(cursor, cursor + limit).map(({ tracks, assemblyClips, clipInstances, motionBehaviors, shapePath, ...item }) => ({ ...item, trackCount: tracks.length, clipCount: assemblyClips?.length ?? 0, instanceCount: clipInstances?.length ?? 0, motionCount: motionBehaviors?.length ?? 0, pathPointCount: shapePath?.points.length ?? 0 })), nextCursor: cursor + limit < elements.length ? cursor + limit : undefined,
+        assetInventory: assets.slice(cursor, cursor + limit).map(({ dataUrl: _data, ...asset }) => asset), nextAssetCursor: cursor + limit < assets.length ? cursor + limit : undefined }) };
     }
     case 'assembly validate': {
       allowed(flags, ['json']); noExtra(positionals, 3);

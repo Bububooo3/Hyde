@@ -2,7 +2,7 @@
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { decodeAssemblyBytes, decodeProjectBytes } from './archive';
+import { decodeAssemblyBytes, decodeProjectBytes, encodeAssemblyBytes } from './archive';
 import { runCli } from './cli';
 
 const created: string[] = [];
@@ -50,6 +50,20 @@ describe('Hyde Node CLI workflow', () => {
     expect((await call('assembly', 'export', revised, '--root', body, '--output', assembly)).code).toBe(0);
     expect((await call('assembly', 'validate', assembly)).stdout.result.elements).toBe(2);
     expect((await call('assembly', 'inspect', assembly)).stdout.result.items).toHaveLength(2);
+    const pagedAssembly = decodeAssemblyBytes(await readFile(assembly));
+    const assetBytes = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lXcAAAAASUVORK5CYII=';
+    pagedAssembly.assets.push(...['z', 'a', 'm'].map(id => ({ id, name: `${id}.png`, kind: 'image' as const, mime: 'image/png', dataUrl: assetBytes })));
+    const assetAssembly = join(folder, 'assets.hyproj');
+    await writeFile(assetAssembly, encodeAssemblyBytes(pagedAssembly));
+    const firstPage = (await call('assembly', 'inspect', assetAssembly, '--limit', '2')).stdout.result;
+    const secondPage = (await call('assembly', 'inspect', assetAssembly, '--limit', '2', '--cursor', '2')).stdout.result;
+    expect(firstPage.assetInventory.map((asset: { id: string }) => asset.id)).toEqual(['a', 'm']);
+    expect(firstPage.nextAssetCursor).toBe(2);
+    expect(secondPage.assetInventory.map((asset: { id: string }) => asset.id)).toEqual(['z']);
+    expect(secondPage.nextAssetCursor).toBeUndefined();
+    expect(JSON.stringify(firstPage)).not.toContain('data:image');
+    expect((await call('assembly', 'inspect', assetAssembly, '--limit', '0')).code).toBe(2);
+    expect((await call('assembly', 'inspect', assetAssembly, '--cursor', '1.5')).code).toBe(2);
     expect(decodeAssemblyBytes(await readFile(assembly)).elements).toHaveLength(2);
     expect((await call('assembly', 'import', original, assembly, '--output', imported)).code).toBe(0);
     const placed = decodeProjectBytes(await readFile(imported));
