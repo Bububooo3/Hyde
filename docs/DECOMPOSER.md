@@ -2,7 +2,7 @@
 
 The standalone `apps/decomposer/` workspace builds with `npm run build -w @hyde/decomposer` and previews with `npx vite preview --config vite.decomposer.config.ts`. It runs locally, uses a worker for deterministic image analysis, and needs no account, model weights or hosted service. Open `decomposer.html` in the preview server, import PNG/JPEG/WebP references, analyze, correct regions and parts, compare the actual Hyde render, and save the recoverable `.hydecomp` working document. Native `.hyde` projects and `.hyproj` assemblies are emitted through Hyde's SDK command transactions and archive codec.
 
-Diagnostic cards with a source, part, or region reference can be clicked to open the relevant image, select its editable region, and focus the affected bounds at pixel zoom. Warnings without a source location remain informational cards.
+Diagnostic cards with a source, part, or region reference can be clicked to open the relevant image, select its editable region, and focus the affected bounds at pixel zoom. Warnings without a source location remain informational cards. At 1×–8× pixel zoom, overlapping guided soft masks use source-over alpha blending in the reconstruction canvas, as they do in Fit view.
 
 ## Scriptable workflow
 

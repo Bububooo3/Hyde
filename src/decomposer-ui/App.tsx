@@ -643,9 +643,15 @@ export default function App() {
             const x = left - region.bounds.x, y = top - region.bounds.y;
             if (x < 0 || y < 0 || x >= mask.width || y >= mask.height || !mask.bytes[y * mask.width + x]) continue;
             const index = ((row - reconstructionWindow.y) * displayWidth + column - reconstructionWindow.x) * 4, sourceIndex = (top * source.width + left) * 4;
-            if (region.geometry.texture === 'source-crop') imageData.data.set(rgba.subarray(sourceIndex, sourceIndex + 4), index);
-            else imageData.data.set([...rgb, rgba[sourceIndex + 3]], index);
-            imageData.data[index + 3] = Math.round((rgba[sourceIndex + 3] || 255) * (mask.alpha?.[y * mask.width + x] ?? 255) / 255);
+            const incoming = ((rgba[sourceIndex + 3] || 255) * (mask.alpha?.[y * mask.width + x] ?? 255)) / (255 * 255);
+            if (!incoming) continue;
+            const previous = imageData.data[index + 3] / 255, combined = incoming + previous * (1 - incoming);
+            const colorSource = region.geometry.texture === 'source-crop' ? rgba : rgb;
+            const offset = region.geometry.texture === 'source-crop' ? sourceIndex : 0;
+            for (let channel = 0; channel < 3; channel++)
+              imageData.data[index + channel] = Math.round((colorSource[offset + channel] * incoming +
+                imageData.data[index + channel] * previous * (1 - incoming)) / combined);
+            imageData.data[index + 3] = Math.round(combined * 255);
             continue;
           }
           let alpha = 0, red = 0, green = 0, blue = 0;

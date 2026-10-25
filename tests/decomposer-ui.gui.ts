@@ -96,6 +96,47 @@ test('region diagnostics switch references and select the affected editable regi
   await expect(page.locator('.left-pane .scroll-list').first().locator('.row.selected')).toHaveCount(1);
 });
 
+test('1× reconstruction blends overlapping soft region masks', async ({ page }) => {
+  const session = await DecompositionSession.importSources([{ name: 'soft-overlap.png', mime: 'image/png', bytes: fixture() }]);
+  await session.analyze();
+  const doc = session.snapshot();
+  expect(doc.regions).toHaveLength(2);
+  const lower = doc.regions[0], upper = doc.regions[1], lowerMask = session.maskFor(lower.maskId), upperMask = session.maskFor(upper.maskId);
+  const local = lowerMask.bytes.findIndex((value, index) => {
+    if (!value) return false;
+    const px = lower.bounds.x + index % lowerMask.width, py = lower.bounds.y + Math.floor(index / lowerMask.width);
+    return [[px - 1, py], [px + 1, py], [px, py - 1], [px, py + 1]].some(([nx, ny]) =>
+      nx >= upper.bounds.x && ny >= upper.bounds.y && nx < upper.bounds.x + upperMask.width && ny < upper.bounds.y + upperMask.height &&
+      upperMask.bytes[(ny - upper.bounds.y) * upperMask.width + nx - upper.bounds.x]);
+  });
+  expect(local).toBeGreaterThanOrEqual(0);
+  const x = lower.bounds.x + local % lowerMask.width, y = lower.bounds.y + Math.floor(local / lowerMask.width);
+  const width = doc.sources[0].width, height = doc.sources[0].height;
+  const bytes = new Uint8Array(width * height), alpha = new Uint8Array(width * height);
+  for (let row = 0; row < upperMask.height; row++) for (let column = 0; column < upperMask.width; column++) {
+    const old = row * upperMask.width + column, at = (upper.bounds.y + row) * width + upper.bounds.x + column;
+    bytes[at] = upperMask.bytes[old]; alpha[at] = upperMask.bytes[old] ? 255 : 0;
+  }
+  bytes[y * width + x] = 1; alpha[y * width + x] = 128;
+  const handle = session.stageMask({ width, height, bytes, alpha });
+  const edited = await session.execute({ expectedRevision: session.revision, edits: [
+    { op: 'region.refineMask', regionId: upper.id, handle, bounds: { x: 0, y: 0, width, height } },
+  ] });
+  expect(edited.ok, JSON.stringify(edited)).toBe(true);
+  const saved = await session.saveDocument(); await session.close();
+  await page.goto('/decomposer.html');
+  await page.getByLabel('Open .hydecomp').setInputFiles({ name: 'soft-overlap.hydecomp', mimeType: 'application/zip', buffer: Buffer.from(saved) });
+  await expect(page.getByRole('status')).toContainText('Opened soft-overlap.hydecomp');
+  await page.getByRole('button', { name: 'Reconstruction', exact: true }).click();
+  await page.getByLabel('Canvas zoom').selectOption('1');
+  const pixel = await page.locator('canvas.interactive-canvas').evaluate((canvas, position) =>
+    [...(canvas as HTMLCanvasElement).getContext('2d')!.getImageData(position.x, position.y, 1, 1).data], { x, y });
+  const bottom = [1, 3, 5].map(at => parseInt(lower.color.slice(at, at + 2), 16));
+  const top = [1, 3, 5].map(at => parseInt(upper.color.slice(at, at + 2), 16));
+  for (let channel = 0; channel < 3; channel++) expect(pixel[channel]).toBeCloseTo((bottom[channel] * 127 + top[channel] * 128) / 255, 0);
+  expect(pixel[3]).toBe(255);
+});
+
 test('JPEG and WebP import in the analysis worker and reopen with canonical pixels', async ({ page }) => {
   await page.goto('/decomposer.html');
   const png = [...fixture()];
