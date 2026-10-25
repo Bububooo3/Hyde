@@ -172,7 +172,8 @@ test('JPEG and WebP import in the analysis worker and reopen with canonical pixe
   }
 });
 
-test('EXIF-rotated JPEG stores oriented canonical pixels and untouched original bytes', async ({ page }) => {
+test('EXIF-oriented JPEGs keep original bytes while native geometry uses oriented pixels', async ({ page }) => {
+  test.setTimeout(90_000);
   await page.goto('/decomposer.html');
   const jpeg = Uint8Array.from(await page.evaluate(async () => {
     const canvas = document.createElement('canvas'); canvas.width = 24; canvas.height = 16;
@@ -183,28 +184,39 @@ test('EXIF-rotated JPEG stores oriented canonical pixels and untouched original 
     const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob(value => value ? resolve(value) : reject(new Error('JPEG encoding failed')), 'image/jpeg', 1));
     return [...new Uint8Array(await blob.arrayBuffer())];
   }));
-  const exif = Uint8Array.from([0xff, 0xe1, 0, 0x22, 0x45, 0x78, 0x69, 0x66, 0, 0,
-    0x49, 0x49, 0x2a, 0, 8, 0, 0, 0, 1, 0, 0x12, 1, 3, 0, 1, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0]);
-  const oriented = Uint8Array.from([...jpeg.subarray(0, 2), ...exif, ...jpeg.subarray(2)]);
-  await page.getByLabel('Import images').setInputFiles({ name: 'rotated.jpg', mimeType: 'image/jpeg', buffer: Buffer.from(oriented) });
-  await expect(page.getByRole('status')).toContainText('Automatic first pass found', { timeout: 30_000 });
-  const download = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Save source' }).click();
-  const documentBytes = new Uint8Array(await readFile(await (await download).path()));
-  const saved = await decodeDecompositionDocument(documentBytes);
-  const source = saved.document.sources[0], rgba = saved.pixels.get(source.id)!;
-  expect([source.width, source.height]).toEqual([16, 24]);
-  expect(saved.sourceBytes.get(source.id)).toEqual(oriented);
-  const sample = (x: number, y: number) => [...rgba.subarray((y * source.width + x) * 4, (y * source.width + x) * 4 + 3)];
-  expect(sample(3, 3)[2]).toBeGreaterThan(180); // original bottom-left blue rotates to top-left
-  expect(sample(12, 3)[0]).toBeGreaterThan(180); // original top-left red rotates to top-right
-  expect(sample(3, 20)[0]).toBeGreaterThan(180); // original bottom-right yellow rotates to bottom-left
-  expect(sample(12, 20)[1]).toBeGreaterThan(180); // original top-right green rotates to bottom-right
-  const reopened = await DecompositionSession.openDocument(documentBytes);
-  const native = await reopened.exportHyde({ format: 'hyde' });
-  expect([native.project.width, native.project.height]).toEqual([16, 24]);
-  expect(native.project.elements.filter(item => item.shapePath).length).toBeGreaterThan(1);
-  await reopened.close();
+  const colors = { red: [255, 0, 0], green: [0, 255, 0], blue: [0, 0, 255], yellow: [255, 255, 0] } as const;
+  const cases = [
+    { orientation: 2, size: [24, 16], corners: ['green', 'red', 'yellow', 'blue'] },
+    { orientation: 3, size: [24, 16], corners: ['yellow', 'blue', 'green', 'red'] },
+    { orientation: 4, size: [24, 16], corners: ['blue', 'yellow', 'red', 'green'] },
+    { orientation: 5, size: [16, 24], corners: ['red', 'blue', 'green', 'yellow'] },
+    { orientation: 6, size: [16, 24], corners: ['blue', 'red', 'yellow', 'green'] },
+    { orientation: 7, size: [16, 24], corners: ['yellow', 'green', 'blue', 'red'] },
+    { orientation: 8, size: [16, 24], corners: ['green', 'yellow', 'red', 'blue'] },
+  ] as const;
+  for (const entry of cases) {
+    const exif = Uint8Array.from([0xff, 0xe1, 0, 0x22, 0x45, 0x78, 0x69, 0x66, 0, 0,
+      0x49, 0x49, 0x2a, 0, 8, 0, 0, 0, 1, 0, 0x12, 1, 3, 0, 1, 0, 0, 0, entry.orientation, 0, 0, 0, 0, 0, 0]);
+    const oriented = Uint8Array.from([...jpeg.subarray(0, 2), ...exif, ...jpeg.subarray(2)]);
+    await page.getByLabel('Import images').setInputFiles({ name: `orientation-${entry.orientation}.jpg`, mimeType: 'image/jpeg', buffer: Buffer.from(oriented) });
+    await expect(page.getByRole('status')).toContainText('Automatic first pass found', { timeout: 30_000 });
+    const download = page.waitForEvent('download');
+    await page.getByRole('button', { name: 'Save source' }).click();
+    const documentBytes = new Uint8Array(await readFile(await (await download).path()));
+    const saved = await decodeDecompositionDocument(documentBytes);
+    const source = saved.document.sources[0], rgba = saved.pixels.get(source.id)!;
+    expect([source.width, source.height], `EXIF ${entry.orientation} dimensions`).toEqual(entry.size);
+    expect(saved.sourceBytes.get(source.id)).toEqual(oriented);
+    const sample = (x: number, y: number) => [...rgba.subarray((y * source.width + x) * 4, (y * source.width + x) * 4 + 3)];
+    const corners = [sample(3, 3), sample(source.width - 4, 3), sample(3, source.height - 4), sample(source.width - 4, source.height - 4)];
+    for (let index = 0; index < 4; index++) for (let channel = 0; channel < 3; channel++)
+      expect(Math.abs(corners[index][channel] - colors[entry.corners[index]][channel]), `EXIF ${entry.orientation} corner ${index} channel ${channel}`).toBeLessThan(60);
+    const reopened = await DecompositionSession.openDocument(documentBytes);
+    const native = await reopened.exportHyde({ format: 'hyde' });
+    expect([native.project.width, native.project.height]).toEqual(entry.size);
+    expect(native.project.elements.filter(item => item.shapePath).length).toBeGreaterThan(1);
+    await reopened.close();
+  }
 });
 
 test('inspector shifts a whole contour in source pixels and undoes the pinned edit', async ({ page }) => {
