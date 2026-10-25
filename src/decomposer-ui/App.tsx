@@ -85,14 +85,6 @@ function drawRegenerationContour(ctx: CanvasRenderingContext2D, item: Regenerati
   ctx.restore();
 }
 
-function sourcePixels(image: HTMLImageElement, width: number, height: number): Uint8ClampedArray {
-  const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height;
-  const context = canvas.getContext('2d', { willReadFrequently: true });
-  if (!context) throw new Error('2D canvas is unavailable.');
-  context.drawImage(image, 0, 0, width, height);
-  return context.getImageData(0, 0, width, height).data;
-}
-
 function paintDisc(mask: RegionMask, bounds: RegionRecord['bounds'], x: number, y: number, radius: number, value: number, hardness: number): void {
   const left = Math.max(0, Math.floor(x - radius - bounds.x)), right = Math.min(mask.width - 1, Math.ceil(x + radius - bounds.x));
   const top = Math.max(0, Math.floor(y - radius - bounds.y)), bottom = Math.min(mask.height - 1, Math.ceil(y + radius - bounds.y));
@@ -234,7 +226,7 @@ export default function App() {
     if (!primarySource || !source || source.role === 'primary') return;
     let canceled = false, url: string | undefined;
     void client.current.call<{ bytes: Uint8Array }>('source', { id: primarySource.id }).then(response => {
-      url = URL.createObjectURL(new Blob([response.bytes as BlobPart], { type: primarySource.mime }));
+      url = URL.createObjectURL(new Blob([response.bytes as BlobPart], { type: 'image/png' }));
       if (canceled) URL.revokeObjectURL(url); else setPrimaryComparisonUrl(url);
     }).catch(() => { if (!canceled) setPrimaryComparisonUrl(undefined); });
     return () => { canceled = true; if (url) URL.revokeObjectURL(url); };
@@ -261,11 +253,11 @@ export default function App() {
 
   const readSource = useCallback(async (sourceId: string, doc: DecompositionDocumentV1) => {
     const metadata = doc.sources.find(item => item.id === sourceId); if (!metadata) return;
-    const response = await client.current.call<{ bytes: Uint8Array }>('source', { id: sourceId });
-    const url = URL.createObjectURL(new Blob([response.bytes as BlobPart], { type: metadata.mime }));
+    const response = await client.current.call<{ bytes: Uint8Array; rgba: Uint8Array }>('source', { id: sourceId, pixels: true });
+    const url = URL.createObjectURL(new Blob([response.bytes as BlobPart], { type: 'image/png' }));
     const image = new Image(); image.src = url; await image.decode();
     if (sourceUrl.current) URL.revokeObjectURL(sourceUrl.current);
-    sourceUrl.current = url; sourceImage.current = image; sourcePixelsRef.current = sourcePixels(image, metadata.width, metadata.height);
+    sourceUrl.current = url; sourceImage.current = image; sourcePixelsRef.current = new Uint8ClampedArray(response.rgba.buffer);
     setLoadedSourceId(sourceId);
     setRenderVersion(value => value + 1);
   }, []);

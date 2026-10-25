@@ -1,5 +1,7 @@
 # Hyde capability matrix
 
+Latest Decomposer verification: JPEG and WebP import in the worker, create editable regions, and save/reopen `.hydecomp` with original bytes and canonical RGBA intact. The visible original canvas samples those same canonical pixels. TypeScript, the independent build, focused Chrome import/reopen, and 1536×1024 import/zoom pass.
+
 ## Agent SDK and Image Decomposer handoff
 
 Work now lives in the existing `C:\Users\rscot\Downloads\Story-Editor-Project` checkout. Merge `fc00b02` joined the implementation branch (18 local commits through `84f5f75`) with the checkout's newer deployment/editor history at `961b884`, preserving both parents. The two user specifications are preserved exactly in [docs/specs](specs), with their requirement inventory in [ACCEPTANCE.md](ACCEPTANCE.md). The older Story Studio matrix below remains its own verified baseline.

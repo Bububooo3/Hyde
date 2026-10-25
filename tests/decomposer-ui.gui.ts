@@ -45,8 +45,13 @@ test('JPEG and WebP import in the analysis worker and reopen with canonical pixe
     await page.getByRole('button', { name: 'Save source' }).click();
     const saved = await decodeDecompositionDocument(new Uint8Array(await readFile(await (await saving).path())));
     expect(saved.document.sources[0]).toMatchObject({ mime, width: 40, height: 32 });
+    expect(saved.sourceBytes.get(saved.document.sources[0].id)).toEqual(new Uint8Array(encoded));
     const pixels = saved.pixels.get(saved.document.sources[0].id)!;
     expect(pixels.length).toBe(40 * 32 * 4);
+    await page.getByRole('button', { name: 'Original', exact: true }).click();
+    const displayed = await page.locator('.canvas-card canvas').first().evaluate(canvas =>
+      [...(canvas as HTMLCanvasElement).getContext('2d')!.getImageData(10, 12, 1, 1).data]);
+    expect(displayed).toEqual([...pixels.subarray((12 * 40 + 10) * 4, (12 * 40 + 10) * 4 + 4)]);
     await page.getByLabel('Open .hydecomp').setInputFiles({ name: `two-piece.${extension}.hydecomp`, mimeType: 'application/zip', buffer: Buffer.from(await readFile(await (await saving).path())) });
     await expect(page.locator('.left-pane .scroll-list').first().locator('.row')).not.toHaveCount(0);
     const reopening = page.waitForEvent('download');

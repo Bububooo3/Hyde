@@ -150,7 +150,13 @@ self.onmessage = async (event: MessageEvent<Request>) => {
     else if (type === 'export') {
       const exported = await requireSession().exportHyde(payload.options as HydeDecompositionExportOptions);
       result = exported;
-    } else if (type === 'source') result = { bytes: requireSession().sourceBytesFor(payload.id) };
+    } else if (type === 'source') {
+      const image = requireSession().sourcePixelsFor(payload.id);
+      const bytes = encodePng(image);
+      result = { bytes, ...(payload.pixels ? { rgba: image.rgba } : {}) };
+      transfers.push(bytes.buffer);
+      if (payload.pixels) transfers.push(image.rgba.buffer);
+    }
     else if (type === 'region.texturePreview') {
       const running = requireSession(), doc = running.snapshot();
       const region = doc.regions.find(item => item.id === payload.id && active(item) && item.alignedTexture);
