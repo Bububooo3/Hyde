@@ -229,6 +229,8 @@ const operationFields: Record<string, Record<string, Schema>> = {
   'assembly.setLimits': { min: nullable(number), max: nullable(number) },
   'assembly.reparent': { parentId: nullable(ref) },
   'caption.update': { patch: object({ text, start: nonnegative, end: nonnegative, sceneId: ref }) },
+  'asset.add': { duration: { type: 'number', exclusiveMinimum: 0, maximum: 86_400 } },
+  'asset.replace': { duration: { type: 'number', exclusiveMinimum: 0, maximum: 86_400 } },
   'asset.removeUnused': { ids: { ...array(ref, 1, 1000), uniqueItems: true } },
   'shape.setPrimitive': { kind: enumeration('rectangle', 'ellipse', 'polygon'), points: array(point, 3, 4096) },
   'media.setFill': { assetId: nullable(ref) },

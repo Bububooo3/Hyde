@@ -24,6 +24,8 @@ describe('Hyde v1 command JSON Schema', () => {
   it('states creation, geometry, media, timeline, and staging requirements with useful value types', () => {
     expect(args('scene.create').required).toEqual(['name', 'start', 'duration']);
     expect(args('scene.create').properties.duration).toMatchObject({ type: 'number', exclusiveMinimum: 0 });
+    expect(args('asset.add').properties.duration).toMatchObject({ type: 'number', exclusiveMinimum: 0, maximum: 86_400 });
+    expect(args('asset.replace').properties.duration).toMatchObject({ type: 'number', exclusiveMinimum: 0, maximum: 86_400 });
     expect(args('element.create').properties.kind.enum).toContain('group');
     expect((args('element.create').properties.properties as Shape).properties.width).toMatchObject({ minimum: 0 });
     expect(args('element.setTransform').properties.space.enum).toEqual(['local', 'world']);

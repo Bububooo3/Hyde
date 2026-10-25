@@ -34,7 +34,7 @@ export type CatalogCommand = { clientCommandId?: string } & (
   | { op: 'caption.update'; args: { id: Ref; patch: CaptionPatch } }
   | { op: 'caption.delete'; args: { id: Ref } }
   | { op: 'asset.rename'; args: { id: Ref; name: string } }
-  | { op: 'asset.replace'; args: { id: Ref; handle: string; name?: string } }
+  | { op: 'asset.replace'; args: { id: Ref; handle: string; name?: string; duration?: number } }
   | { op: 'asset.removeUnused'; args: { ids?: Ref[] } }
 );
 
@@ -61,7 +61,7 @@ export const CATALOG_COMMAND_KEYS = {
   'caption.update': ['id', 'patch'],
   'caption.delete': ['id'],
   'asset.rename': ['id', 'name'],
-  'asset.replace': ['id', 'handle', 'name'],
+  'asset.replace': ['id', 'handle', 'name', 'duration'],
   'asset.removeUnused': ['ids'],
 } as const;
 export const CATALOG_OPERATIONS = Object.keys(CATALOG_COMMAND_KEYS) as Array<keyof typeof CATALOG_COMMAND_KEYS>;
@@ -365,7 +365,11 @@ export function applyCatalogCommand(project: Project, command: CatalogCommand, c
       const staged = context.stagedAsset(args.handle);
       if (!staged) fail('Asset handle does not exist or has already been consumed.', 'ASSET_MISSING');
       if (staged.kind !== target.kind) fail('Replacement must have the same asset kind to preserve native references.', 'INVALID_ASSET');
-      target.dataUrl = staged.dataUrl; target.mime = staged.mime; target.duration = staged.duration;
+      if (args.duration !== undefined && (!(target.kind === 'audio' || target.kind === 'video') || !Number.isFinite(args.duration) || args.duration <= 0 || args.duration > 86_400))
+        fail('Duration must be positive source seconds (at most 24 hours) for audio or video.', 'INVALID_ARGUMENT', 'duration');
+      if ((target.kind === 'audio' || target.kind === 'video') && args.duration === undefined && staged.duration === undefined)
+        fail('Specify the replacement media source duration in seconds.', 'INVALID_ARGUMENT', 'duration');
+      target.dataUrl = staged.dataUrl; target.mime = staged.mime; target.duration = args.duration ?? staged.duration;
       target.licenseNotice = staged.licenseNotice;
       if (args.name !== undefined) target.name = args.name;
       context.useHandle(args.handle);

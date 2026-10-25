@@ -56,7 +56,7 @@ export type CoreHydeCommand =
   | { op: 'track.ensure'; args: { elementId: Ref; property: AnimProperty }; clientCommandId?: string }
   | { op: 'keyframe.upsert'; args: { elementId: Ref; property: AnimProperty; timeSeconds: number; value: number | string; id?: string; alias?: string; easing?: Keyframe['easing']; direction?: Keyframe['direction']; mode?: Keyframe['mode']; steps?: number }; clientCommandId?: string }
   | { op: 'caption.create'; args: { id?: string; alias?: string; sceneId?: Ref; text: string; start: number; end: number }; clientCommandId?: string }
-  | { op: 'asset.add'; args: { id?: string; alias?: string; handle: string; name: string; reuseExisting?: boolean }; clientCommandId?: string };
+  | { op: 'asset.add'; args: { id?: string; alias?: string; handle: string; name: string; duration?: number; reuseExisting?: boolean }; clientCommandId?: string };
 
 export type HydeCommand = CoreHydeCommand | (TimelineCommand & { clientCommandId?: string }) | MediaAuthoringCommand | CatalogCommand;
 
@@ -105,7 +105,7 @@ const coreCommandKeys: Record<(typeof coreOperations)[number], string[]> = {
   'track.ensure': ['elementId', 'property'],
   'keyframe.upsert': ['elementId', 'property', 'timeSeconds', 'value', 'id', 'alias', 'easing', 'direction', 'mode', 'steps'],
   'caption.create': ['id', 'alias', 'sceneId', 'text', 'start', 'end'],
-  'asset.add': ['id', 'alias', 'handle', 'name', 'reuseExisting'],
+  'asset.add': ['id', 'alias', 'handle', 'name', 'duration', 'reuseExisting'],
 };
 export const HYDE_COMMAND_KEYS: Record<string, readonly string[]> = { ...coreCommandKeys, ...timelineCommandKeys, ...MEDIA_AUTHORING_COMMAND_KEYS, ...CATALOG_COMMAND_KEYS };
 const elementCreateKeys = ['name', 'x', 'y', 'width', 'height', 'rotation', 'scaleX', 'scaleY', 'pivotX', 'pivotY', 'fill', 'stroke', 'strokeWidth', 'opacity', 'start', 'duration', 'assetId', 'text', 'fontFamily', 'fontSize', 'parentId', 'hidden', 'locked'];
@@ -131,7 +131,8 @@ function commandDiagnostic(cause: unknown, command: HydeCommand, commandIndex: n
         : ['id', 'elementId', 'sceneId', 'assetId', 'sourceId', 'parentId', 'targetId', 'clipId', 'instanceId']
           .map(key => args[key]).find(value => typeof value === 'string') as string | undefined;
   const unsupported = /\bdoes not support ([A-Za-z][A-Za-z0-9_]*)\b/.exec(message);
-  const explicitField = cause instanceof MediaAuthoringError || cause instanceof CatalogError ? cause.field : undefined;
+  const explicitField = cause instanceof MediaAuthoringError || cause instanceof CatalogError ? cause.field
+    : op === 'asset.add' && message.startsWith('duration must') ? 'duration' : undefined;
   const patch = op === 'element.updateAppearance' ? args.appearance
     : op === 'element.setTransform' ? args.transform
       : op === 'project.updateMetadata' ? args : undefined;
@@ -584,12 +585,13 @@ export class HydeAuthoringSession {
         const payload = this.staged.get(args.handle);
         if (!payload) throw new Error('Asset handle does not exist or has already been consumed.');
         if (usedHandles.has(args.handle)) throw new Error('Asset handle is already used in this batch.');
+        if (args.duration !== undefined && (!(payload.kind === 'audio' || payload.kind === 'video') || !Number.isFinite(args.duration) || args.duration <= 0 || args.duration > 86_400)) throw new Error('duration must be positive source seconds (at most 24 hours) for an audio or video asset.');
         if (args.reuseExisting !== undefined && typeof args.reuseExisting !== 'boolean') throw new Error('reuseExisting must be a boolean.');
         if (args.reuseExisting && args.id !== undefined) throw new Error('reuseExisting cannot be combined with an explicit native asset ID.');
         const dataUrl = bytesDataUrl(payload.bytes, payload.mime);
         if (args.reuseExisting) {
           const existing = project.assets.find(asset => asset.kind === payload.kind && asset.mime === payload.mime &&
-            asset.dataUrl === dataUrl && asset.licenseNotice === payload.licenseNotice);
+            asset.dataUrl === dataUrl && asset.licenseNotice === payload.licenseNotice && asset.duration === args.duration);
           if (existing) {
             namedId(existing.id, args.alias, aliases);
             usedHandles.add(args.handle);
@@ -598,7 +600,9 @@ export class HydeAuthoringSession {
         }
         const id = namedId(args.id, args.alias, aliases);
         if (project.assets.some(asset => asset.id === id)) throw new Error(`Asset ${id} already exists.`);
-        project.assets.push({ id, name: args.name, mime: payload.mime, kind: payload.kind, dataUrl, ...(payload.licenseNotice === undefined ? {} : { licenseNotice: payload.licenseNotice }) });
+        project.assets.push({ id, name: args.name, mime: payload.mime, kind: payload.kind, dataUrl,
+          ...(args.duration === undefined ? {} : { duration: args.duration }),
+          ...(payload.licenseNotice === undefined ? {} : { licenseNotice: payload.licenseNotice }) });
         usedHandles.add(args.handle); break;
       }
       default: throw new Error(`Unsupported operation ${(command as { op: string }).op}.`);
