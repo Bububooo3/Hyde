@@ -360,7 +360,24 @@ export class HydeAuthoringSession {
       const start = query.timeStart ?? 0, end = query.timeEnd ?? this.project.duration;
       if (end < start) return invalid('timeEnd', 'Timeline end must not precede start.');
       const items = this.project.elements.filter(item => (query.sceneId === undefined || item.sceneId === query.sceneId) && item.start < end && item.start + item.duration >= start).sort((a, b) => a.id.localeCompare(b.id));
-      return { revision: this.revision, range: { start, end }, items: items.slice(cursor, cursor + limit).map(item => ({ id: item.id, name: item.name, kind: item.kind, sceneId: item.sceneId, start: item.start, duration: item.duration, tracks: item.tracks.map(track => ({ property: track.property, keyframes: track.keyframes.filter(key => key.time >= start - item.start && key.time <= end - item.start).slice(0, 100) })), motionBehaviors: item.motionBehaviors?.map(behavior => ({ id: behavior.id, type: behavior.type })), assemblyClips: item.assemblyClips?.map(clip => ({ id: clip.id, name: clip.name, duration: clip.duration })), clipInstances: item.clipInstances?.map(instance => ({ id: instance.id, clipId: instance.clipId, start: instance.start, duration: instance.duration })) })), captions: this.project.captions.filter(caption => (query.sceneId === undefined || caption.sceneId === query.sceneId) && caption.start < end && caption.end >= start).slice(0, 100).map(caption => ({ id: caption.id, text: caption.text, start: caption.start, end: caption.end })), nextCursor: cursor + limit < items.length ? cursor + limit : undefined };
+      const captions = this.project.captions.filter(caption => (query.sceneId === undefined || caption.sceneId === query.sceneId) && caption.start < end && caption.end >= start).sort((a, b) => a.id.localeCompare(b.id));
+      return { revision: this.revision, range: { start, end }, items: items.slice(cursor, cursor + limit).map(item => {
+        const visibleInstances = item.clipInstances?.filter(instance => item.start + instance.start < end && item.start + instance.start + instance.duration >= start) ?? [];
+        return { id: item.id, name: item.name, kind: item.kind, sceneId: item.sceneId, start: item.start, duration: item.duration,
+          tracks: item.tracks.map(track => { const keys = track.keyframes.filter(key => key.time >= start - item.start && key.time <= end - item.start);
+            return { property: track.property, keyframes: keys.slice(0, 100), visibleKeyframeCount: keys.length, keyframesTruncated: keys.length > 100 }; }),
+          motionBehaviors: item.motionBehaviors?.slice(0, 100).map(behavior => ({ id: behavior.id, type: behavior.type })),
+          motionBehaviorCount: item.motionBehaviors?.length ?? 0, motionBehaviorsTruncated: (item.motionBehaviors?.length ?? 0) > 100,
+          assemblyClips: item.assemblyClips?.slice(0, 100).map(clip => ({ id: clip.id, name: clip.name, duration: clip.duration, trackCount: clip.tracks.length })),
+          assemblyClipCount: item.assemblyClips?.length ?? 0, assemblyClipsTruncated: (item.assemblyClips?.length ?? 0) > 100,
+          clipInstances: visibleInstances.slice(0, 100).map(instance => ({ id: instance.id, clipId: instance.clipId, start: instance.start, timelineStart: item.start + instance.start, duration: instance.duration,
+            overrideCount: instance.trackOverrides?.length ?? 0, gapTransitionCount: instance.gapTransitions?.length ?? 0,
+            priorityOverrideCount: instance.priorityOverrides?.length ?? 0, textureOverlapCount: instance.textureOverlaps?.length ?? 0 })),
+          visibleClipInstanceCount: visibleInstances.length, clipInstancesTruncated: visibleInstances.length > 100 };
+      }), captions: captions.slice(cursor, cursor + limit).map(caption => ({ id: caption.id, text: caption.text, start: caption.start, end: caption.end })),
+        visibleCaptionCount: captions.length, captionsTruncated: cursor + limit < captions.length,
+        nextCaptionCursor: cursor + limit < captions.length ? cursor + limit : undefined,
+        nextCursor: cursor + limit < items.length ? cursor + limit : undefined };
     }
     const list = query.target === 'scenes' ? this.project.sequences.map(scene => inspectedScene(this.project, scene)) : query.target === 'assets'
       ? this.project.assets.map(({ dataUrl: _bytes, ...metadata }) => metadata)

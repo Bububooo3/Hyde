@@ -3,6 +3,21 @@ import { describe, expect, it } from 'vitest';
 import { HydeSDK, HYDE_EXECUTE_SCHEMA_V1 } from './sdk';
 
 describe('public Node SDK', () => {
+  it('marks a crowded timeline inspection as truncated without embedding all captions', async () => {
+    const session = await new HydeSDK().createProject({ duration: 8 });
+    const made = await session.execute({ protocolVersion: 1, expectedRevision: 0, commands: Array.from({ length: 105 }, (_, index) => ({
+      op: 'caption.create' as const, args: { id: `caption-${index}`, text: `Line ${index}`, start: 1, end: 2 },
+    })) });
+    expect(made.ok, JSON.stringify(made)).toBe(true);
+    const timeline = await session.inspect({ target: 'timeline', timeStart: 0, timeEnd: 3, limit: 100 });
+    expect(timeline.captions).toHaveLength(100);
+    expect(timeline).toMatchObject({ visibleCaptionCount: 105, captionsTruncated: true, nextCaptionCursor: 100 });
+    const next = await session.inspect({ target: 'timeline', timeStart: 0, timeEnd: 3, limit: 100, cursor: 100 });
+    expect(next.captions).toHaveLength(5);
+    expect(next).toMatchObject({ visibleCaptionCount: 105, captionsTruncated: false });
+    expect((await session.inspect({ target: 'timeline', timeStart: 3, timeEnd: 4 })).visibleCaptionCount).toBe(0);
+  });
+
   it('round-trips authored assembly clips, placed overrides and timeline inspection through the public facade', async () => {
     const sdk = new HydeSDK(), session = await sdk.createProject({ name: 'Clip interchange', duration: 8 });
     const made = await session.execute({ protocolVersion: 1, expectedRevision: 0, commands: [
@@ -24,6 +39,10 @@ describe('public Node SDK', () => {
     expect(timeline.items?.find(item => item.id === 'rig')).toMatchObject({
       assemblyClips: [{ id: made.idMap.$reach, name: 'Reach', duration: 2 }],
       clipInstances: [{ id: made.idMap.$first }, { id: made.idMap.$second }],
+    });
+    expect((await session.inspect({ target: 'timeline', timeStart: 3.5, timeEnd: 6.5 })).items?.find(item => item.id === 'rig')).toMatchObject({
+      clipInstances: [{ id: made.idMap.$second, timelineStart: 4, overrideCount: 1, gapTransitionCount: 1, priorityOverrideCount: 1 }],
+      visibleClipInstanceCount: 1, clipInstancesTruncated: false,
     });
     const before = await session.evaluate(5);
     const reopened = await sdk.openProject(await session.exportProject());
