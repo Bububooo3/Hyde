@@ -54,6 +54,48 @@ test('reviews an earlier assembly before downloading a native replacement', asyn
   await expect(page.getByRole('status')).toContainText('selected source file remains available for recovery');
 });
 
+test('source diagnostics focus the relevant image for guided correction', async ({ page }) => {
+  await page.goto('/decomposer.html');
+  await page.getByLabel('Import images').setInputFiles({ name: 'small-character.png', mimeType: 'image/png', buffer: fixture() });
+  await expect(page.getByRole('status')).toContainText('Automatic first pass found');
+  await page.getByLabel('Reconstruction mode').selectOption('animation-ready');
+  await expect(page.getByLabel('Regeneration impact preview')).toBeVisible();
+  await page.getByRole('button', { name: 'Confirm regeneration' }).click();
+  await expect(page.getByRole('status')).toContainText('Switch to animation-ready applied');
+  await page.getByRole('button', { name: 'Original', exact: true }).click();
+  const warning = page.locator('.diagnostic.navigable').filter({ hasText: 'LOW_SOURCE_RESOLUTION' });
+  await expect(warning).toBeVisible();
+  await warning.click();
+  await expect(page.getByLabel('Canvas zoom')).toHaveValue('2');
+  await expect(page.getByRole('button', { name: 'Side by side' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('status')).toContainText('Focused LOW_SOURCE_RESOLUTION on small-character.png');
+});
+
+test('region diagnostics switch references and select the affected editable region', async ({ page }) => {
+  const width = 32, height = 32, rgba = new Uint8Array(width * height * 4);
+  for (let y = 6; y < 26; y++) for (let x = 6; x < 26; x++)
+    rgba.set([190, 60, 42, x === 6 || x === 25 || y === 6 || y === 25 ? 160 : 255], (y * width + x) * 4);
+  const bytes = encodePng({ width, height, rgba });
+  const session = await DecompositionSession.importSources([
+    { name: 'front.png', mime: 'image/png', bytes }, { name: 'side.png', mime: 'image/png', bytes, role: 'alternate-view' },
+  ], { settings: { preserveTexture: false } });
+  await session.analyze();
+  const document = session.snapshot();
+  const side = document.sources.find(item => item.name === 'side.png')!;
+  const target = document.diagnostics.find(item => item.code === 'TEXTURE_APPROXIMATION' && item.sourceId === side.id && item.regionId);
+  expect(target?.regionId).toBeTruthy();
+  const saved = await session.saveDocument(); await session.close();
+  await page.goto('/decomposer.html');
+  await page.getByLabel('Open .hydecomp').setInputFiles({ name: 'diagnostics.hydecomp', mimeType: 'application/zip', buffer: Buffer.from(saved) });
+  await expect(page.getByRole('status')).toContainText('Opened diagnostics.hydecomp');
+  const diagnostics = page.locator('.diagnostic.navigable');
+  const index = document.diagnostics.indexOf(target!);
+  await diagnostics.nth(index).click();
+  await expect(page.getByRole('status')).toContainText('Focused TEXTURE_APPROXIMATION on side.png');
+  await expect(page.locator('.left-pane .stack .row.selected')).toContainText('side.png');
+  await expect(page.locator('.left-pane .scroll-list').first().locator('.row.selected')).toHaveCount(1);
+});
+
 test('JPEG and WebP import in the analysis worker and reopen with canonical pixels', async ({ page }) => {
   await page.goto('/decomposer.html');
   const png = [...fixture()];

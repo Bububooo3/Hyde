@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, PointerEvent as ReactPointerEvent } from 'react';
-import type { DecompositionDocumentV1, DecompositionEdit, DecompositionMode, HydeAssemblyReplacementImpact, HydeDecompositionExport, PartRecord, ReconstructionSettings, RegionMask, RegionRecord } from '../decomposer';
+import type { DecompositionDiagnostic, DecompositionDocumentV1, DecompositionEdit, DecompositionMode, HydeAssemblyReplacementImpact, HydeDecompositionExport, PartRecord, ReconstructionSettings, RegionMask, RegionRecord } from '../decomposer';
 import { poseNativeDecomposition } from '../decomposer/pose';
 import type { ReconstructionQualityReport } from '../decomposer/quality';
 import type { ShapePath } from '../model';
@@ -164,6 +164,7 @@ export default function App() {
   const [view, setView] = useState<View>('side-by-side'), [tool, setTool] = useState<Tool>('select');
   const [zoom, setZoom] = useState<'fit' | number>('fit');
   const [tileView, setTileView] = useState<{ key: string; original?: CanvasTile; reconstruction?: CanvasTile }>({ key: '' });
+  const [diagnosticFocus, setDiagnosticFocus] = useState<{ sourceId: string; x: number; y: number }>();
   const originalCardRef = useRef<HTMLDivElement | null>(null), reconstructionCardRef = useRef<HTMLDivElement | null>(null);
   const [brushRadius, setBrushRadius] = useState(3), [brushHardness, setBrushHardness] = useState(1), [overlayAlpha, setOverlayAlpha] = useState(.5);
   const [featherRadius, setFeatherRadius] = useState(2), [featherStrength, setFeatherStrength] = useState(.65);
@@ -292,6 +293,19 @@ export default function App() {
     if (reconstructionCardRef.current) observer.observe(reconstructionCardRef.current);
     return () => observer.disconnect();
   }, [tileKey, view, tiled]);
+  useEffect(() => {
+    if (!diagnosticFocus || source?.id !== diagnosticFocus.sourceId || loadedSourceId !== diagnosticFocus.sourceId || zoom === 'fit') return;
+    const frame = requestAnimationFrame(() => {
+      for (const card of [originalCardRef.current, reconstructionCardRef.current]) {
+        if (!card) continue;
+        card.scrollLeft = Math.max(0, diagnosticFocus.x * zoom - card.clientWidth / 2);
+        card.scrollTop = Math.max(0, diagnosticFocus.y * zoom - card.clientHeight / 2);
+        updateTile(card === originalCardRef.current ? 'original' : 'reconstruction', card);
+      }
+      setDiagnosticFocus(undefined);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [diagnosticFocus, source?.id, loadedSourceId, zoom, view]);
 
   const readSource = useCallback(async (sourceId: string, doc: DecompositionDocumentV1) => {
     const generation = workGeneration.current;
@@ -306,6 +320,31 @@ export default function App() {
     setLoadedSourceId(sourceId);
     setRenderVersion(value => value + 1);
   }, []);
+  async function navigateDiagnostic(item: DecompositionDiagnostic) {
+    if (!documentModel || busy) return;
+    const region = item.regionId ? documentModel.regions.find(candidate => candidate.id === item.regionId && current(candidate))
+      : item.partId ? documentModel.regions.find(candidate => candidate.partId === item.partId && active(candidate)) : undefined;
+    const target = documentModel.sources.find(candidate => candidate.id === (item.sourceId ?? region?.sourceId));
+    if (!target) return;
+    const bounds = item.bounds ?? region?.bounds;
+    setSelectedSourceId(target.id); setSelectedRegionId(region?.id); setSelectedPartId(item.partId ?? region?.partId);
+    setView('side-by-side'); setZoom(value => value === 'fit' ? 2 : value);
+    setDiagnosticFocus({ sourceId: target.id, x: bounds ? bounds.x + bounds.width / 2 : target.width / 2,
+      y: bounds ? bounds.y + bounds.height / 2 : target.height / 2 });
+    if (target.id !== loadedSourceId) {
+      const generation = workGeneration.current;
+      setBusy(true);
+      try {
+        await readSource(target.id, documentModel);
+        if (generation !== workGeneration.current) return;
+        const response = await client.current.call<{ id: string; mask: RegionMask }[]>('masks', { sourceId: target.id });
+        if (generation !== workGeneration.current) return;
+        setMasks(new Map(response.map(entry => [entry.id, entry.mask])));
+      } catch (error) { if (generation === workGeneration.current) setStatus(error instanceof Error ? error.message : 'Diagnostic navigation failed.'); return; }
+      finally { if (generation === workGeneration.current) setBusy(false); }
+    }
+    setStatus(`Focused ${item.code} on ${target.name}${region ? `, region ${region.id}` : ''}.`);
+  }
   const refresh = useCallback(async (state: WorkerState, loadSource = false) => {
     const generation = workGeneration.current;
     clearNativePreview();
@@ -923,6 +962,6 @@ export default function App() {
           </div></div>
       </aside>
     </div>
-    <footer className="diagnostics"><strong>Diagnostics</strong><div className="diagnostic-list">{documentModel?.diagnostics.length ? documentModel.diagnostics.map((item, index) => <div key={`${item.code}-${index}`} className={`diagnostic ${item.severity}`}><b>{item.code}</b><span>{item.message}</span>{item.suggestion && <small>{item.suggestion}</small>}</div>) : <span className="hint">No diagnostics yet. Automatic suggestions are heuristic evidence, not certainty.</span>}</div></footer>
+    <footer className="diagnostics"><strong>Diagnostics</strong><div className="diagnostic-list">{documentModel?.diagnostics.length ? documentModel.diagnostics.map((item, index) => item.sourceId || item.regionId || item.partId ? <button key={`${item.code}-${index}`} className={`diagnostic navigable ${item.severity}`} disabled={busy} onClick={() => void navigateDiagnostic(item)} title="Focus source region for this diagnostic"><b>{item.code}</b><span>{item.message}</span>{item.suggestion && <small>{item.suggestion}</small>}</button> : <div key={`${item.code}-${index}`} className={`diagnostic ${item.severity}`}><b>{item.code}</b><span>{item.message}</span>{item.suggestion && <small>{item.suggestion}</small>}</div>) : <span className="hint">No diagnostics yet. Automatic suggestions are heuristic evidence, not certainty.</span>}</div></footer>
   </div>;
 }

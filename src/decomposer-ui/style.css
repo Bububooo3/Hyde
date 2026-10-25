@@ -122,6 +122,8 @@ h3 { font-size: 13px; margin: 0; }
 .diagnostic.info { border-left-color: #46cfc0; }
 .diagnostic b { font-family: ui-monospace, monospace; }
 .diagnostic small { color: #a7c3bf; }
+.diagnostic.navigable { color: inherit; text-align: left; cursor: pointer; }
+.diagnostic.navigable:hover, .diagnostic.navigable:focus-visible { border-color: #69d5c8; outline: 2px solid #69d5c8; outline-offset: 1px; }
 @media (max-width: 1040px) { .workspace { grid-template-columns: 180px minmax(320px, 1fr) 240px; } .topbar { flex-wrap: wrap; } }
 @media (max-width: 760px) { .workspace { display: block; height: auto; } .pane { max-height: none; } .center-pane { min-height: 600px; } .canvas-grid.two { grid-template-columns: 1fr; } .diagnostics { flex-wrap: wrap; } }
 @media (max-width: 1040px) { .native-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
