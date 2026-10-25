@@ -156,6 +156,8 @@ export default function App() {
   const sourceImage = useRef<HTMLImageElement | undefined>(undefined);
   const sourcePixelsRef = useRef<Uint8ClampedArray | undefined>(undefined);
   const originalCanvas = useRef<HTMLCanvasElement>(null), reconstructionCanvas = useRef<HTMLCanvasElement>(null);
+  const reconstructionRaster = useRef<{ document: DecompositionDocumentV1 | undefined; masks: Map<string, RegionMask>;
+    pixels: Uint8ClampedArray; sourceId: string; scale: number; tile: CanvasTile; isolateId: string | undefined; image: ImageData } | undefined>(undefined);
   const [documentModel, setDocumentModel] = useState<DecompositionDocumentV1>();
   const [revision, setRevision] = useState(0), [selectedSourceId, setSelectedSourceId] = useState<string>();
   const [masks, setMasks] = useState<Map<string, RegionMask>>(new Map());
@@ -628,9 +630,16 @@ export default function App() {
     const canvas = reconstructionCanvas.current; if (!canvas) return;
     canvas.width = displayWidth; canvas.height = displayHeight;
     const context = canvas.getContext('2d'); if (!context) return;
-    const imageData = context.createImageData(displayWidth, displayHeight);
-    const ordered = [...visibleRegions].sort((a, b) => (documentModel?.parts.find(part => part.id === a.partId)?.zOrder ?? 0) - (documentModel?.parts.find(part => part.id === b.partId)?.zOrder ?? 0));
-    for (const region of ordered) {
+    // Keep one bounded base tile; path handles and review overlays can redraw without rewalking every region mask.
+    const isolateId = isolate ? selectedRegionId : undefined;
+    const cache = reconstructionRaster.current;
+    const cached = cache && cache.document === documentModel && cache.masks === masks && cache.pixels === rgba && cache.sourceId === source.id &&
+      cache.scale === displayScale && cache.isolateId === isolateId && cache.tile.x === reconstructionWindow.x &&
+      cache.tile.y === reconstructionWindow.y && cache.tile.width === reconstructionWindow.width && cache.tile.height === reconstructionWindow.height;
+    const imageData = cached ? cache.image : context.createImageData(displayWidth, displayHeight);
+    if (!cached) {
+      const ordered = [...visibleRegions].sort((a, b) => (documentModel?.parts.find(part => part.id === a.partId)?.zOrder ?? 0) - (documentModel?.parts.find(part => part.id === b.partId)?.zOrder ?? 0));
+      for (const region of ordered) {
       if (region.geometry.status === 'inferred') continue;
       if (isolate && selectedRegionId && region.id !== selectedRegionId) continue;
       const mask = masks.get(region.id); if (!mask) continue;
@@ -676,6 +685,9 @@ export default function App() {
           imageData.data[index + 2] = Math.round((blue / (area * 255) + imageData.data[index + 2] * previous * (1 - incoming)) / combined);
           imageData.data[index + 3] = Math.round(combined * 255);
       }
+      }
+      reconstructionRaster.current = { document: documentModel, masks, pixels: rgba, sourceId: source.id, scale: displayScale,
+        tile: reconstructionWindow, isolateId, image: imageData };
     }
     context.putImageData(imageData, 0, 0);
     context.setTransform(1 / displayScale, 0, 0, 1 / displayScale, -reconstructionWindow.x / displayScale, -reconstructionWindow.y / displayScale);

@@ -300,12 +300,24 @@ test('large import shows a bounded provisional pyramid preview before committing
   expect(rightTilePixels.background[3]).toBe(0);
   await page.locator('.canvas-card').last().evaluate(card => { card.scrollTop = 300; });
   await expect(page.locator('.canvas-card canvas').last()).toHaveAttribute('data-tile-y', '256');
+  await page.locator('.canvas-card canvas').last().evaluate(canvas => {
+    const context = (canvas as HTMLCanvasElement).getContext('2d')!;
+    const create = context.createImageData.bind(context);
+    (window as Window & { rasterAllocations?: number }).rasterAllocations = 0;
+    context.createImageData = ((width: number, height: number) => {
+      (window as Window & { rasterAllocations: number }).rasterAllocations++;
+      return create(width, height);
+    }) as typeof context.createImageData;
+  });
   const tileBox = await page.locator('.canvas-card canvas').last().boundingBox();
   expect(tileBox).toBeTruthy();
   await page.mouse.click(tileBox!.x + 1500 - 1024, tileBox!.y + 500 - 256);
   await expect(page.locator('.left-pane .scroll-list').first().locator('.row.selected')).toHaveCount(0);
   await page.mouse.click(tileBox!.x + 1300 - 1024, tileBox!.y + 500 - 256);
   await expect(page.locator('.left-pane .scroll-list').first().locator('.row.selected')).toHaveCount(1);
+  expect(await page.evaluate(() => (window as Window & { rasterAllocations?: number }).rasterAllocations)).toBe(0);
+  await page.getByLabel('Isolate').check();
+  expect(await page.evaluate(() => (window as Window & { rasterAllocations?: number }).rasterAllocations)).toBeGreaterThan(0);
   await page.getByLabel('Canvas zoom').selectOption('fit');
   await expect(page.locator('.canvas-card canvas').last()).toHaveJSProperty('width', 768);
   await page.evaluate(() => { (window as Window & { sawCoarsePreview?: boolean }).sawCoarsePreview = false; });
