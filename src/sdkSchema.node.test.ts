@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { HYDE_COMMAND_KEYS, HYDE_OPERATIONS } from './authoring';
-import { HYDE_COMMAND_ARG_SCHEMAS_V1, HYDE_EXECUTE_SCHEMA_V1 } from './sdkSchema';
+import { HYDE_COMMAND_ARG_SCHEMAS_V1, HYDE_EXECUTE_SCHEMA_V1, HYDE_INSPECT_SCHEMA_V1 } from './sdkSchema';
 
 type Shape = { required?: string[]; properties: Record<string, Record<string, unknown>>; [key: string]: unknown };
 const args = (op: string) => HYDE_COMMAND_ARG_SCHEMAS_V1[op] as Shape;
@@ -19,6 +19,7 @@ describe('Hyde v1 command JSON Schema', () => {
     }
     expect(HYDE_OPERATIONS.filter(op => !args(op).required).sort()).toEqual(['asset.removeUnused', 'project.updateMetadata']);
     expect(JSON.parse(JSON.stringify(HYDE_EXECUTE_SCHEMA_V1))).toEqual(HYDE_EXECUTE_SCHEMA_V1);
+    expect(HYDE_INSPECT_SCHEMA_V1.properties.target.enum).toEqual(expect.arrayContaining(['environment', 'jobs']));
   });
 
   it('states creation, geometry, media, timeline, and staging requirements with useful value types', () => {

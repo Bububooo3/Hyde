@@ -196,7 +196,7 @@ async function dispatch(args: string[], io: Output): Promise<{ command: string; 
       allowed(flags, ['target', 'id', 'scene', 'scene-id', 'limit', 'cursor', 'depth', 'fields', 'time-start', 'time-end', 'since-revision', 'json']); noExtra(positionals, 3);
       const session = new HydeAuthoringSession(await projectFrom(input(positionals, 2, 'Project archive')));
       const target = (option(flags, 'target') ?? 'project') as Parameters<typeof session.inspect>[0]['target'];
-      if (!['project', 'scenes', 'scene', 'elements', 'element', 'assets', 'asset', 'changes', 'tree', 'timeline', 'assembly'].includes(target)) throw new CliFailure('INVALID_ARGUMENT', 'Unknown inspection target.', 2);
+      if (!['project', 'scenes', 'scene', 'elements', 'element', 'assets', 'asset', 'changes', 'tree', 'timeline', 'assembly', 'environment', 'jobs'].includes(target)) throw new CliFailure('INVALID_ARGUMENT', 'Unknown inspection target.', 2);
       const scene = option(flags, 'scene'), sceneId = option(flags, 'scene-id');
       if (scene && sceneId) throw new CliFailure('INVALID_ARGUMENT', 'Use only one of --scene and --scene-id.', 2);
       const fields = option(flags, 'fields');

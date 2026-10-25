@@ -14,10 +14,14 @@ test('live automation is opt-in, scoped, revocable, and uses editor undo', async
     const envelope = { protocolVersion: 1 as const, sessionId: bridge.sessionId, requestId: 'readonly' };
     return {
       inspect: await bridge.request({ ...envelope, operation: 'inspect', payload: { target: 'project' } }),
+      environment: await bridge.request({ ...envelope, operation: 'inspect', payload: { target: 'environment', fields: ['environment', 'preview', 'scopes', 'pendingJobCount'] } }),
+      jobs: await bridge.request({ ...envelope, operation: 'inspect', payload: { target: 'jobs' } }),
       write: await bridge.request({ ...envelope, operation: 'execute', payload: { protocolVersion: 1, expectedRevision: 0, commands: [{ op: 'element.create', args: { kind: 'rectangle' } }] } }),
     };
   });
   expect(readOnly.inspect.ok).toBe(true);
+  expect(readOnly.environment).toMatchObject({ ok: true, result: { environment: { environment: 'live-editor', preview: { frames: false }, scopes: ['read'], pendingJobCount: 0 } } });
+  expect(readOnly.jobs).toMatchObject({ ok: true, result: { items: [] } });
   expect(readOnly.write).toMatchObject({ ok: false, errors: [{ code: 'PERMISSION_DENIED' }] });
   await page.getByRole('button', { name: 'Revoke access' }).click();
   await expect.poll(() => page.evaluate(() => window.hydeAutomation === undefined)).toBe(true);

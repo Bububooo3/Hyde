@@ -71,6 +71,10 @@ describe('public Node SDK', () => {
     const sdk = new HydeSDK();
     expect(HYDE_EXECUTE_SCHEMA_V1.properties.commands.items.oneOf.length).toBeGreaterThan(80);
     const session = await sdk.createProject({ name: 'Native SDK', width: 640, height: 480, duration: 4 });
+    expect(await session.inspect({ target: 'environment', fields: ['environment', 'preview', 'pendingJobCount'] })).toMatchObject({
+      environment: { environment: 'node', preview: { frames: false }, pendingJobCount: 0 },
+    });
+    expect(await session.inspect({ target: 'jobs' })).toMatchObject({ items: [] });
     const scene = session.snapshot().sequences[0].id;
     const committed = await session.execute({ protocolVersion: 1, expectedRevision: 0, commands: [
       { op: 'element.create', args: { alias: '$piece', kind: 'ellipse', sceneId: scene, properties: { x: 30, y: 40, start: 0, duration: 4 } } },

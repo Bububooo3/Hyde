@@ -98,8 +98,28 @@ export class EditorBridge {
           this.require('read');
           const project = this.editor.project();
           const query = object(request.payload) as unknown as Parameters<HydeAuthoringSession['inspect']>[0];
-          const result = await enrichAssetInspection(project, query, new HydeAuthoringSession(project).inspect(query));
-          return this.success(requestId, result);
+          const authoring = new HydeAuthoringSession(project), inspected = authoring.inspect(query);
+          if ('error' in inspected) return this.success(requestId, { ...inspected, revision: this.editor.revision() });
+          const fields = typeof query.fields === 'string' ? query.fields.split(',').map(field => field.trim()).filter(Boolean) : query.fields;
+          const select = (value: Record<string, unknown>) => fields ? Object.fromEntries(Object.entries(value).filter(([key]) => fields.includes(key))) : value;
+          if (query.target === 'environment') {
+            const base = authoring.capabilities('browser');
+            const renderer = this.scopes.has('preview') || this.scopes.has('export') ? await (await this.host()).capabilities() : undefined;
+            return this.success(requestId, { revision: this.editor.revision(), environment: select({ ...base, environment: 'live-editor',
+              preview: renderer?.preview ?? base.preview, exports: renderer?.exports ?? base.exports,
+              scopes: [...this.scopes].sort(), rendering: this.rendering,
+              pendingJobCount: [...this.jobs.values()].filter(job => ['queued', 'preparing', 'running'].includes(job.state)).length }) });
+          }
+          if (query.target === 'jobs') {
+            const ordered = [...this.jobs.values()].sort((a, b) => a.id.localeCompare(b.id));
+            const cursor = query.cursor ?? 0, limit = query.limit ?? 25;
+            return this.success(requestId, { revision: this.editor.revision(),
+              items: ordered.slice(cursor, cursor + limit).map(job => select({ id: job.id, state: job.state, progress: job.progress,
+                message: job.message, hasArtifact: Boolean(job.artifact) })),
+              nextCursor: cursor + limit < ordered.length ? cursor + limit : undefined });
+          }
+          const result = await enrichAssetInspection(project, query, inspected);
+          return this.success(requestId, { ...result, revision: this.editor.revision() });
         }
         case 'evaluate': {
           this.require('read');

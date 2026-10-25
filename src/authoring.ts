@@ -63,7 +63,7 @@ export type HydeCommand = CoreHydeCommand | (TimelineCommand & { clientCommandId
 export interface ExecuteRequest { protocolVersion: 1; expectedRevision: number; commands: HydeCommand[]; dryRun?: boolean; correlationId?: string }
 export interface ChangeSummary { added: string[]; changed: string[]; removed: string[] }
 export interface InspectRequest {
-  target: 'project' | 'scenes' | 'scene' | 'elements' | 'element' | 'assets' | 'asset' | 'changes' | 'tree' | 'timeline' | 'assembly';
+  target: 'project' | 'scenes' | 'scene' | 'elements' | 'element' | 'assets' | 'asset' | 'changes' | 'tree' | 'timeline' | 'assembly' | 'environment' | 'jobs';
   id?: string; sceneId?: string; fields?: string[] | string; limit?: number; cursor?: number; depth?: number;
   sinceRevision?: number; timeStart?: number; timeEnd?: number;
 }
@@ -305,7 +305,7 @@ export class HydeAuthoringSession {
   inspect(query: InspectRequest) {
     const invalid = (field: string, message: string) => ({ revision: this.revision, error: { ...diagnostic('INVALID_ARGUMENT', message), field } });
     if (!query || typeof query !== 'object' || Array.isArray(query)) return invalid('query', 'Inspection query must be an object.');
-    if (!['project', 'scenes', 'scene', 'elements', 'element', 'assets', 'asset', 'changes', 'tree', 'timeline', 'assembly'].includes(query.target))
+    if (!['project', 'scenes', 'scene', 'elements', 'element', 'assets', 'asset', 'changes', 'tree', 'timeline', 'assembly', 'environment', 'jobs'].includes(query.target))
       return { revision: this.revision, error: diagnostic('OPERATION_UNSUPPORTED', 'Inspection target is unsupported.') };
     if (query.limit !== undefined && (!Number.isSafeInteger(query.limit) || query.limit < 1 || query.limit > 100)) return invalid('limit', 'Inspection limit must be an integer from 1 to 100.');
     if (query.cursor !== undefined && (!Number.isSafeInteger(query.cursor) || query.cursor < 0)) return invalid('cursor', 'Inspection cursor must be a nonnegative integer.');
@@ -323,6 +323,8 @@ export class HydeAuthoringSession {
       return { revision: this.revision, error: { ...diagnostic('TARGET_NOT_FOUND', 'Scene does not exist.'), targetId: query.sceneId, field: 'sceneId' } };
     const limit = query.limit ?? 25;
     const cursor = query.cursor ?? 0;
+    if (query.target === 'environment') return { revision: this.revision, environment: projectFields({ ...this.capabilities(), pendingJobCount: 0 }, query.fields) };
+    if (query.target === 'jobs') return { revision: this.revision, items: [] as Record<string, unknown>[], nextCursor: undefined };
     if (query.target === 'project') return { revision: this.revision, project: projectFields({ id: this.project.id, name: this.project.name, width: this.project.width, height: this.project.height, fps: this.project.fps, duration: this.project.duration, sceneCount: this.project.sequences.length, elementCount: this.project.elements.length, assetCount: this.project.assets.length, captionCount: this.project.captions.length, folderCount: this.project.folders?.length ?? 0 }, query.fields), warnings: [] as HydeDiagnostic[] };
     if (query.target === 'changes') {
       const from = query.sinceRevision ?? this.revision;

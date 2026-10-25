@@ -318,7 +318,7 @@ export const HYDE_INSPECT_SCHEMA_V1 = {
   title: 'Hyde bounded inspection v1',
   type: 'object', additionalProperties: false, required: ['target'],
   properties: {
-    target: { enum: ['project', 'scenes', 'scene', 'elements', 'element', 'assets', 'asset', 'changes', 'tree', 'timeline', 'assembly'] },
+    target: { enum: ['project', 'scenes', 'scene', 'elements', 'element', 'assets', 'asset', 'changes', 'tree', 'timeline', 'assembly', 'environment', 'jobs'] },
     id: { type: 'string' }, sceneId: { type: 'string' }, fields: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' }, maxItems: 40 }] },
     limit: { type: 'integer', minimum: 1, maximum: 100 }, cursor: { type: 'integer', minimum: 0 }, depth: { type: 'integer', minimum: 0, maximum: 8 },
     sinceRevision: { type: 'integer', minimum: 0 }, timeStart: { type: 'number', minimum: 0 }, timeEnd: { type: 'number', minimum: 0 },

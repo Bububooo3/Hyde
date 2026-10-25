@@ -31,6 +31,8 @@ describe('Hyde Node CLI workflow', () => {
     const made = await call('project', 'new', '--name', 'CLI story', '--output', original);
     expect(made.code, JSON.stringify(made)).toBe(0);
     expect((await call('project', 'validate', original)).stdout.result.name).toBe('CLI story');
+    expect((await call('project', 'inspect', original, '--target', 'environment', '--fields', 'environment,pendingJobCount')).stdout.result.environment).toEqual({ environment: 'node', pendingJobCount: 0 });
+    expect((await call('project', 'inspect', original, '--target', 'jobs')).stdout.result.items).toEqual([]);
     const first = decodeProjectBytes(await readFile(original));
     await writeFile(commandFile, JSON.stringify([
       { op: 'element.create', args: { alias: '$body', kind: 'rectangle', properties: { name: 'Body', x: 30, y: 40 } } },
