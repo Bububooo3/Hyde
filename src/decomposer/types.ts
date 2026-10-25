@@ -83,6 +83,8 @@ export interface RegionRecord {
   authoredColor?: string;
   /** Last automatic estimate, retained so a color correction can be reset. */
   generatedColor?: string;
+  /** User-selected pixels from a separately matched/aligned still. The affine map is snapshotted so later alignment edits cannot silently change this texture. */
+  alignedTexture?: { sourceId: string; transformToPrimary: [number, number, number, number, number, number] };
   colorVariance: number;
   confidence: { kind: 'heuristic'; reasons: string[] };
   provenance: { algorithmVersion: string; settingsFingerprint: string };

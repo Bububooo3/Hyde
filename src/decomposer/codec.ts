@@ -55,6 +55,16 @@ export function validateDecompositionDocument(document: unknown, sourceBytes?: M
       (item.authoredColor === undefined) !== (item.generatedColor === undefined) ||
       item.authoredColor !== undefined && item.color !== item.authoredColor) throw new Error('Region fill color is invalid.');
     if (item.suppressed !== undefined && (typeof item.suppressed !== 'boolean' || item.geometry.status !== 'inferred')) throw new Error('Only inferred regions can be suppressed.');
+    if (item.alignedTexture !== undefined) {
+      const texture = item.alignedTexture;
+      if (!record(texture) || item.geometry.status !== 'inferred' || !sourceIds.has(String(texture.sourceId)) ||
+        !Array.isArray(texture.transformToPrimary) || texture.transformToPrimary.length !== 6 ||
+        texture.transformToPrimary.some((value: unknown) => typeof value !== 'number' || !Number.isFinite(value) || Math.abs(value) > 1e6) ||
+        Math.abs(texture.transformToPrimary[0] * texture.transformToPrimary[3] - texture.transformToPrimary[1] * texture.transformToPrimary[2]) < 1e-8)
+        throw new Error('Aligned region texture is invalid.');
+      const textureSource = document.sources.find(source => source.id === texture.sourceId);
+      if (!textureSource || textureSource.role === 'primary') throw new Error('Aligned region texture needs an alternate source.');
+    }
     const source = document.sources.find(source => source.id === item.sourceId)!;
     if (!Number.isInteger(item.bounds.x) || !Number.isInteger(item.bounds.y) || Number(item.bounds.x) < 0 || Number(item.bounds.y) < 0 || Number(item.bounds.x) + Number(item.bounds.width) > source.width || Number(item.bounds.y) + Number(item.bounds.height) > source.height) throw new Error('Region bounds exceed the source image.');
     if (masks) {

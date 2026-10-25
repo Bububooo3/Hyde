@@ -9,6 +9,7 @@ const width = 48, height = 40;
 function still(withFront: boolean): Uint8Array {
   const rgba = new Uint8Array(width * height * 4);
   for (let y = 6; y < 34; y++) for (let x = 6; x < 38; x++) rgba.set([186, 62, 39, 255], (y * width + x) * 4);
+  if (!withFront) rgba.set([187, 63, 39, 255], (12 * width + 21) * 4);
   if (withFront) for (let y = 6; y < 23; y++) for (let x = 19; x < 25; x++) rgba.set([33, 103, 182, 255], (y * width + x) * 4);
   return encodePng({ width, height, rgba });
 }
@@ -46,6 +47,11 @@ it('uses an explicitly matched and aligned alternate still as reviewable occlusi
   expect(hidden).toHaveLength(1);
   expect(hidden[0].partId).toBe(back.partId);
   expect(hidden[0].confidence.reasons.some(item => item.includes('uncertain'))).toBe(true);
+  const invalidTexture = await session.execute({ expectedRevision: session.revision, edits: [
+    { op: 'region.setAlignedTexture', regionId: back.id, sourceId: alternate.id },
+  ] });
+  expect(invalidTexture.ok).toBe(false);
+  expect(session.revision).toBe(aligned.revision + 1);
   expect(analyzed.layers.some(item => item.frontRegionId === front.id && item.backRegionId === hidden[0].id && item.status === 'proposed')).toBe(true);
   if (process.env.HYDE_TEST_BROWSER) {
     const native = await session.exportHyde({ format: 'hyde' });
@@ -79,6 +85,46 @@ it('uses an explicitly matched and aligned alternate still as reviewable occlusi
   expect(colorReopened.undo(colorReopened.revision)).toBe(true);
   expect(colorReopened.snapshot().regions.find(item => item.id === hidden[0].id)?.color).toBe('#a1b2c3');
   await colorReopened.close();
+  const chosen = await session.execute({ expectedRevision: session.revision, edits: [
+    { op: 'region.setAlignedTexture', regionId: hidden[0].id, sourceId: alternate.id },
+  ] });
+  expect(chosen.ok, JSON.stringify(chosen)).toBe(true);
+  expect(session.snapshot().regions.find(item => item.id === hidden[0].id)?.alignedTexture?.transformToPrimary).toEqual([1, 0, 0, 1, 0, 0]);
+  await session.analyze();
+  const texturedRegion = session.snapshot().regions.find(item => item.id === hidden[0].id)!;
+  expect(texturedRegion.alignedTexture?.sourceId).toBe(alternate.id);
+  const textured = await session.exportHyde({ format: 'hyde' });
+  expect(textured.warnings.some(item => item.regionId === hidden[0].id && item.code === 'TEXTURE_APPROXIMATION' && item.severity === 'warning')).toBe(true);
+  const nativeShape = textured.project.elements.find(item => item.id === textured.mapping.regionIds[hidden[0].id])!;
+  expect(nativeShape.kind).toBe('polygon');
+  expect(nativeShape.assetId).toBeTruthy();
+  const textureAsset = textured.project.assets.find(item => item.id === nativeShape.assetId)!;
+  const crop = decodePng(Uint8Array.from(Buffer.from(textureAsset.dataUrl.split(',')[1], 'base64')));
+  const localX = 21 - texturedRegion.bounds.x, localY = 12 - texturedRegion.bounds.y;
+  const pixel = (localY * crop.width + localX) * 4;
+  expect([...crop.rgba.slice(pixel, pixel + 4)]).toEqual([187, 63, 39, 255]);
+  if (process.env.HYDE_TEST_BROWSER) {
+    const frame = await runBrowserTask(textured.project, { kind: 'preview', options: { timeSeconds: 0, width, height, format: 'png' } });
+    const quality = compareNativeRender(decodePng(still(true)), frame.bytes, session.snapshot());
+    expect(quality.silhouette.iou).toBeGreaterThan(.99);
+    expect(quality.color.meanAbsoluteSrgbChannelError!).toBeLessThan(.02);
+  }
+  const texturedReopened = await DecompositionSession.openDocument(await session.saveDocument());
+  expect(texturedReopened.snapshot().regions.find(item => item.id === hidden[0].id)?.alignedTexture).toEqual(texturedRegion.alignedTexture);
+  const clearTexture = await texturedReopened.execute({ expectedRevision: texturedReopened.revision, edits: [
+    { op: 'region.setAlignedTexture', regionId: hidden[0].id, sourceId: null },
+  ] });
+  expect(clearTexture.ok, JSON.stringify(clearTexture)).toBe(true);
+  expect(texturedReopened.snapshot().regions.find(item => item.id === hidden[0].id)?.alignedTexture).toBeUndefined();
+  expect(texturedReopened.undo(texturedReopened.revision)).toBe(true);
+  expect(texturedReopened.snapshot().regions.find(item => item.id === hidden[0].id)?.alignedTexture).toEqual(texturedRegion.alignedTexture);
+  await texturedReopened.analyze({ settings: { inferHiddenGeometry: false } });
+  expect(texturedReopened.snapshot().regions.find(item => item.id === hidden[0].id)?.alignedTexture).toEqual(texturedRegion.alignedTexture);
+  await texturedReopened.close();
+  const clearCurrent = await session.execute({ expectedRevision: session.revision, edits: [
+    { op: 'region.setAlignedTexture', regionId: hidden[0].id, sourceId: null },
+  ] });
+  expect(clearCurrent.ok, JSON.stringify(clearCurrent)).toBe(true);
   const rejected = await session.execute({ expectedRevision: session.revision, edits: [
     { op: 'layer.rejectProposal', frontRegionId: front.id, backRegionId: back.id },
   ] });

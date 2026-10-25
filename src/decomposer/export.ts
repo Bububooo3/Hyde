@@ -31,22 +31,33 @@ function activeRegions(document: DecompositionDocumentV1): RegionRecord[] {
 }
 function regionPath(region: RegionRecord): ShapePath { return region.geometry.manualPath ?? region.geometry.generatedPath; }
 
-function cropTexture(region: RegionRecord, mask: RegionMask, image: DecodedImage): Uint8Array {
+/** The native asset and the guided inspector preview share this exact crop. */
+export function renderRegionTextureCrop(region: RegionRecord, mask: RegionMask, image: DecodedImage, images: ReadonlyMap<string, DecodedImage>): Uint8Array {
   const { bounds } = region;
   const rgba = new Uint8Array(bounds.width * bounds.height * 4);
   const sourceColor = region.geometry.texture === 'source-crop';
+  const aligned = region.alignedTexture, alternate = aligned ? images.get(aligned.sourceId) : undefined;
+  if (aligned && !alternate) throw new Error(`Alternate texture source ${aligned.sourceId} is unavailable.`);
+  const [a, b, c, d, tx, ty] = aligned?.transformToPrimary ?? [1, 0, 0, 1, 0, 0];
+  const determinant = a * d - b * c;
   const flat = [1, 3, 5].map(at => parseInt(region.color.slice(at, at + 2), 16));
   for (let y = 0; y < bounds.height; y++) for (let x = 0; x < bounds.width; x++) {
     const source = ((bounds.y + y) * image.width + bounds.x + x) * 4, target = (y * bounds.width + x) * 4;
-    const useSourceColor = sourceColor && image.rgba[source + 3] > 0;
-    rgba[target] = useSourceColor ? image.rgba[source] : flat[0];
-    rgba[target + 1] = useSourceColor ? image.rgba[source + 1] : flat[1];
-    rgba[target + 2] = useSourceColor ? image.rgba[source + 2] : flat[2];
+    const px = bounds.x + x + .5 - tx, py = bounds.y + y + .5 - ty;
+    const sx = Math.floor((d * px - c * py) / determinant), sy = Math.floor((-b * px + a * py) / determinant);
+    const alternateAt = alternate && sx >= 0 && sy >= 0 && sx < alternate.width && sy < alternate.height ? (sy * alternate.width + sx) * 4 : -1;
+    const sampled = alternateAt >= 0 && alternate!.rgba[alternateAt + 3] > 0;
+    const pixels = sampled ? alternate!.rgba : image.rgba;
+    const at = sampled ? alternateAt : source;
+    const useSourceColor = sampled || sourceColor && image.rgba[source + 3] > 0;
+    rgba[target] = useSourceColor ? pixels[at] : flat[0];
+    rgba[target + 1] = useSourceColor ? pixels[at + 1] : flat[1];
+    rgba[target + 2] = useSourceColor ? pixels[at + 2] : flat[2];
     const pixel = y * bounds.width + x;
     const sourceAlpha = image.rgba[source + 3];
     // A manual brush may deliberately extend an editable region into a source
     // pixel with zero alpha. Use its part color and authored mask coverage there.
-    const baseAlpha = sourceAlpha === 0 ? 255 : sourceAlpha;
+    const baseAlpha = aligned ? sampled ? alternate!.rgba[alternateAt + 3] : 255 : sourceAlpha === 0 ? 255 : sourceAlpha;
     rgba[target + 3] = mask.bytes[pixel] ? Math.round(baseAlpha * (mask.alpha?.[pixel] ?? 255) / 255) : 0;
   }
   return encodePng({ width: bounds.width, height: bounds.height, rgba });
@@ -125,6 +136,8 @@ export async function exportNativeDecomposition(document: DecompositionDocumentV
     if (represented < region.holeCount) warnings.push({ code: 'HOLE_NOT_REPRESENTABLE', severity: 'warning', regionId: region.id, bounds: region.bounds,
       message: `${region.holeCount - represented} interior source hole(s) remain raster-alpha approximations; ${represented} are editable Hyde contours.` });
     if (region.geometry.status === 'inferred') warnings.push({ code: 'HIDDEN_GEOMETRY_INFERRED', severity: 'warning', regionId: region.id, bounds: region.bounds, message: 'This editable geometry includes an inferred hidden area.' });
+    if (region.alignedTexture) warnings.push({ code: 'TEXTURE_APPROXIMATION', severity: 'warning', regionId: region.id, bounds: region.bounds,
+      message: 'An explicitly chosen aligned alternate still supplies this hidden texture; it may differ from the unseen primary pose.' });
     if (path.points.length > 4096 || represented > 64 || path.holes?.some(hole => hole.points.length > 4096) ||
       path.points.length + (path.holes?.reduce((sum, hole) => sum + hole.points.length, 0) ?? 0) > 16384)
       throw new Error(`PATH_TOO_COMPLEX: Region ${region.id} exceeds Hyde's contour limit.`);
@@ -157,15 +170,15 @@ export async function exportNativeDecomposition(document: DecompositionDocumentV
     if (!mask) throw new Error(`Region ${region.id} mask is missing.`);
     const id = `hc_${region.id}`; regionIds[region.id] = id; geometryIds[region.geometry.id] = id;
     const part = partById.get(region.partId ?? '');
-    const texture = region.geometry.texture === 'source-crop' || region.holeCount > (regionPath(region).holes?.length ?? 0) || Boolean(mask.alpha);
+    const texture = Boolean(region.alignedTexture) || region.geometry.texture === 'source-crop' || region.holeCount > (regionPath(region).holes?.length ?? 0) || Boolean(mask.alpha);
     let assetId: string | undefined;
     if (texture) {
-      const bytes = cropTexture(region, mask, image);
+      const bytes = renderRegionTextureCrop(region, mask, image, images);
       const handle = sdk.stageAsset(bytes, 'image/png', 'image');
       assetId = `hc_${region.id}_texture`;
       commands.push({ op: 'asset.add', args: { id: assetId, name: `${region.id} texture.png`, handle } });
       warnings.push({ code: 'TEXTURE_APPROXIMATION', severity: 'info', regionId: region.id, bounds: region.bounds,
-        message: mask.alpha ? 'Editable soft-mask coverage is stored as texture alpha inside a Hyde path.' : 'Authentic source pixels are retained inside an editable Hyde path.' });
+        message: mask.alpha ? 'Editable soft-mask coverage is stored as texture alpha inside a Hyde path.' : region.alignedTexture ? 'Chosen alternate-reference pixels are clipped by an editable Hyde path.' : 'Authentic source pixels are retained inside an editable Hyde path.' });
     }
     const { bounds } = region;
     commands.push({ op: 'element.create', args: { id, kind: 'polygon', properties: {

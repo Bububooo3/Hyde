@@ -93,6 +93,7 @@ h3 { font-size: 13px; margin: 0; }
 .inspector .identity { color: #74dcca; font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
 .inferred-callout { display: grid; gap: 7px; margin: 10px 0; padding: 10px; border: 1px solid #ad8456; border-radius: 7px; background: #3e332d; color: #ffe3b1; font-size: 11px; line-height: 1.45; }
 .inferred-callout button { font-size: 11px; }
+.hidden-texture-preview { display: block; max-width: 100%; max-height: 180px; width: auto; height: auto; image-rendering: auto; background: conic-gradient(#f4f6f1 25%, #d6dfdb 0 50%, #f4f6f1 0 75%, #d6dfdb 0) 0 0/12px 12px; border: 1px solid #ad8456; }
 .regeneration-preview { display: grid; gap: 8px; margin: 12px 0; padding: 11px; border: 1px solid #efa56d; border-radius: 8px; background: #352d29; color: #f6e1ca; font-size: 11px; line-height: 1.45; }
 .regeneration-preview > strong { font-size: 12px; }
 .regeneration-preview p { margin: 0; }

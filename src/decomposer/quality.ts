@@ -160,7 +160,7 @@ function complexity(document: DecompositionDocumentV1, foregroundPixels: number)
     unassignedRegionCount: regions.filter(region => !region.partId).length,
     pathPointCount,
     meanPathPointsPerRegion: regions.length ? pathPointCount / regions.length : 0,
-    textureBackedRegionCount: regions.filter(region => region.geometry.texture === 'source-crop').length,
+    textureBackedRegionCount: regions.filter(region => region.geometry.texture === 'source-crop' || region.alignedTexture).length,
     inferredRegionCount: regions.filter(region => region.geometry.status === 'inferred').length,
     tinyRegionCount: regions.filter(region => region.pixelCount < document.settings.minRegionPixels).length,
     largestRegionSourceFraction: foregroundPixels ? largest / foregroundPixels : null,

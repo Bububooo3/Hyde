@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { decodeDecompositionDocument } from '../src/decomposer/codec';
 import { encodePng } from '../src/decomposer/image';
+import { DecompositionSession } from '../src/decomposer/session';
 import { makeRepeatedMultiviewFixture, makeSyntheticFixture } from './decomposerSyntheticFixtures';
 
 function fixture(): Buffer {
@@ -17,6 +18,46 @@ function opaqueFixture(): Buffer {
     rgba.set(x >= 8 && x < 16 && y >= 8 && y < 16 ? [184, 50, 38, 255] : [255, 255, 255, 255], (y * width + x) * 4);
   return Buffer.from(encodePng({ width, height, rgba }));
 }
+
+function occlusionStill(withFront: boolean): Uint8Array {
+  const width = 48, height = 40, rgba = new Uint8Array(width * height * 4);
+  for (let y = 6; y < 34; y++) for (let x = 6; x < 38; x++) rgba.set([186, 62, 39, 255], (y * width + x) * 4);
+  if (withFront) for (let y = 6; y < 23; y++) for (let x = 19; x < 25; x++) rgba.set([33, 103, 182, 255], (y * width + x) * 4);
+  return encodePng({ width, height, rgba });
+}
+
+test('a hidden region can use explicitly matched alternate pixels and undo that choice', async ({ page }) => {
+  const session = await DecompositionSession.importSources([
+    { bytes: occlusionStill(true), name: 'primary.png', mime: 'image/png', role: 'primary' },
+    { bytes: occlusionStill(false), name: 'alternate.png', mime: 'image/png', role: 'alternate-pose' },
+  ], { mode: 'animation-ready' });
+  await session.analyze();
+  const original = session.snapshot(), primary = original.sources[0], alternate = original.sources[1];
+  const back = original.regions.find(item => item.sourceId === primary.id && item.color === '#ba3e27')!;
+  const other = original.regions.find(item => item.sourceId === alternate.id && item.color === '#ba3e27')!;
+  expect((await session.execute({ expectedRevision: session.revision, edits: [
+    { op: 'reference.correspond', correspondence: { id: 'owner-match', sourceIds: [primary.id, alternate.id], regionIds: [back.id, other.id], kind: 'same-part', origin: 'manual', accepted: true, evidence: ['owner matched the red part'] } },
+    { op: 'reference.setTransform', sourceId: alternate.id, transformToPrimary: [1, 0, 0, 1, 0, 0] },
+  ] })).ok).toBe(true);
+  await session.analyze();
+  const bytes = await session.saveDocument();
+  await session.close();
+  await page.goto('/decomposer.html');
+  await page.getByLabel('Open .hydecomp').setInputFiles({ name: 'matched.hydecomp', mimeType: 'application/zip', buffer: Buffer.from(bytes) });
+  await expect(page.locator('.left-pane .inferred-row')).toHaveCount(1);
+  await page.locator('.left-pane .inferred-row').click();
+  const choice = page.getByRole('button', { name: 'Use pixels from alternate.png' });
+  await expect(choice).toBeEnabled();
+  await choice.click();
+  await expect(page.getByRole('status')).toContainText('region.setAlignedTexture saved');
+  await expect(page.getByText('Using alternate.png with alignment saved at selection time.')).toBeVisible();
+  await expect(page.getByAltText('Isolated uncertain hidden texture crop')).toHaveJSProperty('naturalWidth', 2);
+  await page.getByRole('button', { name: 'Preview in Hyde' }).click();
+  await expect(page.getByAltText('Native Hyde render of current export')).toBeVisible();
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await expect(choice).toBeEnabled();
+  await expect(page.getByText('Using alternate.png with alignment saved at selection time.')).toHaveCount(0);
+});
 
 test('large import shows a bounded provisional pyramid preview before committing source-resolution regions', async ({ page }) => {
   const width = 1024, height = 1024, rgba = new Uint8Array(width * height * 4);

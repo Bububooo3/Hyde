@@ -21,6 +21,7 @@ export type DecompositionEdit =
   | { op: 'region.clearManualPath'; regionId: string }
   | { op: 'region.setSuppressed'; regionId: string; suppressed: boolean }
   | { op: 'region.setColor'; regionId: string; color: string | null }
+  | { op: 'region.setAlignedTexture'; regionId: string; sourceId: string | null }
   | { op: 'region.refineMask'; regionId: string; handle: string; bounds?: RegionRecord['bounds'] }
   | { op: 'region.featherOutside'; regionId: string; radius: number; strength: number }
   | { op: 'region.seedMask'; regionId: string; x: number; y: number; action: 'add' | 'subtract'; colorTolerance: number; radius: number; maxPixels?: number }
@@ -338,6 +339,7 @@ export class DecompositionSession {
             region.authoredColor = oldRegion.authoredColor;
             region.color = oldRegion.authoredColor;
           }
+          if (oldRegion.alignedTexture) region.alignedTexture = structuredClone(oldRegion.alignedTexture);
           region.geometry.manualPath = oldRegion.geometry.manualPath;
           region.geometry.locked = oldRegion.geometry.locked;
           region.locked = structuredClone(oldRegion.locked);
@@ -423,6 +425,7 @@ export class DecompositionSession {
             region.authoredColor = earlier.authoredColor;
             region.color = earlier.authoredColor;
           }
+          if (earlier.alignedTexture) region.alignedTexture = structuredClone(earlier.alignedTexture);
           region.geometry.locked = earlier.geometry.locked;
           if (earlier.locked.mask || earlier.generationStatus === 'manual' || earlier.originalMaskId) {
             Object.assign(region, { maskId: earlier.maskId, originalMaskId: earlier.originalMaskId, bounds: earlier.bounds, pixelCount: earlier.pixelCount, holeCount: earlier.holeCount, geometry: structuredClone(earlier.geometry), generationStatus: earlier.generationStatus });
@@ -441,7 +444,7 @@ export class DecompositionSession {
     const retainedHidden = new Set<string>();
     if (mode === 'animation-ready') for (const region of previous.regions) {
       if (!active(region) || region.geometry.status !== 'inferred' || matched.has(region.id) || candidate.regions.some(item => item.id === region.id)) continue;
-      if (region.generationStatus !== 'manual' && !region.locked.mask && !region.locked.geometry && !region.locked.part) continue;
+      if (region.generationStatus !== 'manual' && !region.locked.mask && !region.locked.geometry && !region.locked.part && !region.alignedTexture) continue;
       candidate.regions.push(structuredClone(region));
       retainedHidden.add(region.id);
       matched.add(region.id);
@@ -587,6 +590,21 @@ export class DecompositionSession {
           }
           changed.add(target.id);
         }
+        else if (edit.op === 'region.setAlignedTexture') {
+          const target = region(edit.regionId);
+          if (target.geometry.status !== 'inferred') fail('INVALID_ARGUMENT: Aligned reference texture requires an inferred region.');
+          if (edit.sourceId === null) delete target.alignedTexture;
+          else {
+            const source = candidate.sources.find(item => item.id === edit.sourceId && item.role !== 'primary') ?? fail('TARGET_NOT_FOUND: Alternate texture source does not exist.');
+            const transform = source.transformToPrimary ?? fail('INVALID_ARGUMENT: Align the alternate reference before using its texture.');
+            const matched = candidate.correspondences.some(item => item.origin === 'manual' && item.kind === 'same-part' && item.accepted &&
+              item.regionIds?.some(id => candidate.regions.some(other => other.id === id && other.sourceId === source.id && active(other))) &&
+              item.regionIds?.some(id => candidate.regions.some(other => other.id === id && other.sourceId === target.sourceId && other.partId === target.partId && active(other))));
+            if (!matched) fail('INVALID_ARGUMENT: Confirm a same-part match with this alternate reference first.');
+            target.alignedTexture = { sourceId: source.id, transformToPrimary: [...transform] as typeof transform };
+          }
+          changed.add(target.id);
+        }
         else if (edit.op === 'region.refineMask') {
           const target = region(edit.regionId), incoming = this.stagedMasks.get(edit.handle) ?? fail('Mask handle is unavailable.');
           if (target.locked.mask) fail('Mask is locked.');
@@ -680,6 +698,7 @@ export class DecompositionSession {
         } else if (edit.op === 'region.merge') {
           const first = region(edit.firstId), second = region(edit.secondId);
           if (first.sourceId !== second.sourceId || first.partId !== second.partId || first.locked.mask || second.locked.mask || first.locked.part || second.locked.part) fail('Merge needs two unlocked regions from one source and part.');
+          if (first.alignedTexture || second.alignedTexture) fail('DOCUMENT_CONFLICT: Clear the chosen aligned texture before merging regions with different pixel provenance.');
           const x = Math.min(first.bounds.x, second.bounds.x), y = Math.min(first.bounds.y, second.bounds.y);
           const width = Math.max(first.bounds.x + first.bounds.width, second.bounds.x + second.bounds.width) - x, height = Math.max(first.bounds.y + first.bounds.height, second.bounds.y + second.bounds.height) - y;
           const bytes = new Uint8Array(width * height);

@@ -2,12 +2,13 @@
 import { analyzeImage, buildImagePyramid, DecompositionSession, defaultSettings } from '../decomposer';
 import type { DecompositionEdit, DecompositionDocumentV1, HydeDecompositionExportOptions, RegionMask, RegionRecord, SourceInput } from '../decomposer';
 import { compareNativeRender } from '../decomposer/quality';
+import { renderRegionTextureCrop } from '../decomposer/export';
 
 type Request = { id: number; type: string; payload?: any };
 let session: DecompositionSession | undefined;
 const requireSession = () => session ?? (() => { throw new Error('Import or open a decomposition document first.'); })();
 const active = (region: RegionRecord) => region.generationStatus !== 'historical' && !region.suppressed;
-const protectedByUser = (region: RegionRecord) => region.generationStatus === 'manual' || Boolean(region.geometry.manualPath) ||
+const protectedByUser = (region: RegionRecord) => region.generationStatus === 'manual' || Boolean(region.geometry.manualPath) || Boolean(region.alignedTexture) ||
   region.locked.mask || region.locked.geometry || region.locked.part;
 
 function sameMask(first: RegionMask, second: RegionMask): boolean {
@@ -21,7 +22,7 @@ function sameMask(first: RegionMask, second: RegionMask): boolean {
 function sameEffectiveRegion(before: RegionRecord, after: RegionRecord, original: DecompositionSession, preview: DecompositionSession): boolean {
   const visible = (region: RegionRecord) => ({ bounds: region.bounds, color: region.color, classification: region.classification,
     pixelCount: region.pixelCount, holeCount: region.holeCount, partId: region.partId,
-    status: region.geometry.status, texture: region.geometry.texture,
+    status: region.geometry.status, texture: region.geometry.texture, alignedTexture: region.alignedTexture,
     path: region.geometry.manualPath ?? region.geometry.generatedPath });
   return JSON.stringify(visible(before)) === JSON.stringify(visible(after)) &&
     sameMask(original.maskFor(before.maskId), preview.maskFor(after.maskId));
@@ -150,6 +151,17 @@ self.onmessage = async (event: MessageEvent<Request>) => {
       const exported = await requireSession().exportHyde(payload.options as HydeDecompositionExportOptions);
       result = exported;
     } else if (type === 'source') result = { bytes: requireSession().sourceBytesFor(payload.id) };
+    else if (type === 'region.texturePreview') {
+      const running = requireSession(), doc = running.snapshot();
+      const region = doc.regions.find(item => item.id === payload.id && active(item) && item.alignedTexture);
+      const primary = doc.sources.find(item => item.role === 'primary');
+      if (!region || !primary) throw new Error('No aligned texture exists on this current region.');
+      const images = new Map([[primary.id, running.sourcePixelsFor(primary.id)],
+        [region.alignedTexture!.sourceId, running.sourcePixelsFor(region.alignedTexture!.sourceId)]]);
+      const bytes = renderRegionTextureCrop(region, running.maskFor(region.maskId), images.get(primary.id)!, images);
+      result = { bytes };
+      if (bytes.buffer instanceof ArrayBuffer) transfers.push(bytes.buffer);
+    }
     else if (type === 'masks') {
       const running = requireSession(), doc = running.snapshot();
       result = doc.regions.filter(region => region.sourceId === payload.sourceId && region.generationStatus !== 'historical' && !region.suppressed)
