@@ -3,6 +3,48 @@ import { describe, expect, it } from 'vitest';
 import { HydeSDK, HYDE_EXECUTE_SCHEMA_V1 } from './sdk';
 
 describe('public Node SDK', () => {
+  it('round-trips authored assembly clips, placed overrides and timeline inspection through the public facade', async () => {
+    const sdk = new HydeSDK(), session = await sdk.createProject({ name: 'Clip interchange', duration: 8 });
+    const made = await session.execute({ protocolVersion: 1, expectedRevision: 0, commands: [
+      { op: 'element.create', args: { id: 'rig', kind: 'group', properties: { name: 'Rig', start: 0, duration: 8 } } },
+      { op: 'element.create', args: { id: 'arm', kind: 'rectangle', properties: { name: 'Arm', parentId: 'rig', start: 0, duration: 8, x: 80 } } },
+      { op: 'assembly.attach', args: { id: 'arm', parentId: 'rig', type: 'fixed' } },
+      { op: 'keyframe.upsert', args: { elementId: 'arm', property: 'x', timeSeconds: 0, value: 80 } },
+      { op: 'keyframe.upsert', args: { elementId: 'arm', property: 'x', timeSeconds: 2, value: 160 } },
+      { op: 'clip.capture', args: { rootId: 'rig', sourceStart: 0, duration: 2, name: 'Reach', alias: '$reach' } },
+      { op: 'clip.place', args: { rootId: 'rig', clipId: '$reach', at: 1, alias: '$first' } },
+      { op: 'clip.place', args: { rootId: 'rig', clipId: '$reach', at: 4, alias: '$second' } },
+      { op: 'clip.setGapTransition', args: { rootId: 'rig', instanceId: '$second', elementId: 'arm', property: 'x', transition: { mode: 'hold' } } },
+      { op: 'clip.setPriority', args: { rootId: 'rig', instanceId: '$second', elementId: 'arm', property: 'x', priority: 3 } },
+      { op: 'clip.editPlacedKey', args: { rootId: 'rig', clipId: '$reach', instanceId: '$second', elementId: 'arm', property: 'x', action: 'add', timeSeconds: 1, alias: '$override' } },
+    ] });
+    expect(made.ok, JSON.stringify(made)).toBe(true);
+    if (!made.ok) return;
+    const timeline = await session.inspect({ target: 'timeline', timeStart: 0, timeEnd: 8 });
+    expect(timeline.items?.find(item => item.id === 'rig')).toMatchObject({
+      assemblyClips: [{ id: made.idMap.$reach, name: 'Reach', duration: 2 }],
+      clipInstances: [{ id: made.idMap.$first }, { id: made.idMap.$second }],
+    });
+    const before = await session.evaluate(5);
+    const reopened = await sdk.openProject(await session.exportProject());
+    expect(reopened.snapshot()).toEqual(session.snapshot());
+    expect(await reopened.evaluate(5)).toEqual(before);
+    expect((await reopened.inspect({ target: 'assembly', id: 'rig' })).items?.[0]).toMatchObject({
+      id: 'rig', children: [{ id: 'arm', attachment: { type: 'fixed', parentId: 'rig' } }],
+    });
+    const placed = reopened.snapshot().elements.find(item => item.id === 'rig')!.clipInstances![1];
+    expect(placed.gapTransitions?.[0]).toMatchObject({ mode: 'hold' });
+    expect(placed.priorityOverrides?.[0]).toMatchObject({ priority: 3 });
+    expect(placed.trackOverrides?.[0].keyframes.some(key => key.id === made.idMap.$override)).toBe(true);
+    const invalid = await reopened.execute({ protocolVersion: 1, expectedRevision: 0, commands: [
+      { op: 'clip.rename', args: { rootId: 'rig', clipId: made.idMap.$reach, name: 'Changed temporarily' } },
+      { op: 'clip.retime', args: { rootId: 'rig', instanceId: made.idMap.$second, duration: -1 } },
+    ] });
+    expect(invalid.ok).toBe(false);
+    expect(reopened.revision).toBe(0);
+    expect(reopened.snapshot()).toEqual(session.snapshot());
+  });
+
   it('keeps differing source durations separate when importing byte-identical assembly media', async () => {
     const sdk = new HydeSDK();
     const videoBytes = Uint8Array.from([0, 0, 0, 16, 102, 116, 121, 112, 105, 115, 111, 109, 0, 0, 0, 0]);
