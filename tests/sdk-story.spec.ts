@@ -1,6 +1,40 @@
 import { expect, test } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { makeSDKAcceptanceStory } from './sdkAcceptanceFixture';
+import { HydeSDK } from '../src/sdk';
+
+test('SDK-authored assembly clips remain editable in Story Studio and survive its save', async ({ page }) => {
+  const sdk = new HydeSDK(), session = await sdk.createProject({ name: 'SDK clip editor handoff', duration: 8 });
+  const made = await session.execute({ protocolVersion: 1, expectedRevision: 0, commands: [
+    { op: 'element.create', args: { id: 'sdk-rig', kind: 'group', properties: { name: 'SDK rig', start: 0, duration: 8 } } },
+    { op: 'element.create', args: { id: 'sdk-arm', kind: 'rectangle', properties: { name: 'SDK arm', parentId: 'sdk-rig', start: 0, duration: 8, x: 80 } } },
+    { op: 'assembly.attach', args: { id: 'sdk-arm', parentId: 'sdk-rig', type: 'fixed' } },
+    { op: 'keyframe.upsert', args: { elementId: 'sdk-arm', property: 'x', timeSeconds: 0, value: 80 } },
+    { op: 'keyframe.upsert', args: { elementId: 'sdk-arm', property: 'x', timeSeconds: 2, value: 160 } },
+    { op: 'clip.capture', args: { rootId: 'sdk-rig', sourceStart: 0, duration: 2, name: 'Reach', alias: '$reach' } },
+    { op: 'clip.place', args: { rootId: 'sdk-rig', clipId: '$reach', at: 1, alias: '$placed' } },
+  ] });
+  expect(made.ok, JSON.stringify(made)).toBe(true);
+  await page.goto('/');
+  await page.locator('input[type=file][accept=".hyde,.hy"]').setInputFiles({
+    name: 'sdk-clips.hyde', mimeType: 'application/zip', buffer: Buffer.from(await session.exportProject()),
+  });
+  await expect(page.getByRole('textbox', { name: 'Project name', exact: true })).toHaveValue('SDK clip editor handoff');
+  await page.locator('.layer-name').filter({ hasText: 'SDK rig' }).click();
+  await expect(page.getByRole('button', { name: 'Place Reach clip' })).toBeVisible();
+  await expect(page.locator('.assembly-instance-block')).toContainText('Reach');
+  await page.getByRole('textbox', { name: 'Element name', exact: true }).fill('Edited SDK rig');
+  const saving = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'File', exact: true }).click();
+  await page.getByRole('button', { name: 'Download project copy', exact: true }).click();
+  const reopened = await sdk.openProject(new Uint8Array(await readFile((await (await saving).path())!)));
+  const root = reopened.snapshot().elements.find(item => item.id === 'sdk-rig')!;
+  expect(root.name).toBe('Edited SDK rig');
+  expect(root.assemblyClips?.[0]).toMatchObject({ id: made.ok ? made.idMap.$reach : '', name: 'Reach' });
+  expect(root.clipInstances?.[0]).toMatchObject({ id: made.ok ? made.idMap.$placed : '', clipId: made.ok ? made.idMap.$reach : '' });
+  expect(await reopened.diagnostics()).toEqual([]);
+  await reopened.close(); await session.close();
+});
 
 test('SDK story remains editable in Hyde and produces actual browser frames and GIF', async ({ page }) => {
   test.setTimeout(90_000);
