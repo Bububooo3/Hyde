@@ -2,14 +2,14 @@
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { encodeProjectBytes } from './archive';
 import { enrichAssetInspection } from './assetInspection';
 import { HydeAuthoringSession } from './authoring';
 import { runCli } from './cli';
 import { EditorBridge } from './editorBridge';
 import { createProject } from './model';
-import { HydeSDK } from './sdk';
+import { HydeSDK, HydeSession } from './sdk';
 
 const png = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lXcAAAAASUVORK5CYII=', 'base64'));
 
@@ -54,4 +54,17 @@ it('reads bounded WebP and JPEG dimensions without raster decoding', async () =>
   const session = new HydeAuthoringSession(project);
   const inspected = await enrichAssetInspection(project, { target: 'assets', fields: 'id,width,height' }, session.inspect({ target: 'assets', fields: 'id,width,height' }));
   expect(inspected.items).toEqual([{ id: 'jpeg', width: 40, height: 24 }, { id: 'webp', width: 32, height: 16 }]);
+});
+
+it('inspects project summaries and asset pages without cloning embedded media', async () => {
+  const project = createProject('Large embedded asset');
+  project.assets.push({ id: 'large', name: 'large.bin', mime: 'application/octet-stream', kind: 'image', dataUrl: `data:application/octet-stream;base64,${'A'.repeat(4 * 1024 * 1024)}` });
+  const authoring = new HydeAuthoringSession(project);
+  const snapshot = vi.spyOn(authoring, 'snapshot').mockImplementation(() => { throw new Error('Inspection cloned the project.'); });
+  const session = new HydeSession(authoring);
+  expect(await session.inspect({ target: 'project' })).toMatchObject({ project: { assetCount: 1 } });
+  expect(await session.inspect({ target: 'scenes' })).toHaveProperty('items');
+  expect(await session.inspect({ target: 'assets', fields: 'id,name' })).toMatchObject({ items: [{ id: 'large', name: 'large.bin' }] });
+  expect(await session.inspect({ target: 'asset', id: 'large', fields: 'id,byteLength' })).toMatchObject({ asset: { id: 'large', byteLength: 3 * 1024 * 1024 } });
+  expect(snapshot).not.toHaveBeenCalled();
 });

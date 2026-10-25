@@ -13,6 +13,7 @@ import type { TimelineCommand } from './authoringTimeline';
 import { applyCatalogCommand, CATALOG_COMMAND_KEYS, CATALOG_OPERATIONS, CatalogError } from './authoringCatalog';
 import type { CatalogCommand } from './authoringCatalog';
 import { validateStagedAsset } from './assetSniff';
+import { enrichAssetInspection } from './assetInspection';
 
 export interface HydeDiagnostic {
   code: string;
@@ -305,6 +306,12 @@ export class HydeAuthoringSession {
   }
   discardAssembly(handle: string): void { this.stagedAssemblies.delete(handle); }
   snapshot(): Project { return structuredClone(this.project); }
+  /** Keep embedded bytes private while enriching only the requested asset page. */
+  async inspectWithAssetMetadata(query: InspectRequest): Promise<ReturnType<HydeAuthoringSession['inspect']>> {
+    const result = this.inspect(query);
+    if (query?.target !== 'asset' && query?.target !== 'assets') return result;
+    return enrichAssetInspection(this.project, query, result) as Promise<ReturnType<HydeAuthoringSession['inspect']>>;
+  }
   exportProject(): Uint8Array { return encodeProjectBytes(this.project); }
   exportAssembly(rootId: string, timeSeconds?: number): Uint8Array { return encodeAssemblyBytes(makeAssembly(this.project, [rootId], timeSeconds)); }
   evaluate(timeSeconds: number): StoryElement[] { return evaluateProject(this.project, timeSeconds).map(item => structuredClone(item)); }
