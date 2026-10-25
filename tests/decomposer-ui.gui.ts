@@ -18,6 +18,23 @@ function opaqueFixture(): Buffer {
   return Buffer.from(encodePng({ width, height, rgba }));
 }
 
+test('large import shows a bounded provisional pyramid preview before committing source-resolution regions', async ({ page }) => {
+  const width = 1024, height = 1024, rgba = new Uint8Array(width * height * 4);
+  for (let y = 128; y < 896; y++) for (let x = 160; x < 864; x++) rgba.set([180, 55, 38, 255], (y * width + x) * 4);
+  await page.goto('/decomposer.html');
+  await page.evaluate(() => {
+    (window as Window & { sawCoarsePreview?: boolean }).sawCoarsePreview = false;
+    new MutationObserver(() => { if (document.querySelector('.coarse-preview-banner'))
+      (window as Window & { sawCoarsePreview?: boolean }).sawCoarsePreview = true; })
+      .observe(document.body, { subtree: true, childList: true, characterData: true });
+  });
+  await page.getByLabel('Import images').setInputFiles({ name: 'large-flat.png', mimeType: 'image/png', buffer: Buffer.from(encodePng({ width, height, rgba })) });
+  await expect(page.getByRole('status')).toContainText('Automatic first pass found 1 editable regions.', { timeout: 60_000 });
+  expect(await page.evaluate(() => (window as Window & { sawCoarsePreview?: boolean }).sawCoarsePreview)).toBe(true);
+  await expect(page.getByRole('note')).toHaveCount(0);
+  await expect(page.locator('.left-pane .scroll-list').first().locator('.row')).toHaveCount(1);
+});
+
 test('opaque background correction is previewed and saved per reference', async ({ page }) => {
   await page.goto('/decomposer.html');
   await page.getByLabel('Import images').setInputFiles({ name: 'opaque.png', mimeType: 'image/png', buffer: opaqueFixture() });

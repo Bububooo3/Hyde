@@ -19,6 +19,8 @@ type RegenerationImpact = { baseRevision: number; kind: RegenerationRequest['kin
   previewContours: { id: string; sourceId: string; bounds: RegionRecord['bounds']; path: ShapePath; kind: 'removed' | 'before' | 'after' }[];
   omittedPreviewContours: number };
 type NativeQualityReport = Omit<ReconstructionQualityReport, 'residualOverlayPng'>;
+type CoarsePreview = { kind: 'coarse-preview'; scale: number; regionCount: number; omitted: number;
+  contours: RegenerationImpact['previewContours'] };
 const color = (hex: string): [number, number, number] => [1, 3, 5].map(at => parseInt(hex.slice(at, at + 2), 16)) as [number, number, number];
 const current = (region: RegionRecord) => region.generationStatus !== 'historical';
 const active = (region: RegionRecord) => current(region) && !region.suppressed;
@@ -174,6 +176,7 @@ export default function App() {
   const [requestedMode, setRequestedMode] = useState<DecompositionMode>();
   const [draftSettings, setDraftSettings] = useState<ReconstructionSettings>();
   const [pendingRegeneration, setPendingRegeneration] = useState<{ label: string; request: RegenerationRequest; impact: RegenerationImpact }>();
+  const [coarsePreview, setCoarsePreview] = useState<CoarsePreview>();
   const [busy, setBusy] = useState(false), [status, setStatus] = useState('Import one or more illustrations to begin.');
   const [exportFormat, setExportFormat] = useState<'hyde' | 'hyproj'>('hyproj'), [allowHoleApproximation, setAllowHoleApproximation] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string>();
@@ -249,6 +252,7 @@ export default function App() {
   }, []);
   const refresh = useCallback(async (state: WorkerState, loadSource = false) => {
     clearNativePreview();
+    setCoarsePreview(undefined);
     setPendingRegeneration(undefined); setDraftSettings(state.document.settings);
     setRequestedMode(undefined); setRequestedInference(undefined);
     setDocumentModel(state.document); setRevision(state.revision);
@@ -279,7 +283,7 @@ export default function App() {
   async function importImages(event: ChangeEvent<HTMLInputElement>) {
     const files = [...(event.target.files ?? [])]; event.target.value = '';
     if (!files.length) return;
-    setBusy(true); setStatus('Importing original references locally…');
+    setBusy(true); setCoarsePreview(undefined); setStatus('Importing original references locally…');
     try {
       if (documentModel) checkpoint.current = (await client.current.call<{ bytes: Uint8Array }>('save')).bytes;
       const inputs = await Promise.all(files.map(async (file, index) => ({ name: file.name, mime: file.type, role: index === 0 ? 'primary' : 'alternate-view', bytes: new Uint8Array(await file.arrayBuffer()) })));
@@ -289,11 +293,15 @@ export default function App() {
       checkpoint.current = (await client.current.call<{ bytes: Uint8Array }>('save')).bytes;
       setStatus(`Imported ${files.length} reference${files.length === 1 ? '' : 's'}. Analyzing…`);
       await new Promise(resolve => window.setTimeout(resolve, 0));
-      const analyzed = await client.current.call<WorkerState>('analyze', {});
+      const analyzed = await client.current.call<WorkerState>('analyze', {}, (progress: CoarsePreview) => {
+        if (progress.kind !== 'coarse-preview' || canceling.current) return;
+        setCoarsePreview(progress);
+        setStatus(`Coarse ${progress.scale}× source preview: ${progress.regionCount} provisional regions. Full-resolution analysis continues…`);
+      });
       await refresh(analyzed, true);
       setStatus(`Automatic first pass found ${analyzed.document.regions.filter(active).length} editable regions. Inspect boundaries and diagnostics before export.`);
     } catch (error) { if (!canceling.current) setStatus(error instanceof Error ? error.message : 'Import failed.'); }
-    finally { setBusy(false); }
+    finally { setCoarsePreview(undefined); setBusy(false); }
   }
   async function openDocument(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]; event.target.value = ''; if (!file) return;
@@ -392,7 +400,7 @@ export default function App() {
     if (!busy) return;
     canceling.current = true;
     client.current.restart();
-    setBusy(false); setStatus('Canceled. Restoring the last complete document checkpoint…');
+    setCoarsePreview(undefined); setBusy(false); setStatus('Canceled. Restoring the last complete document checkpoint…');
     try { if (checkpoint.current) await refresh(await client.current.call<WorkerState>('open', { bytes: checkpoint.current }), true); }
     catch (error) { setStatus(error instanceof Error ? error.message : 'Could not restore checkpoint.'); }
     finally { canceling.current = false; }
@@ -485,11 +493,12 @@ export default function App() {
       context.moveTo(selectedPart.pivot.x, selectedPart.pivot.y - 7); context.lineTo(selectedPart.pivot.x, selectedPart.pivot.y + 7); context.stroke(); context.restore();
     }
     for (const item of pendingRegeneration?.impact.previewContours ?? []) if (item.sourceId === source.id) drawRegenerationContour(context, item);
+    for (const item of coarsePreview?.contours ?? []) if (item.sourceId === source.id) drawRegenerationContour(context, item);
     if (pointer.current?.tool.startsWith('paint')) {
       context.save(); context.strokeStyle = pointer.current.tool === 'paint-add' ? '#06f0aa' : '#ff6378'; context.lineWidth = Math.max(1, brushRadius * 2); context.lineCap = 'round';
       context.beginPath(); pointer.current.points.forEach((point, index) => index ? context.lineTo(point.x, point.y) : context.moveTo(point.x, point.y)); context.stroke(); context.restore();
     }
-  }, [source?.id, source?.width, source?.height, visibleRegions, inferredRegions, documentModel?.parts, documentModel?.correspondences, masks, selectedRegion, selectedRegionId, selectedPart, view, overlayAlpha, isolate, showInferred, selectedPoint, draftPoint, draftHandle, pendingLandmark, pendingRegeneration, tool, brushRadius, renderVersion]);
+  }, [source?.id, source?.width, source?.height, visibleRegions, inferredRegions, documentModel?.parts, documentModel?.correspondences, masks, selectedRegion, selectedRegionId, selectedPart, view, overlayAlpha, isolate, showInferred, selectedPoint, draftPoint, draftHandle, pendingLandmark, pendingRegeneration, coarsePreview, tool, brushRadius, renderVersion]);
 
   const pointFromEvent = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     if (!source) return { x: 0, y: 0 };
@@ -632,6 +641,7 @@ export default function App() {
       <main className="center-pane">
         <div className="canvas-toolbar"><div className="segmented">{(['original', 'reconstruction', 'overlay', 'side-by-side'] as View[]).map(item => <button key={item} aria-pressed={view === item} onClick={() => setView(item)}>{item === 'side-by-side' ? 'Side by side' : item[0].toUpperCase() + item.slice(1)}</button>)}</div><label>Zoom<select aria-label="Canvas zoom" value={String(zoom)} onChange={event => setZoom(event.target.value === 'fit' ? 'fit' : Number(event.target.value))}><option value="fit">Fit</option><option value="1">1× pixels</option><option value="2">2× pixels</option><option value="4">4× pixels</option><option value="8">8× pixels</option></select></label><label>Tool <select aria-label="Canvas tool" value={tool} onChange={event => setTool(event.target.value as Tool)}><option value="select">Select</option><option value="path">Edit path and handles</option><option value="paint-add">Add mask brush</option><option value="paint-erase">Subtract mask brush</option><option value="seed-add">Foreground seed</option><option value="seed-erase">Background seed</option><option value="landmark">Pair reference landmark</option><option value="background">Mark background color</option><option value="pivot">Set pivot</option></select></label><label><input type="checkbox" checked={isolate} onChange={event => setIsolate(event.target.checked)}/> Isolate</label></div>
         {source && source.role !== 'primary' && <section className="reference-comparison" aria-label="Compare references"><strong>Compare the two stills</strong><p>The primary image defines the editable Hyde construction pose. This additional view supplies evidence for a same-part match, front/back order and possible hidden contours. Confirm matches yourself; alignment maps coordinates only when one transform fits both images. No motion is generated.</p><div className="reference-comparison-images"><figure><figcaption>Primary construction pose · {primarySource?.name}</figcaption>{primaryComparisonUrl && <img alt="Primary construction pose" src={primaryComparisonUrl}/>}</figure><figure><figcaption>Additional reference · {source.name}</figcaption>{loadedSourceId === source.id && sourceUrl.current && <img alt="Additional reference" src={sourceUrl.current}/>}</figure></div></section>}
+        {coarsePreview && <div className="coarse-preview-banner" role="note">Provisional {coarsePreview.scale}× pyramid preview · {coarsePreview.regionCount} candidate regions · {coarsePreview.contours.length} outlines shown{coarsePreview.omitted ? `, ${coarsePreview.omitted} omitted` : ''}. Full-resolution masks and editable paths are still processing.</div>}
         {(tool === 'path' || tool.startsWith('paint') || tool.startsWith('seed') || view === 'overlay' || inferredRegions.length > 0) && <div className="canvas-subbar">
           {tool.startsWith('paint') && <><label>Brush radius <input aria-label="Brush radius" type="range" min="1" max="40" value={brushRadius} onChange={event => setBrushRadius(Number(event.target.value))}/>{brushRadius}px</label><label>Brush hardness <input aria-label="Brush hardness" type="range" min="0.1" max="1" step="0.1" value={brushHardness} onChange={event => setBrushHardness(Number(event.target.value))}/>{Math.round(brushHardness * 100)}%</label></>}
           {tool.startsWith('seed') && <><label>Seed tolerance <input aria-label="Seed tolerance" type="range" min="0" max="255" value={seedTolerance} onChange={event => setSeedTolerance(Number(event.target.value))}/>{seedTolerance}</label><label>Seed reach <input aria-label="Seed reach" type="range" min="1" max="256" value={seedRadius} onChange={event => setSeedRadius(Number(event.target.value))}/>{seedRadius}px</label></>}

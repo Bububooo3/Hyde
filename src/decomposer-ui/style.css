@@ -63,6 +63,7 @@ h3 { font-size: 13px; margin: 0; }
 .reference-comparison figure { display: grid; gap: 5px; justify-items: center; min-width: 0; margin: 0; padding: 7px; border: 1px solid #38545d; border-radius: 6px; background: #10242c; }
 .reference-comparison figcaption { justify-self: start; }
 .reference-comparison img { display: block; width: 100%; max-height: 150px; object-fit: contain; image-rendering: auto; background: conic-gradient(#f4f6f1 25%, #d6dfdb 0 50%, #f4f6f1 0 75%, #d6dfdb 0) 0 0/16px 16px; }
+.coarse-preview-banner { margin: 10px 14px 0; padding: 8px 11px; border: 1px solid #3baba1; border-radius: 6px; background: #153f42; color: #d1f8ed; font-size: 11px; line-height: 1.4; }
 .canvas-card .interactive-canvas { touch-action: none; cursor: crosshair; }
 .empty-state { justify-self: center; align-self: center; text-align: center; max-width: 430px; padding: 25px; }
 .empty-state h1 { font-size: 26px; line-height: 1.15; }

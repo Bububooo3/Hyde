@@ -1,5 +1,5 @@
 /// <reference lib="webworker" />
-import { DecompositionSession } from '../decomposer';
+import { analyzeImage, buildImagePyramid, DecompositionSession } from '../decomposer';
 import type { DecompositionEdit, DecompositionDocumentV1, HydeDecompositionExportOptions, RegionMask, RegionRecord, SourceInput } from '../decomposer';
 import { compareNativeRender } from '../decomposer/quality';
 
@@ -99,6 +99,27 @@ self.onmessage = async (event: MessageEvent<Request>) => {
       const running = requireSession();
       if (payload.expectedRevision !== undefined && payload.expectedRevision !== running.revision)
         throw new Error('The document changed after the regeneration preview. Preview it again.');
+      const current = running.snapshot(), primary = current.sources.find(source => source.role === 'primary');
+      if (primary && Math.max(primary.width, primary.height) > 512) try {
+        const pyramid = buildImagePyramid(running.sourcePixelsFor(primary.id));
+        const coarse = pyramid[pyramid.length - 1], scale = coarse.scale;
+        const settings = { ...current.settings,
+          minRegionPixels: Math.max(1, Math.ceil(current.settings.minRegionPixels / (scale * scale))),
+          pathTolerance: current.settings.pathTolerance / scale };
+        const preview = analyzeImage(coarse, { ...primary, width: coarse.width, height: coarse.height }, payload.mode ?? current.mode, settings, 'provisional-pyramid-preview');
+        const contours: { id: string; sourceId: string; bounds: RegionRecord['bounds']; path: RegionRecord['geometry']['generatedPath']; kind: 'after' }[] = [];
+        let points = 0;
+        for (const region of preview.regions) {
+          const path = region.geometry.generatedPath, count = path.points.length + (path.holes ?? []).reduce((sum, hole) => sum + hole.points.length, 0);
+          if (contours.length >= 64 || points + count > 8192) break;
+          contours.push({ id: region.id, sourceId: primary.id,
+            bounds: { x: region.bounds.x * scale, y: region.bounds.y * scale, width: region.bounds.width * scale, height: region.bounds.height * scale },
+            path, kind: 'after' });
+          points += count;
+        }
+        self.postMessage({ id, progress: { kind: 'coarse-preview', scale, regionCount: preview.regions.length, contours,
+          omitted: Math.max(0, preview.regions.length - contours.length) } });
+      } catch { /* Coarse evidence is optional; full-resolution analysis remains authoritative. */ }
       const analysis = await running.analyze(payload);
       result = { analysis, revision: running.revision, document: running.snapshot() };
     } else if (type === 'snapshot') result = { revision: requireSession().revision, document: requireSession().snapshot() };

@@ -3,6 +3,8 @@ export { defaultSettings } from './types';
 export { decodePng, encodePng, decodeSource, MAX_IMAGE_PIXELS } from './image';
 export { encodeDecompositionDocument, decodeDecompositionDocument, validateDecompositionDocument } from './codec';
 export { analyzeImage, fitMaskGeometry, proposeCorrespondences, ALGORITHM_VERSION } from './analysis';
+export { buildImagePyramid } from './pyramid';
+export type { ImagePyramidLevel } from './pyramid';
 export { rankReferenceCorrespondences } from './correspondence';
 export { proposePartAttachments } from './articulation';
 export { poseNativeDecomposition } from './pose';
