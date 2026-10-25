@@ -190,6 +190,7 @@ export default function App() {
   const pointer = useRef<{ tool: Tool; points: { x: number; y: number }[]; anchor?: number; side?: 'in' | 'out' } | undefined>(undefined);
   const checkpoint = useRef<Uint8Array | undefined>(undefined);
   const workGeneration = useRef(0);
+  const activeRenderAbort = useRef<AbortController | undefined>(undefined);
 
   const clearNativePreview = useCallback(() => {
     if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
@@ -198,6 +199,7 @@ export default function App() {
     setPreviewUrl(undefined); setResidualUrl(undefined); setNativeQuality(undefined); setShowResidual(false); setPosePreview(false);
   }, []);
   useEffect(() => () => {
+    activeRenderAbort.current?.abort();
     client.current.close();
     if (sourceUrl.current) URL.revokeObjectURL(sourceUrl.current);
     if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
@@ -371,6 +373,8 @@ export default function App() {
   async function nativeExport(preview = false, pose?: { partId: string; value: number }) {
     if (!documentModel || busy) return;
     const generation = workGeneration.current;
+    const renderAbort = new AbortController();
+    if (preview) activeRenderAbort.current = renderAbort;
     setBusy(true); setCancellable(true); setStatus(preview ? 'Rendering the native Hyde project…' : `Exporting editable .${exportFormat}…`);
     try {
       checkpoint.current = (await client.current.call<{ bytes: Uint8Array }>('save')).bytes;
@@ -385,7 +389,7 @@ export default function App() {
         if (generation !== workGeneration.current) return;
         const host = await HydeRenderHost.connect(() => renderProject);
         try {
-          const frame = await host.renderFrame({ timeSeconds: 0, width: renderProject.width, height: renderProject.height });
+          const frame = await host.renderFrame({ timeSeconds: 0, width: renderProject.width, height: renderProject.height, signal: renderAbort.signal });
           if (generation !== workGeneration.current) return;
           const url = URL.createObjectURL(new Blob([frame.bytes as BlobPart], { type: frame.mime }));
           previewUrlRef.current = url;
@@ -409,7 +413,7 @@ export default function App() {
         setStatus(`Editable .${exportFormat} exported through Hyde SDK. ${result.warnings.map(item => item.message).join(' ')}`);
       }
     } catch (error) { if (generation === workGeneration.current) setStatus(error instanceof Error ? error.message : 'Native export failed.'); }
-    finally { if (generation === workGeneration.current) { setCancellable(false); setBusy(false); } }
+    finally { if (activeRenderAbort.current === renderAbort) activeRenderAbort.current = undefined; if (generation === workGeneration.current) { setCancellable(false); setBusy(false); } }
   }
   async function planRegeneration(label: string, request: RegenerationRequest) {
     if (!documentModel || busy || pendingRegeneration) return;
@@ -468,6 +472,7 @@ export default function App() {
     if (!busy || !cancellable || restoring) return;
     setRestoring(true);
     workGeneration.current++;
+    activeRenderAbort.current?.abort();
     client.current.restart();
     setCoarsePreview(undefined); setStatus('Canceled. Restoring the last complete document checkpoint…');
     try {
