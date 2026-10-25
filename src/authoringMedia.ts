@@ -107,6 +107,11 @@ function sound(project: Project, item: StoryElement, expected: 'audio' | 'video'
   const asset = project.assets.find(candidate => candidate.id === item.assetId);
   if (item.kind !== expected || asset?.kind !== expected) fail(`A ${expected} element with a native ${expected} source is required.`, 'INVALID_ASSET');
 }
+function sourceDurationAvailable(project: Project, item: StoryElement): void {
+  const duration = project.assets.find(asset => asset.id === item.assetId)?.duration;
+  if (!Number.isFinite(duration) || !duration || duration <= 0)
+    fail('Media source duration is unavailable; declare duration on asset.add or asset.replace before editing source timing.', 'INVALID_ASSET', 'assetId');
+}
 function visualAsset(project: Project, item: StoryElement): void {
   const asset = project.assets.find(candidate => candidate.id === item.assetId);
   if (!asset || !['image', 'video'].includes(asset.kind)) fail('The element needs an image or video asset.', 'INVALID_ASSET');
@@ -265,7 +270,7 @@ export function applyMediaAuthoringCommand(project: Project, command: MediaAutho
       item.staticTextFlow = snapshot;
       return next;
     }
-    case 'audio.setRange': sound(next, item, 'audio'); return setMediaSourceWindow(next, item.id, args.inTime, args.outTime);
+    case 'audio.setRange': sound(next, item, 'audio'); sourceDurationAvailable(next, item); return setMediaSourceWindow(next, item.id, args.inTime, args.outTime);
     case 'audio.split': {
       sound(next, item, 'audio');
       const result = splitMediaClip(next, item.id, args.at);
@@ -283,6 +288,7 @@ export function applyMediaAuthoringCommand(project: Project, command: MediaAutho
       sound(next, item, 'audio');
       if (args.pitchSemitones !== undefined) { pitch(args.pitchSemitones); item.pitchSemitones = args.pitchSemitones; }
       if (args.linkSpeedPitch !== undefined) { bool(args.linkSpeedPitch, 'Pitch/speed link'); item.linkSpeedPitch = args.linkSpeedPitch; }
+      if (args.speed !== undefined && !item.loop) sourceDurationAvailable(next, item);
       return args.speed === undefined ? next : setMediaSpeed(next, item.id, args.speed);
     }
     case 'audio.setEffects': sound(next, item, 'audio'); setEffects(item, args.effects); return next;
@@ -299,6 +305,7 @@ export function applyMediaAuthoringCommand(project: Project, command: MediaAutho
       sound(next, item, 'video');
       if (args.loop !== undefined) { bool(args.loop, 'Loop'); item.loop = args.loop; }
       if (args.endBehavior !== undefined) { oneOf(args.endBehavior, ['hold', 'hide'], 'Video end behavior'); item.videoEndBehavior = args.endBehavior; }
+      if (args.inTime !== undefined || args.outTime !== undefined || args.speed !== undefined && !item.loop) sourceDurationAvailable(next, item);
       let result = args.speed === undefined ? next : setMediaSpeed(next, item.id, args.speed);
       if (args.inTime !== undefined || args.outTime !== undefined) {
         if (args.inTime === undefined || args.outTime === undefined) fail('Video source timing requires both inTime and outTime.');

@@ -3,6 +3,27 @@ import { describe, expect, it } from 'vitest';
 import { HydeSDK, HYDE_EXECUTE_SCHEMA_V1 } from './sdk';
 
 describe('public Node SDK', () => {
+  it('identifies a missing media duration before source timing changes', async () => {
+    const session = await new HydeSDK().createProject();
+    const bytes = Uint8Array.from([0, 0, 0, 16, 102, 116, 121, 112, 105, 115, 111, 109, 0, 0, 0, 0]);
+    const handle = session.stageAsset(bytes, 'video/mp4', 'video');
+    const created = await session.execute({ protocolVersion: 1, expectedRevision: 0, commands: [
+      { op: 'asset.add', args: { alias: '$asset', handle, name: 'unmeasured.mp4' } },
+      { op: 'element.create', args: { alias: '$movie', kind: 'video', properties: { assetId: '$asset' } } },
+    ] });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    const before = session.snapshot();
+    const timing = await session.execute({ protocolVersion: 1, expectedRevision: 1, commands: [
+      { op: 'video.setSourceTiming', args: { id: created.idMap.$movie, inTime: 0, outTime: 2 } },
+    ] });
+    expect(timing.ok).toBe(false);
+    if (!timing.ok) expect(timing.errors[0]).toMatchObject({ code: 'INVALID_ASSET', field: 'assetId', targetId: created.idMap.$movie });
+    expect(session.snapshot()).toEqual(before);
+    expect(session.revision).toBe(1);
+    await session.close();
+  });
+
   it('keeps declared media source duration and editable video timing through the public archive path', async () => {
     const sdk = new HydeSDK(), session = await sdk.createProject({ name: 'Video structure', duration: 8 });
     // Header-only bytes exercise structural authoring and archives, not codec playback.
