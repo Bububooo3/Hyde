@@ -1,5 +1,7 @@
 # Hyde capability matrix
 
+Current multi-view checkpoint: the inspector can now explicitly reject an ambiguous candidate while confirming another. Both decisions remain visible after `.hydecomp` reopen; focused Chrome passes. Automatic correspondence ranking already honors manual rejection on reanalysis.
+
 Current resilience checkpoint: canceling a slow file read no longer submits stale import work to the restarted worker. The app holds the restoration boundary until the previous analyzed document or empty workspace is ready. Focused Chrome cancel/reimport, 1536×1024 import, and contour-offset workflows pass; TypeScript and the independent Decomposer build pass.
 
 Current correction checkpoint: `region.offsetPath` shifts all manual contour anchors, handles and holes by source-pixel amounts through one undoable edit. The inspector exposes numeric X/Y shifts. Focused session and Chrome tests pass undo, mask preservation, regeneration, `.hydecomp` reopen and native Hyde path export.

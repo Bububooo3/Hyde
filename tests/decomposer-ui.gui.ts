@@ -537,6 +537,10 @@ test('ambiguous repeated shapes present readable candidates and persist a manual
   const identity = page.getByLabel('Cross-reference identity');
   await expect(identity).toContainText('References are separate views, not animation frames.');
   await expect(identity.getByText('Unresolved candidate', { exact: false })).toHaveCount(2);
+  await identity.getByRole('button', { name: 'Reject candidate' }).first().click();
+  await expect(page.getByRole('status')).toContainText('reference.correspond saved');
+  await expect(identity.getByText('Rejected manually', { exact: false })).toHaveCount(1);
+  await expect(identity.getByText('Unresolved candidate', { exact: false })).toHaveCount(1);
   const select = page.getByLabel('Alternate match');
   await expect(select.locator('option')).toHaveCount(3);
   await expect(select.locator('option').nth(2)).toContainText('alternate-circles.png · (');
@@ -549,9 +553,11 @@ test('ambiguous repeated shapes present readable candidates and persist a manual
   const bytes = new Uint8Array(await readFile(await (await saving).path()));
   const source = await decodeDecompositionDocument(bytes);
   expect(source.document.correspondences.some(item => item.origin === 'manual' && item.kind === 'same-part' && item.accepted)).toBe(true);
+  expect(source.document.correspondences.some(item => item.origin === 'manual' && item.accepted === false)).toBe(true);
   await page.getByLabel('Open .hydecomp').setInputFiles({ name: 'reviewed.hydecomp', mimeType: 'application/zip', buffer: Buffer.from(bytes) });
   await page.locator('.left-pane .scroll-list').first().locator('.row').first().click();
   await expect(page.getByLabel('Cross-reference identity').getByText('Confirmed manually', { exact: false })).toHaveCount(1);
+  await expect(page.getByLabel('Cross-reference identity').getByText('Rejected manually', { exact: false })).toHaveCount(1);
 });
 
 test('hidden proposals can be inspected, disabled and pinned without losing the manual contour', async ({ page }) => {
