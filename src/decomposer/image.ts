@@ -142,6 +142,44 @@ export function unsupportedPngColorMetadata(bytes: Uint8Array): string | undefin
   return undefined;
 }
 
+/** Browser JPEG/WebP decoders may color-convert embedded profiles differently.
+ * Keep their original bytes and warn instead of claiming identical sRGB pixels. */
+export function sourceColorMetadataWarning(mime: SourceInput['mime'], bytes: Uint8Array): string | undefined {
+  if (mime === 'image/png') return unsupportedPngColorMetadata(bytes);
+  if (mime === 'image/jpeg' && bytes[0] === 0xff && bytes[1] === 0xd8) {
+    let at = 2;
+    while (at + 4 <= bytes.length) {
+      if (bytes[at++] !== 0xff) break;
+      while (bytes[at] === 0xff) at++;
+      const marker = bytes[at++];
+      if (marker === 0xda || marker === 0xd9) break;
+      if (marker === 0x01 || marker >= 0xd0 && marker <= 0xd7) continue;
+      if (at + 2 > bytes.length) break;
+      const length = bytes[at] * 256 + bytes[at + 1], end = at + length;
+      if (length < 2 || end > bytes.length) break;
+      if (marker === 0xe2 && end - at >= 14 &&
+        new TextDecoder().decode(bytes.subarray(at + 2, at + 14)) === 'ICC_PROFILE\0')
+        return 'Embedded JPEG ICC profile is retained in the original bytes; browser color conversion may vary across runtimes.';
+      at = end;
+    }
+  }
+  if (mime === 'image/webp' && bytes.length >= 12 && new TextDecoder().decode(bytes.subarray(0, 4)) === 'RIFF' &&
+      new TextDecoder().decode(bytes.subarray(8, 12)) === 'WEBP') {
+    const riffLength = (bytes[4] | bytes[5] << 8 | bytes[6] << 16 | bytes[7] * 0x1000000) >>> 0;
+    const end = Math.min(bytes.length, riffLength + 8);
+    let at = 12;
+    while (at + 8 <= end) {
+      const type = new TextDecoder().decode(bytes.subarray(at, at + 4));
+      const length = (bytes[at + 4] | bytes[at + 5] << 8 | bytes[at + 6] << 16 | bytes[at + 7] * 0x1000000) >>> 0;
+      const next = at + 8 + length + (length & 1);
+      if (next > end || next <= at) break;
+      if (type === 'ICCP') return 'Embedded WebP ICC profile is retained in the original bytes; browser color conversion may vary across runtimes.';
+      at = next;
+    }
+  }
+  return undefined;
+}
+
 export async function decodeSource(input: SourceInput): Promise<DecodedImage> {
   if (!input.bytes.byteLength || input.bytes.byteLength > 128 * 1024 * 1024) throw new Error('IMAGE_TOO_LARGE');
   if (input.mime === 'image/png') return decodePng(input.bytes);

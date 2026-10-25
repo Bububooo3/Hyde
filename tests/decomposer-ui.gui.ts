@@ -219,6 +219,29 @@ test('EXIF-oriented JPEGs keep original bytes while native geometry uses oriente
   }
 });
 
+test('JPEG ICC metadata is disclosed in the Decomposer review workflow', async ({ page }) => {
+  await page.goto('/decomposer.html');
+  const jpeg = Uint8Array.from(await page.evaluate(async () => {
+    const canvas = document.createElement('canvas'); canvas.width = 32; canvas.height = 32;
+    const context = canvas.getContext('2d')!;
+    context.fillStyle = '#ffffff'; context.fillRect(0, 0, 32, 32);
+    context.fillStyle = '#ba3e27'; context.fillRect(6, 6, 20, 20);
+    const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob(value => value ? resolve(value) : reject(new Error('JPEG encoding failed')), 'image/jpeg', 1));
+    return [...new Uint8Array(await blob.arrayBuffer())];
+  }));
+  const profile = new TextEncoder().encode('ICC_PROFILE\0');
+  const marker = Uint8Array.from([0xff, 0xe2, 0, profile.length + 5, ...profile, 1, 1, 0]);
+  const sourceBytes = Uint8Array.from([...jpeg.subarray(0, 2), ...marker, ...jpeg.subarray(2)]);
+  await page.getByLabel('Import images').setInputFiles({ name: 'profile.jpg', mimeType: 'image/jpeg', buffer: Buffer.from(sourceBytes) });
+  await expect(page.getByRole('status')).toContainText('Automatic first pass found', { timeout: 30_000 });
+  await expect(page.locator('.diagnostic').filter({ hasText: 'Embedded JPEG ICC profile' })).toContainText('browser color conversion may vary');
+  const saving = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Save source' }).click();
+  const saved = await decodeDecompositionDocument(new Uint8Array(await readFile(await (await saving).path())));
+  expect(saved.sourceBytes.get(saved.document.sources[0].id)).toEqual(sourceBytes);
+  expect(saved.document.diagnostics.some(item => item.code === 'COLOR_SPACE_WARNING')).toBe(true);
+});
+
 test('inspector shifts a whole contour in source pixels and undoes the pinned edit', async ({ page }) => {
   await page.goto('/decomposer.html');
   await page.getByLabel('Import images').setInputFiles({ name: 'prop.png', mimeType: 'image/png', buffer: fixture() });

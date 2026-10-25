@@ -11,7 +11,7 @@ import { proposeCrossViewOcclusion } from './multiviewOcclusion';
 import { proposeJunctionLayers } from './junction';
 import { renderDiagnosticTile } from './diagnosticTile';
 import type { DiagnosticTile, DiagnosticTileRequest } from './diagnosticTile';
-import { decodeSource, unsupportedPngColorMetadata } from './image';
+import { decodeSource, sourceColorMetadataWarning } from './image';
 import type { DecodedImage } from './image';
 import { defaultSettings } from './types';
 import type { CorrespondenceRecord, DecompositionDocumentV1, DecompositionMode, LayerRecord, PartRecord, ReconstructionSettings, RegionMask, RegionRecord, SourceInput, SourceReference } from './types';
@@ -240,7 +240,7 @@ export class DecompositionSession {
       format: 'hyde-decomposition', schemaVersion: 1, id: docId, name: options.name ?? inputs[0].name.replace(/\.[^.]+$/, ''), createdAt: now, updatedAt: now,
       algorithmVersion: ALGORITHM_VERSION, mode, settings, sources, regions: [], parts: [], correspondences: [], layers: [],
       diagnostics: sources.flatMap(source => {
-        const warning = source.mime === 'image/png' ? unsupportedPngColorMetadata(bytes.get(source.id)!) : undefined;
+        const warning = sourceColorMetadataWarning(source.mime, bytes.get(source.id)!);
         return warning ? [{ code: 'COLOR_SPACE_WARNING' as const, severity: 'warning' as const, sourceId: source.id, message: warning,
           suggestion: 'Convert the reference to sRGB before import when precise color matching matters.' }] : [];
       }), history: [],
@@ -371,7 +371,7 @@ export class DecompositionSession {
         backRegionId: localIds.get(layer.backRegionId) ?? layer.backRegionId,
       })));
       candidate.diagnostics.push(...result.diagnostics);
-      const colorWarning = source.mime === 'image/png' ? unsupportedPngColorMetadata(this.sourceBytes.get(source.id)!) : undefined;
+      const colorWarning = sourceColorMetadataWarning(source.mime, this.sourceBytes.get(source.id)!);
       if (colorWarning) candidate.diagnostics.push({ code: 'COLOR_SPACE_WARNING', severity: 'warning', sourceId: source.id,
         message: colorWarning, suggestion: 'Convert the reference to sRGB before import when precise color matching matters.' });
     }
