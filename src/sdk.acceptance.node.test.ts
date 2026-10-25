@@ -1,8 +1,34 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { makeSDKAcceptanceStory } from '../tests/sdkAcceptanceFixture';
+import { HydeSDK } from './sdk';
+import { decodeProjectBytes, encodeProjectBytes } from './archive';
+import { createPrimaryShowcase } from './showcase';
 
 describe('public SDK acceptance story', () => {
+  it('opens the current Story Studio showcase and preserves unrelated native content after a focused SDK edit', async () => {
+    const original = decodeProjectBytes(encodeProjectBytes(createPrimaryShowcase())), sdk = new HydeSDK();
+    const session = await sdk.openProject(encodeProjectBytes(original));
+    expect(session.snapshot()).toEqual(original);
+    const flight = original.sequences.find(scene => scene.name !== original.sequences[0].name)!;
+    const flightElements = original.elements.filter(item => item.sceneId === flight.id);
+    const beforeAtFlight = await session.evaluate(flight.start + 1);
+    const edited = await session.execute({ protocolVersion: 1, expectedRevision: 0, commands: [
+      { op: 'element.updateAppearance', args: { id: 'desk-map', appearance: { opacity: .9 } } },
+    ] });
+    expect(edited.ok, JSON.stringify(edited)).toBe(true);
+    const reopened = await sdk.openProject(await session.exportProject());
+    const after = reopened.snapshot();
+    expect(after.elements.find(item => item.id === 'desk-map')?.opacity).toBe(.9);
+    expect(after.elements.filter(item => item.sceneId === flight.id)).toEqual(flightElements);
+    expect(after.sequences).toEqual(original.sequences);
+    expect(after.assets).toEqual(original.assets);
+    expect(after.captions).toEqual(original.captions);
+    expect(await reopened.evaluate(flight.start + 1)).toEqual(beforeAtFlight);
+    expect(after.elements.map(item => item.id)).toEqual(original.elements.map(item => item.id));
+    await session.close(); await reopened.close();
+  });
+
   it('authors and reopens editable multi-scene media, text, camera, caption and assembly content', async () => {
     const { sdk, session, sceneIds, ids, bytes } = await makeSDKAcceptanceStory();
     expect(session.revision).toBe(1);
