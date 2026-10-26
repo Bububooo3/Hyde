@@ -13,7 +13,8 @@ input[type="checkbox"] { accent-color: #39d3bb; }
 .decomposer-app { min-height: 100vh; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
 .topbar { display: flex; justify-content: space-between; gap: 16px; align-items: center; padding: 11px 18px; background: #172a32; border-bottom: 1px solid #34505a; }
 .brand { display: flex; gap: 10px; align-items: center; }
-.brand-mark { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 8px; background: #39d3bb; color: #0d2929; font-weight: 800; font-size: 22px; }
+.brand-mark { display: inline-block; position: relative; width: 29px; height: 29px; padding-right: 3px; border-radius: 6px; background: #39d3bb; color: #0d2929; font-family: 'JetBrains Mono', Consolas, monospace; font-weight: bold; font-size: 24px; line-height: 28px; text-align: center; }
+.brand-mark span { position: absolute; right: 3px; top: -4px; font-size: 17px; }
 .brand strong { display: block; font-size: 15px; letter-spacing: .01em; }
 .brand small { display: block; color: #9bb8b7; font-size: 10px; margin-top: 2px; }
 .toolbar, .inline-actions { display: flex; flex-wrap: wrap; gap: 7px; }

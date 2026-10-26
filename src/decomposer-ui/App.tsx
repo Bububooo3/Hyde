@@ -868,7 +868,7 @@ export default function App() {
   const alternateRegions = documentModel?.regions.filter(region => active(region) && region.sourceId !== documentModel.sources.find(source => source.role === 'primary')?.id) ?? [];
   return <div className="decomposer-app">
     <header className="topbar">
-      <div className="brand"><span className="brand-mark">H</span><div><strong>Hyde Image Decomposer</strong><small>Local, deterministic, editable art</small></div></div>
+      <div className="brand"><span className="brand-mark" aria-hidden="true">i<span>•</span></span><div><strong>Hyde Image Decomposer</strong><small>Local, deterministic, editable art</small></div></div>
       <div className="toolbar">
         <a className="button" href={import.meta.env.DEV?'./':'../'}>← Story Studio</a>
         <label className="button accent" data-tour="import" data-help="references" aria-description={CONTROL_HELP.references}>Import images<input aria-label="Import images" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden onChange={importImages}/></label>

@@ -6,6 +6,8 @@
 
 **Onboarding and contextual Help checkpoint (2026-10-26):** The standalone Decomposer now has focus, pointer and touch guidance on reconstruction settings, views, editing tools, region/part geometry, cross-reference evidence, regeneration, articulation and file delivery. A searchable nine-topic Help dialog explains the local reconstruction-to-export workflow and its uncertainty limits. A six-step, dismissible first-use walkthrough highlights controls that exist before import and stores completion only in browser local storage; Help can restart it. A browser test compares saved `.hydecomp` content before and after Help/walkthrough use. The combined Help and existing Decomposer GUI suite passes 27/27. Root editor/portable and independent Decomposer builds pass. The packaged `/ai/hyde/decomposer/` test opens Help, loads assets and worker, reconstructs, exports both native formats and imports them into Story Studio. No push or deployment occurred.
 
+**Brand checkpoint (2026-10-26):** The Decomposer toolbar mark now uses the Story Studio letter-and-raised-dot styling with a lowercase `i`, retaining its teal and dark palette.
+
 ## Editor backlog development
 
 **Status (2026-10-26):** All 13 authorized tickets in [EDITOR_BACKLOG.md](EDITOR_BACKLOG.md) are implemented locally in priority order. HYDE-001–004 were committed as `8dcf4f8`. Stage and numeric polygon resizing share normalized path geometry; selection-independent clipboard/history shortcuts, Ctrl+Y and the compact Background control pass focused Chrome workflows.
