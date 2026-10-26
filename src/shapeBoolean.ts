@@ -1,6 +1,6 @@
 import * as clipping from 'polygon-clipping';
 import { worldPoses } from './editing';
-import { createElement, type Project, type StoryElement } from './model';
+import { createElement, type Project, type ShapeContour, type ShapeIsland, type StoryElement } from './model';
 import { editablePathForElement, pathPointToWorld, shapePathCommands } from './shapePath';
 
 export type ShapeBooleanOperation = 'union' | 'separate' | 'negate' | 'intersect';
@@ -19,7 +19,7 @@ function flattenCubic(from: Pair, a: Pair, b: Pair, to: Pair, output: Pair[], de
   flattenCubic(center, bcd, cd, to, output, depth + 1);
 }
 
-function contourRing(pose: StoryElement, contour: ReturnType<typeof editablePathForElement>): clipping.Ring {
+function contourRing(pose: StoryElement, contour: ShapeContour): clipping.Ring {
   const ring: clipping.Ring = [];
   const world = (x: number, y: number): Pair => {
     const point = pathPointToWorld(pose, { x: x / pose.width, y: y / pose.height });
@@ -37,9 +37,10 @@ function contourRing(pose: StoryElement, contour: ReturnType<typeof editablePath
   return ring;
 }
 
-export function worldShapePolygon(pose: StoryElement): clipping.Polygon {
+export function worldShapePolygon(pose: StoryElement): clipping.MultiPolygon {
   const path = editablePathForElement(pose);
-  return [contourRing(pose, path), ...(path.holes ?? []).map(hole => contourRing(pose, hole))];
+  const polygon=(island:ShapeIsland):clipping.Polygon=>[contourRing(pose,island),...(island.holes??[]).map(hole=>contourRing(pose,hole))];
+  return [polygon(path),...(path.islands??[]).map(polygon)];
 }
 
 function area(ring: clipping.Ring): number {
@@ -68,16 +69,20 @@ export function booleanShapes(project: Project, ids: readonly string[], operatio
   if (valid.length > 64 || valid.reduce((count, polygon) => count + polygon.reduce((total, ring) => total + ring.length, 0), 0) > 16384)
     throw new Error('The Boolean result is too complex for an editable Hyde path. The source shapes were kept.');
   const next = structuredClone(project), primary = sources[0], results: StoryElement[] = [];
-  for (const [index, polygon] of valid.entries()) {
-    const points = polygon.flat();
+  // A Boolean result is one object even when its fill has disconnected
+  // islands. Separate alone emits one object per filled island.
+  const groups:clipping.MultiPolygon[]=operation==='separate'?valid.map(polygon=>[polygon]):[valid];
+  for (const [index, group] of groups.entries()) {
+    const points = group.flat(2);
     const left = Math.min(...points.map(point => point[0])), right = Math.max(...points.map(point => point[0]));
     const top = Math.min(...points.map(point => point[1])), bottom = Math.max(...points.map(point => point[1]));
     const width = right - left, height = bottom - top;
     if (width < .0001 || height < .0001) continue;
     const normalize = (ring: clipping.Ring) => ({ points: ring.slice(0, -1).map(([x, y]) => ({ x: (x - left) / width, y: (y - top) / height })) });
-    const path = { ...normalize(polygon[0]), ...(polygon.length > 1 ? { holes: polygon.slice(1).map(normalize) } : {}) };
+    const contour=(polygon:clipping.Polygon)=>({...normalize(polygon[0]),...(polygon.length>1?{holes:polygon.slice(1).map(normalize)}:{})});
+    const path={...contour(group[0]),...(group.length>1?{islands:group.slice(1).map(contour)}:{})};
     const result = createElement('polygon', {
-      name: `${operation[0].toUpperCase()}${operation.slice(1)} ${primary.name}${valid.length > 1 ? ` ${index + 1}` : ''}`,
+      name: `${operation[0].toUpperCase()}${operation.slice(1)} ${primary.name}${groups.length > 1 ? ` ${index + 1}` : ''}`,
       x: (left + right) / 2, y: (top + bottom) / 2, width, height, pivotX: .5, pivotY: .5,
       shapePath: path, fill: primary.fill, stroke: primary.stroke, strokeWidth: primary.strokeWidth,
       opacity: primary.opacity, shadow: structuredClone(primary.shadow), assetId: primary.assetId,

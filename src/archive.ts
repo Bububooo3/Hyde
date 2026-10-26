@@ -125,8 +125,12 @@ export function validateDocument(model: unknown, assembly: boolean): asserts mod
       check(record(element.shapePath) && Array.isArray(element.shapePath.points), 'Invalid editable path.');
       const holes = element.shapePath.holes;
       check(holes === undefined || Array.isArray(holes) && holes.length <= 64, 'An editable path has too many holes.');
-      const contours = [element.shapePath, ...(holes ?? [])];
-      check((holes ?? []).every(hole => record(hole) && hole.holes === undefined), 'Nested editable holes are unsupported.');
+      const islands = element.shapePath.islands;
+      check(islands === undefined || Array.isArray(islands) && islands.length <= 63, 'An editable path has too many islands.');
+      check((islands ?? []).every(island => record(island) && (island.holes === undefined || Array.isArray(island.holes) && island.holes.length <= 64) && island.islands === undefined), 'Invalid editable island.');
+      const islandHoles = (islands ?? []).flatMap(island => island.holes ?? []);
+      const contours = [element.shapePath, ...(holes ?? []), ...(islands ?? []), ...islandHoles];
+      check([...holes ?? [], ...islandHoles].every(hole => record(hole) && hole.holes === undefined && hole.islands === undefined), 'Nested editable holes are unsupported.');
       check(contours.every(contour => record(contour) && Array.isArray(contour.points) && contour.points.length >= 3 && contour.points.length <= 4096)
         && contours.reduce((sum, contour) => sum + contour.points.length, 0) <= 16384,
       'An editable contour needs 3 to 4096 points, with no more than 16384 total.');

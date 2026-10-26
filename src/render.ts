@@ -11,7 +11,7 @@ import {worldPoses} from './editing';
 import {layoutTextUnits, type TextUnit} from './textUnits';
 import {textMotionAt} from './textMotion';
 import {reflowUnitAt,textReflowEnd} from './textReflow';
-import {buildProjectivePinMesh,DEFAULT_PIN_CORNERS,mediaPinRects} from './projectivePin';
+import {buildProjectivePinMesh,DEFAULT_PIN_CORNERS,mediaPinRects,validPinCorners,type PinCorners} from './projectivePin';
 import {DEFAULT_MEDIA_TRANSFORM,mediaPlaneRect} from './mediaTransform';
 import {ProjectFontLoader} from './projectFonts';
 import {flowShapeOutline,flowTextUnits,layoutFlowLines,layoutInsideShapeLines,usableStaticTextFlow,type FlowLine,type FlowPoint} from './textFlow';
@@ -120,6 +120,20 @@ function path(graphics: Graphics, element: StoryElement, contour?: ShapeContour)
 function filledPath(graphics: Graphics, element: StoryElement, color: ReturnType<typeof paint> | number): void {
   path(graphics, element).fill(color);
   for (const hole of element.shapePath?.holes ?? []) path(graphics, element, hole).cut();
+  for(const island of element.shapePath?.islands??[]){
+    path(graphics,element,island).fill(color);
+    for(const hole of island.holes??[])path(graphics,element,hole).cut();
+  }
+}
+
+/** A four-corner path deforms an attached media plane as its points move. More
+ * complex paths retain their clipping behavior; an explicit corner pin wins. */
+function mediaCorners(element:StoryElement):PinCorners|undefined {
+  if(element.mediaPin)return element.mediaPin;
+  if(!['rectangle','ellipse','polygon','image','video'].includes(element.kind))return undefined;
+  const shape=element.shapePath;
+  if(!shape||shape.points.length!==4||shape.holes?.length||shape.islands?.length||shape.points.some(point=>point.in||point.out))return undefined;
+  return validPinCorners(shape.points)?shape.points:undefined;
 }
 
 /** Wait for decoded pixels, not merely a metadata event. Never leave an export waiting forever. */
@@ -371,6 +385,7 @@ export class StageRenderer {
         const style = { ...paint(element.stroke), width: element.strokeWidth };
         path(node.outline, element).stroke(style);
         for (const hole of element.shapePath?.holes ?? []) path(node.outline, element, hole).stroke(style);
+        for(const island of element.shapePath?.islands??[]){path(node.outline,element,island).stroke(style);for(const hole of island.holes??[])path(node.outline,element,hole).stroke(style);}
       }
       filledPath(node.mask, element, 0xffffff);
     }
@@ -524,7 +539,7 @@ export class StageRenderer {
     }
   }
 
-  private updateMediaMask(node: ElementNode, element: StoryElement): void {
+  private updateMediaMask(node: ElementNode, element: StoryElement, corners?:PinCorners): void {
     const textMask = element.kind === 'text';
     if (textMask) {
       // A Sprite alpha mask preserves antialiased glyph edges. A Graphics mask or a
@@ -551,7 +566,7 @@ export class StageRenderer {
         if (!animated && !node.flowKey) glyphs.destroy();
       }
       node.sprite.setMask({ mask: node.glyphMask, channel: 'alpha' });
-    } else if(element.mediaPin){
+    } else if(corners){
       node.sprite.mask=null;
       node.pinMesh.setMask({mask:node.mask,channel:'red'});
     }else{
@@ -711,6 +726,7 @@ export class StageRenderer {
       const staticHint=!element.objectMask&&effectiveRenderOptimization(element,elementById,elementAsset)==='static';
       const visualKey=staticHint?staticVisualSignature(element,obstacle):'';
       const failed=Boolean(resource?.failed);
+      const corners=mediaCorners(element);
       if(staticHint&&node.staticProject===project&&node.staticVisualKey===visualKey&&
         node.staticTexture===resource?.texture&&node.staticResourceFailed===failed)return;
       root.position.set(element.x, element.y);
@@ -724,29 +740,29 @@ export class StageRenderer {
       const videoDuration=resource?.video&&Number.isFinite(resource.video.duration)?resource.video.duration:elementAsset?.duration;
       const videoExpired=Boolean(resource?.video && videoVisualExpired(element,time,videoDuration??Number.NaN));
       if(videoExpired&&element.kind==='video')root.visible=false;
-      node.sprite.visible = Boolean(resource?.texture) && !videoExpired && !element.mediaPin && !(element.kind==='text' && node.motion.visible && !node.motionPieces.length);
-      node.pinMesh.visible=Boolean(resource?.texture&&!videoExpired&&element.mediaPin);
+      node.sprite.visible = Boolean(resource?.texture) && !videoExpired && !corners && !(element.kind==='text' && node.motion.visible && !node.motionPieces.length);
+      node.pinMesh.visible=Boolean(resource?.texture&&!videoExpired&&corners);
       node.warning.visible = Boolean(element.assetId && elementAsset?.kind !== 'font' && (!resource || resource.failed));
       if (node.warning.visible) {
         node.warning.position.set(8, 8);
         node.warning.scale.set(Math.min(1, Math.max(.25, element.width / 160)));
       }
       if (resource?.texture && (node.sprite.visible||node.pinMesh.visible)) {
-        this.updateMediaMask(node, element);
+        this.updateMediaMask(node, element, corners);
         node.sprite.texture = resource.texture;
         node.sprite.alpha = clamp(element.mediaOpacity ?? 1, 0, 1);
         const sourceWidth = Math.max(1, resource.texture.width);
         const sourceHeight = Math.max(1, resource.texture.height);
-        if(element.mediaPin){
+        if(corners){
           const plane=element.mediaTransform
             ? mediaPlaneRect(element.mediaFit??'fill',element.width,element.height,sourceWidth,sourceHeight)
             : null;
           const rects=plane
             ? {contentRect:{x:plane.x/element.width,y:plane.y/element.height,width:plane.width/element.width,height:plane.height/element.height},uvRect:{x:0,y:0,width:1,height:1}}
             : mediaPinRects(element.mediaFit??'fill',element.width,element.height,sourceWidth,sourceHeight);
-          const key=JSON.stringify([element.mediaPin,element.width,element.height,element.mediaFit,sourceWidth,sourceHeight,element.mediaTransform]);
+          const key=JSON.stringify([corners,element.width,element.height,element.mediaFit,sourceWidth,sourceHeight,element.mediaTransform]);
           if(rects&&key!==node.pinGeometryKey){
-            const data=buildProjectivePinMesh(element.mediaPin,element.width,element.height,{...rects,mediaTransform:element.mediaTransform,subdivisions:16});
+            const data=buildProjectivePinMesh(corners,element.width,element.height,{...rects,mediaTransform:element.mediaTransform,subdivisions:16});
             if(data){const previous=node.pinMesh.geometry;node.pinMesh.geometry=new MeshGeometry(data);previous.destroy();node.pinGeometryKey=key;}
           }
           node.pinMesh.texture=resource.texture;

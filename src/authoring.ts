@@ -5,7 +5,7 @@ import type { AnimProperty, Assembly, Asset, Attachment, ElementKind, Keyframe, 
 import { descendantIds, makeAssembly, parentId, reparentElement, worldPoses } from './editing';
 import { duplicateScene, deleteScene, moveScene, retimeScene } from './sceneOperations';
 import { makeSceneIndependent, placeLinkedScene } from './scenePlacement';
-import { movePathAnchor, removePathPoint, resizeElementGeometry, setPathHandle, splitPathSegment, withEditablePath } from './shapePath';
+import { movePathAnchor, removePathPoint, resizeElementGeometry, setPathHandle, shapePathContourEntries, splitPathSegment, withEditablePath } from './shapePath';
 import { booleanShapes, type ShapeBooleanOperation } from './shapeBoolean';
 import { pruneObjectMasks, setObjectMask } from './objectMask';
 import { applyMediaAuthoringCommand, MEDIA_AUTHORING_COMMAND_KEYS, MEDIA_AUTHORING_OPERATIONS, MediaAuthoringError } from './authoringMedia';
@@ -264,7 +264,7 @@ function inspectedElementSummary(item: StoryElement) {
   const { tracks, assemblyClips, clipInstances, motionBehaviors, shapePath, ...summary } = item;
   return { ...summary, trackCount: tracks.length, clipCount: assemblyClips?.length ?? 0,
     instanceCount: clipInstances?.length ?? 0, motionCount: motionBehaviors?.length ?? 0,
-    pathPointCount: shapePath?.points.length ?? 0 };
+    pathPointCount: shapePath ? shapePathContourEntries(shapePath).reduce((count,{contour})=>count+contour.points.length,0) : 0 };
 }
 
 export class HydeAuthoringSession {

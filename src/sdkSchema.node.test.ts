@@ -37,6 +37,7 @@ describe('Hyde v1 command JSON Schema', () => {
     });
     expect(args('shape.removePoint').required).toEqual(['id', 'index']);
     expect(args('shape.setPath').properties.path).toMatchObject({ type: 'object', properties: { points: { minItems: 3, maxItems: 4096 } } });
+    expect((args('shape.setPath').properties.path as Shape).properties.islands).toMatchObject({type:'array',maxItems:63});
     expect(args('media.setPin').required).toEqual(['id', 'corners']);
     expect(args('media.setPin').properties.corners).toMatchObject({ anyOf: [{ minItems: 4, maxItems: 4 }, { type: 'null' }] });
     expect(args('camera.upsertKeyframe').properties.property.enum).toEqual(['x', 'y', 'zoom', 'rotation']);

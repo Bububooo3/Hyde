@@ -14,10 +14,10 @@ This tracks the requirements in [PLAN.md](PLAN.md) at the level of reachable wor
 | HYDE-006 Multi-selection bounds | Verified | `src/selectionBounds.test.ts`, `tests/editor-backlog-layers.spec.ts`: individual primary/secondary outlines, including groups. Editor-only overlays are outside story rendering. |
 | HYDE-007 Bulk editing | Verified | `src/bulkEditing.test.ts`, `tests/editor-backlog-bulk.spec.ts`: mixed values, atomic undo and compatible edits. |
 | HYDE-008 Multi-selection reorder | Verified | `src/layerOrder.test.ts`, `tests/editor-backlog-layers.spec.ts`: sibling order, hierarchy and locked barriers. |
-| HYDE-009 Exact path points | Verified | `tests/editor-backlog-path-point.spec.ts`: numeric local coordinates, grid snap, history and archive. |
+| HYDE-009 Exact path points | Verified | `tests/editor-backlog-path-point.spec.ts`, `tests/editor-backlog-visual-audit.spec.ts`: numeric local coordinates, grid snap, history and archive; a four-corner media path moves the image pixels in editor and standalone web output. |
 | HYDE-010 Color selection | Verified | `tests/editor-backlog-color.spec.ts`, `tests/appearance-controls.spec.ts`: hex validation/sync and browser eyedropper fallback. |
-| HYDE-011 Boolean shapes | Verified | `src/shapeBoolean.test.ts`, `src/shapeBoolean.sdk.node.test.ts`, `tests/editor-backlog-boolean.spec.ts`: editable holes/islands, SDK, undo, archive and web package. |
-| HYDE-012 Object masks | Verified | `src/objectMask.test.ts`, `src/objectMask.sdk.node.test.ts`, `tests/editor-backlog-object-mask.spec.ts`: references/scene copies/cycles, SDK, exact editor/player/GIF/MP4 pixels, history and archive. |
+| HYDE-011 Boolean shapes | Verified | `src/shapeBoolean.test.ts`, `src/shapeBoolean.sdk.node.test.ts`, `tests/editor-backlog-boolean.spec.ts`, `tests/editor-backlog-visual-audit.spec.ts`: overlapping/disconnected geometry, one Union object with editable islands, SDK, undo, archive and web package. |
+| HYDE-012 Object masks | Verified | `src/objectMask.test.ts`, `src/objectMask.sdk.node.test.ts`, `tests/editor-backlog-object-mask.spec.ts`, `tests/editor-backlog-visual-audit.spec.ts`: mode can be selected before adding a source; Include/Exclude references, exact editor/player/GIF/MP4 pixels, history and archive. |
 | HYDE-013 Shadow size/position | Verified | `tests/editor-backlog-shadow.spec.ts`: pixel effect, directional offsets, undo and archive. |
 
 The shared renderer drives editor, player, GIF and video frames. The composed export fixture `tests/fidelity-export.spec.ts` also passes after these changes. Hardware encoders and physical-device rendering remain outside this local Chrome check.

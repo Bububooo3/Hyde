@@ -19,3 +19,18 @@ it('exposes Boolean paths and shadow size through SDK transactions and archives'
   expect(reopened.snapshot().elements.find(element => element.id === result.id)?.shapePath?.holes).toHaveLength(1);
   expect(reopened.snapshot().elements.find(element => element.id === result.id)?.shadow.size).toBe(25);
 });
+
+it('keeps disjoint Union geometry in one SDK object through archive reopen',async()=>{
+  const sdk=new HydeSDK(),session=await sdk.createProject({name:'Disjoint Union'});
+  const made=await session.execute({protocolVersion:1,expectedRevision:0,commands:[
+    {op:'element.create',args:{id:'left',kind:'rectangle',properties:{x:100,y:100,width:50,height:50}}},
+    {op:'element.create',args:{id:'right',kind:'rectangle',properties:{x:300,y:100,width:50,height:50}}},
+    {op:'shape.boolean',args:{ids:['left','right'],operation:'union',timeSeconds:0}},
+  ]});
+  expect(made.ok,JSON.stringify(made)).toBe(true);
+  const results=session.snapshot().elements.filter(element=>element.name.startsWith('Union'));
+  expect(results).toHaveLength(1);
+  expect(results[0].shapePath?.islands).toHaveLength(1);
+  const reopened=await sdk.openProject(await session.exportProject());
+  expect(reopened.snapshot().elements.find(element=>element.id===results[0].id)?.shapePath?.islands).toHaveLength(1);
+});

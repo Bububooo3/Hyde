@@ -1,4 +1,4 @@
-import type { PathPoint, ShapeContour, ShapePath, StoryElement } from './model';
+import type { PathPoint, ShapeContour, ShapeIsland, ShapePath, StoryElement } from './model';
 
 export type PathCommand =
   | { type: 'move' | 'line'; x: number; y: number }
@@ -49,8 +49,18 @@ export function resizeElementGeometry(element: StoryElement, width: number, heig
 }
 
 /** Moving an anchor carries its handles, preserving its local tangent shape. */
+export function shapePathContourEntries(path:ShapePath):{contour:ShapeContour;label:string}[]{
+  const entries=[{contour:path as ShapeContour,label:'Outer contour'}];
+  for(const [index,hole] of (path.holes??[]).entries())entries.push({contour:hole,label:`Hole ${index+1}`});
+  for(const [index,island] of (path.islands??[]).entries()){
+    entries.push({contour:island,label:`Island ${index+2}`});
+    for(const [holeIndex,hole] of (island.holes??[]).entries())entries.push({contour:hole,label:`Island ${index+2} hole ${holeIndex+1}`});
+  }
+  return entries;
+}
+
 function selectedContour(path: ShapePath, contourIndex: number): ShapeContour {
-  const contour = contourIndex === 0 ? path : path.holes?.[contourIndex - 1];
+  const contour=shapePathContourEntries(path)[contourIndex]?.contour;
   if (!Number.isSafeInteger(contourIndex) || contourIndex < 0 || !contour) throw new RangeError('Path contour does not exist.');
   return contour;
 }
@@ -140,7 +150,7 @@ export function shapePathCommands(path: ShapeContour, width: number, height: num
 }
 
 export function shapePathSvg(path: ShapePath, width: number, height: number): string {
-  return [path, ...(path.holes ?? [])].flatMap(contour => shapePathCommands(contour, width, height)).map(command => {
+  return shapePathContourEntries(path).flatMap(({contour}) => shapePathCommands(contour, width, height)).map(command => {
     if (command.type === 'close') return 'Z';
     if (command.type === 'cubic') return `C ${command.x1} ${command.y1} ${command.x2} ${command.y2} ${command.x} ${command.y}`;
     return `${command.type === 'move' ? 'M' : 'L'} ${command.x} ${command.y}`;
@@ -173,5 +183,6 @@ function pointInContour(path: ShapeContour, width: number, height: number, x: nu
 }
 
 export function pointInShapePath(path:ShapePath,width:number,height:number,x:number,y:number):boolean{
-  return pointInContour(path,width,height,x,y) && !(path.holes ?? []).some(hole=>pointInContour(hole,width,height,x,y));
+  const inside=(island:ShapeIsland)=>pointInContour(island,width,height,x,y)&&!(island.holes??[]).some(hole=>pointInContour(hole,width,height,x,y));
+  return inside(path)||(path.islands??[]).some(inside);
 }

@@ -45,9 +45,10 @@ export interface PathPoint { x: number; y: number; in?: {x: number; y: number}; 
 /** Closed cubic contour in element-local, normalized coordinates. Missing
  * handles make a straight edge. */
 export interface ShapeContour { points: PathPoint[] }
-/** The outer contour and optional editable cutouts share one element transform.
- * Older archives contain only `points`; holes are a backward-compatible field. */
-export interface ShapePath extends ShapeContour { holes?: ShapeContour[] }
+/** Each filled island can carry editable cutouts. All contours share one
+ * element transform; older archives contain only `points` and optional holes. */
+export interface ShapeIsland extends ShapeContour { holes?: ShapeContour[] }
+export interface ShapePath extends ShapeIsland { islands?: ShapeIsland[] }
 /** Procedural offsets run after keyed/assembly animation but before a part's
  * attachment constraint and parent transform. Times are element-local seconds. */
 export interface MotionBase { id: string; enabled: boolean; start: number; duration: number }

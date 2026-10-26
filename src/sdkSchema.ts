@@ -21,7 +21,8 @@ const object = (properties: Record<string, Schema>, required: string[] = []): Sc
 const point = object({ x: number, y: number }, ['x', 'y']);
 const pathPoint = object({ x: number, y: number, in: point, out: point }, ['x', 'y']);
 const contour = object({ points: array(pathPoint, 3, 4096) }, ['points']);
-const path = object({ points: array(pathPoint, 3, 4096), holes: array(contour, 0, 64) }, ['points']);
+const island = object({ points: array(pathPoint, 3, 4096), holes: array(contour, 0, 64) }, ['points']);
+const path = object({ points: array(pathPoint, 3, 4096), holes: array(contour, 0, 64), islands: array(island, 0, 63) }, ['points']);
 const fit = enumeration('fit', 'fill', 'stretch');
 const easing = enumeration('linear', 'sine', 'quad', 'cubic', 'quart', 'quint', 'expo', 'circ', 'back', 'bounce', 'elastic');
 const direction = enumeration('in', 'out', 'inOut');

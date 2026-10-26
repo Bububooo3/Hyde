@@ -32,6 +32,13 @@ describe('editable Boolean shapes', () => {
     const left = createElement('rectangle', { x: 50, y: 50, width: 40, height: 40 });
     const right = createElement('rectangle', { x: 200, y: 50, width: 40, height: 40 });
     separate.elements = [left, right];
+    const joined = booleanShapes(separate, [left.id, right.id], 'union', 0);
+    expect(joined.resultIds).toHaveLength(1);
+    const result = joined.project.elements.at(-1)!;
+    expect(result.shapePath?.islands).toHaveLength(1);
+    expect(pointInShapePath(result.shapePath!, result.width, result.height, 0, 20)).toBe(true);
+    expect(pointInShapePath(result.shapePath!, result.width, result.height, 75, 20)).toBe(false);
+    expect(pointInShapePath(result.shapePath!, result.width, result.height, 150, 20)).toBe(true);
     expect(booleanShapes(separate, [left.id, right.id], 'separate', 0).resultIds).toHaveLength(2);
   });
 
@@ -42,5 +49,15 @@ describe('editable Boolean shapes', () => {
     project.elements = [a, b];
     expect(() => booleanShapes(project, [a.id, b.id], 'intersect', 0)).toThrow(/empty result/);
     expect(project.elements).toHaveLength(2);
+  });
+
+  it('keeps a subtraction that splits the primary shape in one editable result',()=>{
+    const project=createProject();
+    const primary=createElement('rectangle',{x:100,y:100,width:200,height:100});
+    const cutter=createElement('rectangle',{x:100,y:100,width:40,height:140});
+    project.elements=[primary,cutter];
+    const difference=booleanShapes(project,[primary.id,cutter.id],'negate',0);
+    expect(difference.resultIds).toHaveLength(1);
+    expect(difference.project.elements.at(-1)?.shapePath?.islands).toHaveLength(1);
   });
 });

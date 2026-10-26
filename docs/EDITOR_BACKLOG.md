@@ -1,6 +1,6 @@
 # Hyde Story Studio editor backlog
 
-**Status:** Implemented locally and verified with focused editor, core and export workflows on 2026-10-26. Source: owner hands-on editor testing, 2026-10-24. No push or deployment.
+**Status:** Implemented locally; owner-reported follow-up defects passed focused visual, archive and export checks on 2026-10-26. Source: owner hands-on editor testing, 2026-10-24 and 2026-10-26. No push or deployment.
 
 ## P0: existing functionality and shortcut bugs
 
@@ -52,7 +52,7 @@ Support typed/pasted hex colors and an on-screen eyedropper where browser capabi
 
 Union, Separate, Negate and Intersect must produce genuine editable Hyde shapes compatible with path tools, persistence, rendering, animation, exports and undo/redo. Handle holes, disconnected components and degenerate outcomes safely. Preserve source geometry unless the user explicitly chooses a destructive operation. Define exact Negate and Separate semantics before implementation, especially with multiple operands.
 
-**Implemented semantics:** Selection order chooses the primary shape. Negate subtracts the union of every other selected shape from the primary. Separate unions the selection, then returns one editable path for each disconnected filled area; holes remain holes in that area's path. Results are new polygon paths at the playhead. Sources remain in the project, hidden but editable. Empty/overcomplex results reject without changing the project.
+**Implemented semantics:** Selection order chooses the primary shape. Negate subtracts the union of every other selected shape from the primary. Union, Negate and Intersect each create one editable result, including disconnected filled islands; Separate unions the selection, then returns one editable result for each disconnected filled area. Each island can carry editable holes. Results are new polygon paths at the playhead. Sources remain in the project, hidden but editable. Empty/overcomplex results reject without changing the project.
 
 ### HYDE-012 — Object-based clip masking
 
