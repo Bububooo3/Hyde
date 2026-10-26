@@ -37,6 +37,17 @@ export function withEditablePath(element: StoryElement): StoryElement {
   return { ...element, shapePath: editablePathForElement(element) };
 }
 
+/** Legacy polygons store pixel vertices. Freeze them as a normalized path before
+ * changing dimensions so the fill, outline, texture and mask resize together. */
+export function resizeElementGeometry(element: StoryElement, width: number, height: number): void {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0)
+    throw new RangeError('Shape dimensions must be positive finite numbers.');
+  if (element.kind === 'polygon' && !element.shapePath)
+    element.shapePath = editablePathForElement(element);
+  element.width = width;
+  element.height = height;
+}
+
 /** Moving an anchor carries its handles, preserving its local tangent shape. */
 function selectedContour(path: ShapePath, contourIndex: number): ShapeContour {
   const contour = contourIndex === 0 ? path : path.holes?.[contourIndex - 1];

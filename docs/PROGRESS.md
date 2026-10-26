@@ -1,5 +1,9 @@
 # Hyde capability matrix
 
+## Editor backlog development
+
+**Status (2026-10-26):** The owner authorized HYDE-001–013 in the order specified by [EDITOR_BACKLOG.md](EDITOR_BACKLOG.md). HYDE-001–004 are implemented locally. Legacy polygon vertices become a normalized editable path on dimension changes, so stage and numeric resizing share render/archive geometry. Clipboard and undo/redo shortcuts are handled at the window capture boundary while text fields retain native editing; Windows Ctrl+Y works. The Project Settings background row uses a nonoverlapping grid layout. Focused shape-path unit tests (8/8), P0 Chrome workflows (3/3), and the root build pass. The browser checks cover polygon dimensions, undo/redo/archive reopen, paste while a different object is selected, and compact settings layout. Next: HYDE-005, 006 and 008 (layer access, bounds and ordered multi-selection movement).
+
 ## Agent SDK and Image Decomposer handoff
 
 **Status (2026-10-26):** Both products meet the specifications' bounded v1 completion thresholds. Work is in the existing `C:\Users\rscot\Downloads\Story-Editor-Project` repository, on local `main`; no push, package publication, remote change or deployment occurred. The deferred [Story Studio backlog](EDITOR_BACKLOG.md) remains unauthorized.

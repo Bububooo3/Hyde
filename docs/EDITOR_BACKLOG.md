@@ -1,6 +1,6 @@
 # Hyde Story Studio editor backlog
 
-**Status:** Deferred. The owner has not authorized implementation. Complete the Agent SDK and Image Decomposer before starting these tickets unless the owner explicitly reprioritizes them. Source: owner hands-on editor testing, 2026-10-24.
+**Status:** Authorized for implementation on 2026-10-26 after SDK and Decomposer v1 acceptance. Source: owner hands-on editor testing, 2026-10-24.
 
 ## P0: existing functionality and shortcut bugs
 
@@ -67,4 +67,4 @@ Add independent Size control and improve X/Y offset controls for shadows beneath
 3. Expose relevant features through the editor and Agent SDK, with undo/redo and save/reopen for every state change. Keep selection decorations out of exports.
 4. Test representative workflows and avoid unrelated features.
 
-**No work on these tickets is authorized until the SDK and Decomposer are complete or the owner explicitly reprioritizes them.**
+The owner authorized all 13 tickets on 2026-10-26. Track verified checkpoints in [PROGRESS.md](PROGRESS.md).

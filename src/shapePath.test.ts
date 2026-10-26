@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createElement } from './model';
-import { editablePathForElement, movePathAnchor, pathPointToWorld, pointInShapePath, removePathPoint, setPathHandle, shapePathCommands, shapePathSvg, splitPathSegment, withEditablePath, worldToPathPoint } from './shapePath';
+import { editablePathForElement, movePathAnchor, pathPointToWorld, pointInShapePath, removePathPoint, resizeElementGeometry, setPathHandle, shapePathCommands, shapePathSvg, splitPathSegment, withEditablePath, worldToPathPoint } from './shapePath';
 
 describe('editable closed paths', () => {
   it('converts a rectangle to straight normalized edges that follow resizing', () => {
@@ -21,6 +21,16 @@ describe('editable closed paths', () => {
     expect(commands.filter(command => command.type === 'cubic')).toHaveLength(4);
     expect(commands[1]).toMatchObject({ type: 'cubic', x: 200, y: 50 });
     expect(commands.at(-1)).toEqual({ type: 'close' });
+  });
+
+  it('resizes legacy polygon geometry around its normalized pivot without changing the original', () => {
+    const original = createElement('polygon', { width: 200, height: 100, pivotX: .25, pivotY: .75, points: [{ x: 100, y: 0 }, { x: 200, y: 100 }, { x: 0, y: 100 }] });
+    const resized = structuredClone(original);
+    resizeElementGeometry(resized, 400, 150);
+    expect(shapePathSvg(resized.shapePath!, resized.width, resized.height)).toBe('M 200 0 L 400 150 L 0 150 L 200 0 Z');
+    expect([resized.pivotX, resized.pivotY]).toEqual([.25, .75]);
+    expect(original.shapePath).toBeUndefined();
+    expect(original.points).toEqual([{ x: 100, y: 0 }, { x: 200, y: 100 }, { x: 0, y: 100 }]);
   });
 
   it('uses editable cubic handles for both geometry and SVG guides without modifying input', () => {
