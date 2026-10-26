@@ -1,0 +1,1 @@
+export{m as WebGPURenderer}from"./browserHost-BgyCqjat.js";
