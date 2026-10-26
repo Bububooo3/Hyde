@@ -2,6 +2,8 @@
 
 Recent SDK/CLI work: project/scene inspection and frame evaluation avoid full-project media clones; asset byte enrichment reads only the requested page. Assembly handles omit media before metadata cloning, and CLI assembly elements/assets have independent stable-ID pages with strict pagination. A 3 MiB asset fixture verifies no `snapshot()` call. Focused SDK/CLI tests, TypeScript, independent SDK build and CLI build pass.
 
+A public SDK native round trip now covers element alignment/distribution, folders, cloning/order and scene ripple in one undoable transaction. The complete SDK acceptance file passes 5/5 and TypeScript passes. This closes that representative command family; exhaustive operation permutations are outside the bounded release criteria.
+
 Integrated check: the root editor build passes. `npm test` passed 81 files and 430 tests, with two browser-host tests failing only while the concurrent root build replaced `dist/cli`; after the build finished, that affected file passed 4/4 sequentially. The effective completed suite is 82 files and 432 tests passed, one file and six tests skipped. Run build and tests sequentially at future checkpoints.
 
 Recent Decomposer work: edit failures now have stable codes, failing edit/target IDs and actionable CLI JSON; malformed batches reject without an output file or revision change. PNG-only comparison requests encode retained canonical pixels without an extra full RGBA copy. Focused session/CLI tests, TypeScript, independent build and rebuilt Chrome cross-reference workflow pass. The active reference still retains main-thread pixels for immediate edge snapping/compositing; larger-resource profiling remains open. Both products remain incomplete; continue the acceptance gaps below.

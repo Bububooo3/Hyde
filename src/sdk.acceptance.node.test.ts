@@ -6,6 +6,44 @@ import { decodeProjectBytes, encodeProjectBytes } from './archive';
 import { createPrimaryShowcase } from './showcase';
 
 describe('public SDK acceptance story', () => {
+  it('round-trips arrangement, folders, cloning and scene ripple through native Hyde', async () => {
+    const sdk = new HydeSDK(), session = await sdk.createProject({ name: 'Arranged parts', duration: 10 });
+    const firstSceneId = session.snapshot().sequences[0].id;
+    const result = await session.execute({ protocolVersion: 1, expectedRevision: 0, commands: [
+      { op: 'element.create', args: { alias: '$left', kind: 'rectangle', properties: { name: 'Left', x: 20, y: 30, width: 20, height: 20, duration: 10 } } },
+      { op: 'element.create', args: { alias: '$middle', kind: 'rectangle', properties: { name: 'Middle', x: 80, y: 70, width: 20, height: 20, duration: 10 } } },
+      { op: 'element.create', args: { alias: '$right', kind: 'rectangle', properties: { name: 'Right', x: 200, y: 110, width: 20, height: 20, duration: 10 } } },
+      { op: 'folder.create', args: { alias: '$folder', name: 'Character parts' } },
+      { op: 'folder.assign', args: { folderId: '$folder', elementIds: ['$left', '$middle', '$right'] } },
+      { op: 'element.align', args: { ids: ['$left', '$middle', '$right'], mode: 'top', timeSeconds: 0 } },
+      { op: 'element.distribute', args: { ids: ['$left', '$middle', '$right'], mode: 'distributeX', timeSeconds: 0 } },
+      { op: 'element.clone', args: { id: '$left', alias: '$copy' } },
+      { op: 'element.reorder', args: { id: '$copy', beforeId: '$middle' } },
+      { op: 'scene.create', args: { alias: '$outro', name: 'Outro', start: 10, duration: 5 } },
+      { op: 'scene.ripple', args: { id: firstSceneId, deltaSeconds: 2 } },
+    ] });
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) return;
+    const reopened = await sdk.openProject(await session.exportProject());
+    const project = reopened.snapshot(), ids = result.idMap;
+    expect(project.folders?.find(folder => folder.id === ids.$folder)?.name).toBe('Character parts');
+    expect([ids.$left, ids.$middle, ids.$right].map(id => project.elements.find(item => item.id === id)?.folderId)).toEqual([ids.$folder, ids.$folder, ids.$folder]);
+    expect(project.elements.find(item => item.id === ids.$copy)?.folderId).toBe(ids.$folder);
+    expect(project.elements.findIndex(item => item.id === ids.$copy)).toBeLessThan(project.elements.findIndex(item => item.id === ids.$middle));
+    const arranged = (await reopened.evaluate(0)).elements.filter(item => [ids.$left, ids.$middle, ids.$right].includes(item.id));
+    expect(new Set(arranged.map(item => item.y)).size).toBe(1);
+    const x = (id: string) => arranged.find(item => item.id === id)!.x;
+    expect(x(ids.$middle)).toBeCloseTo((x(ids.$left) + x(ids.$right)) / 2);
+    expect(project.sequences.find(scene => scene.id === firstSceneId)?.duration).toBe(12);
+    expect(project.sequences.find(scene => scene.id === ids.$outro)?.start).toBe(12);
+    expect(await reopened.diagnostics()).toEqual([]);
+    expect(session.undo(session.revision)).toBe(true);
+    expect(session.snapshot().elements).toHaveLength(0);
+    expect(session.redo(session.revision)).toBe(true);
+    expect(session.snapshot().elements).toHaveLength(4);
+    await reopened.close(); await session.close();
+  });
+
   it('remaps a native assembly with clips, attachment limits and audio across existing ID collisions', async () => {
     const { sdk, session, ids } = await makeSDKAcceptanceStory();
     const expanded = await session.execute({ protocolVersion: 1, expectedRevision: session.revision, commands: [
