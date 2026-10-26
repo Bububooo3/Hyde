@@ -1,68 +1,79 @@
 {
-  "_CanvasPool-O_8k9jVW.js": {
-    "file": "assets/CanvasPool-O_8k9jVW.js",
-    "name": "CanvasPool"
+  "_CanvasPool-CRpxKSgf.js": {
+    "file": "assets/CanvasPool-CRpxKSgf.js",
+    "name": "CanvasPool",
+    "imports": [
+      "_rolldown-runtime-XKyaHtl9.js"
+    ]
   },
-  "_RenderTargetSystem-D85YXrAp.js": {
-    "file": "assets/RenderTargetSystem-D85YXrAp.js",
+  "_RenderTargetSystem-DnghjZwK.js": {
+    "file": "assets/RenderTargetSystem-DnghjZwK.js",
     "name": "RenderTargetSystem",
     "imports": [
-      "_CanvasPool-O_8k9jVW.js"
+      "_CanvasPool-CRpxKSgf.js"
     ]
   },
-  "_canvasUtils-DHiBpmSz.js": {
-    "file": "assets/canvasUtils-DHiBpmSz.js",
+  "_canvasUtils-Dzznzufe.js": {
+    "file": "assets/canvasUtils-Dzznzufe.js",
     "name": "canvasUtils",
     "imports": [
-      "_CanvasPool-O_8k9jVW.js"
+      "_CanvasPool-CRpxKSgf.js"
     ]
   },
-  "_getTexelRangeRects-BhRlOlmi.js": {
-    "file": "assets/getTexelRangeRects-BhRlOlmi.js",
+  "_getTexelRangeRects-DwTPoYz9.js": {
+    "file": "assets/getTexelRangeRects-DwTPoYz9.js",
     "name": "getTexelRangeRects",
     "imports": [
-      "_CanvasPool-O_8k9jVW.js",
-      "_RenderTargetSystem-D85YXrAp.js"
+      "_CanvasPool-CRpxKSgf.js",
+      "_RenderTargetSystem-DnghjZwK.js"
     ]
   },
-  "_getTextureBatchBindGroup-CDnZS9mH.js": {
-    "file": "assets/getTextureBatchBindGroup-CDnZS9mH.js",
+  "_getTextureBatchBindGroup-DLRAuvbR.js": {
+    "file": "assets/getTextureBatchBindGroup-DLRAuvbR.js",
     "name": "getTextureBatchBindGroup",
     "imports": [
-      "_CanvasPool-O_8k9jVW.js"
+      "_CanvasPool-CRpxKSgf.js"
     ]
   },
-  "_init-D5CgzAG2.js": {
-    "file": "assets/init-D5CgzAG2.js",
+  "_init-GFX0Wpdr.js": {
+    "file": "assets/init-GFX0Wpdr.js",
     "name": "init",
     "imports": [
-      "_CanvasPool-O_8k9jVW.js",
-      "_webPlayerSettings-BpdAcXy9.js",
-      "_canvasUtils-DHiBpmSz.js"
+      "_webPlayerSettings-CzG9NyMW.js",
+      "_CanvasPool-CRpxKSgf.js",
+      "_canvasUtils-Dzznzufe.js"
     ]
   },
-  "_mediaAudioSegments-DstqbidB.js": {
-    "file": "assets/mediaAudioSegments-DstqbidB.js",
+  "_mediaAudioSegments-8U5WE4qo.js": {
+    "file": "assets/mediaAudioSegments-8U5WE4qo.js",
     "name": "mediaAudioSegments",
+    "imports": [
+      "_rolldown-runtime-XKyaHtl9.js"
+    ],
     "dynamicImports": [
       "node_modules/signalsmith-stretch/SignalsmithStretch.mjs"
     ]
   },
-  "_webPlayerSettings-BpdAcXy9.js": {
-    "file": "assets/webPlayerSettings-BpdAcXy9.js",
+  "_rolldown-runtime-XKyaHtl9.js": {
+    "file": "assets/rolldown-runtime-XKyaHtl9.js",
+    "name": "rolldown-runtime"
+  },
+  "_webPlayerSettings-CzG9NyMW.js": {
+    "file": "assets/webPlayerSettings-CzG9NyMW.js",
     "name": "webPlayerSettings",
     "imports": [
-      "_CanvasPool-O_8k9jVW.js",
-      "_mediaAudioSegments-DstqbidB.js",
-      "_canvasUtils-DHiBpmSz.js",
-      "_RenderTargetSystem-D85YXrAp.js",
-      "_getTextureBatchBindGroup-CDnZS9mH.js",
-      "_getTexelRangeRects-BhRlOlmi.js"
+      "_rolldown-runtime-XKyaHtl9.js",
+      "_mediaAudioSegments-8U5WE4qo.js",
+      "_CanvasPool-CRpxKSgf.js",
+      "_canvasUtils-Dzznzufe.js",
+      "_RenderTargetSystem-DnghjZwK.js",
+      "_getTextureBatchBindGroup-DLRAuvbR.js",
+      "_getTexelRangeRects-DwTPoYz9.js"
     ],
     "dynamicImports": [
       "node_modules/pixi.js/lib/environment-browser/browserAll.mjs",
       "node_modules/pixi.js/lib/environment-webworker/webworkerAll.mjs",
-      "_webPlayerSettings-BpdAcXy9.js"
+      "_webPlayerSettings-CzG9NyMW.js"
     ],
     "css": [
       "assets/webPlayerSettings-DaKh38y_.css"
@@ -79,20 +90,20 @@
     "src": "_webPlayerSettings-DaKh38y_.css"
   },
   "index.html": {
-    "file": "assets/main-BN7pT0uN.js",
+    "file": "assets/main-bt7Oa8z9.js",
     "name": "main",
     "src": "index.html",
     "isEntry": true,
     "imports": [
-      "_CanvasPool-O_8k9jVW.js",
-      "_webPlayerSettings-BpdAcXy9.js",
-      "_mediaAudioSegments-DstqbidB.js"
+      "_rolldown-runtime-XKyaHtl9.js",
+      "_webPlayerSettings-CzG9NyMW.js",
+      "_mediaAudioSegments-8U5WE4qo.js"
     ],
     "dynamicImports": [
       "index.html"
     ],
     "css": [
-      "assets/main-BT62avq3.css"
+      "assets/main-BwsbJZjr.css"
     ],
     "assets": [
       "assets/inter-latin-400-normal-C38fXH4l.woff2",
@@ -184,24 +195,24 @@
     "src": "node_modules/@fontsource/space-grotesk/files/space-grotesk-latin-400-normal.woff2"
   },
   "node_modules/pixi.js/lib/environment-browser/browserAll.mjs": {
-    "file": "assets/browserAll-lnYhmQp1.js",
+    "file": "assets/browserAll-2jEuwxIW.js",
     "name": "browserAll",
     "src": "node_modules/pixi.js/lib/environment-browser/browserAll.mjs",
     "isDynamicEntry": true,
     "imports": [
-      "_CanvasPool-O_8k9jVW.js",
-      "_webPlayerSettings-BpdAcXy9.js",
-      "_init-D5CgzAG2.js"
+      "_webPlayerSettings-CzG9NyMW.js",
+      "_CanvasPool-CRpxKSgf.js",
+      "_init-GFX0Wpdr.js"
     ]
   },
   "node_modules/pixi.js/lib/environment-webworker/webworkerAll.mjs": {
-    "file": "assets/webworkerAll-DD9QOVPB.js",
+    "file": "assets/webworkerAll-9z-SYdem.js",
     "name": "webworkerAll",
     "src": "node_modules/pixi.js/lib/environment-webworker/webworkerAll.mjs",
     "isDynamicEntry": true,
     "imports": [
-      "_webPlayerSettings-BpdAcXy9.js",
-      "_init-D5CgzAG2.js"
+      "_webPlayerSettings-CzG9NyMW.js",
+      "_init-GFX0Wpdr.js"
     ]
   },
   "node_modules/signalsmith-stretch/SignalsmithStretch.mjs": {
@@ -211,13 +222,13 @@
     "isDynamicEntry": true
   },
   "player.html": {
-    "file": "assets/player-Bh__wfi1.js",
+    "file": "assets/player-DRzFPrd5.js",
     "name": "player",
     "src": "player.html",
     "isEntry": true,
     "imports": [
-      "_webPlayerSettings-BpdAcXy9.js",
-      "_mediaAudioSegments-DstqbidB.js"
+      "_webPlayerSettings-CzG9NyMW.js",
+      "_mediaAudioSegments-8U5WE4qo.js"
     ],
     "css": [
       "assets/player-GHhwuAuN.css"
