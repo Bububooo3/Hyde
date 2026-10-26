@@ -1,6 +1,6 @@
 # Hyde Story Studio editor backlog
 
-**Status:** Authorized for implementation on 2026-10-26 after SDK and Decomposer v1 acceptance. Source: owner hands-on editor testing, 2026-10-24.
+**Status:** Implemented locally and verified with focused editor, core and export workflows on 2026-10-26. Source: owner hands-on editor testing, 2026-10-24. No push or deployment.
 
 ## P0: existing functionality and shortcut bugs
 
@@ -52,15 +52,19 @@ Support typed/pasted hex colors and an on-screen eyedropper where browser capabi
 
 Union, Separate, Negate and Intersect must produce genuine editable Hyde shapes compatible with path tools, persistence, rendering, animation, exports and undo/redo. Handle holes, disconnected components and degenerate outcomes safely. Preserve source geometry unless the user explicitly chooses a destructive operation. Define exact Negate and Separate semantics before implementation, especially with multiple operands.
 
+**Implemented semantics:** Selection order chooses the primary shape. Negate subtracts the union of every other selected shape from the primary. Separate unions the selection, then returns one editable path for each disconnected filled area; holes remain holes in that area's path. Results are new polygon paths at the playhead. Sources remain in the project, hidden but editable. Empty/overcomplex results reject without changing the project.
+
 ### HYDE-012 — Object-based clip masking
 
 Add a Mask Object context command and configuration panel with Include/Exclude mode and add/remove/list controls for multiple object references. Include shows target content inside mask geometry; Exclude hides content covered by mask geometry. Store relationships outside animatable property tracks. Referenced objects retain their own editable, independently animated geometry; the relationship itself is timeline-independent. Preserve references through edits, save/reopen and export. Define predictable deletion/duplication behavior; prevent invalid references and cycles. Match editor preview, standalone player, GIF and video output, with undo/redo.
+
+**Implemented behavior:** The mask stores up to 32 same-scene shape or visual-media IDs on the target object, outside keyframe tracks. Geometry is sampled from each referenced object's evaluated pose at the current time; the references themselves stay fixed. Deleting a source removes its reference and clears an empty mask. Duplicating a target with its sources remaps internal IDs; duplicating only the target keeps its original source references. Portable assemblies drop references outside their contents. Duplicated, linked and independent scenes remap to their own copies. Invalid/self/cyclic references reject. The shared renderer applies the same geometry in the editor, standalone player, GIF and MP4.
 
 ### HYDE-013 — Shadow size and positioning
 
 Add independent Size control and improve X/Y offset controls for shadows beneath, beside or diagonally offset from shapes. Preserve existing controls and project compatibility. Behavior under resize/transform and exported rendering must be consistent.
 
-## Future implementation order and engineering rules
+## Implementation order and engineering rules
 
 1. HYDE-001–004; then HYDE-005, 006 and 008; then HYDE-007, 009 and 010; then HYDE-013; then HYDE-011; then HYDE-012.
 2. Preserve existing Hyde projects and native file compatibility. Reuse Hyde's shared evaluator, renderer, editing operations and serialization.

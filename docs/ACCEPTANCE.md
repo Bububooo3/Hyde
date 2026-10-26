@@ -2,6 +2,26 @@
 
 This tracks the requirements in [PLAN.md](PLAN.md) at the level of reachable workflows. **Verified** means an editor/player workflow or archive round trip was exercised; **Needs proof** means implementation exists but the stated outcome still needs a representative check; **Gap** means work remains; **Blocked** requires a device or platform unavailable in this environment. Source and test references are repository-relative. [PROGRESS.md](PROGRESS.md) remains the short session handoff.
 
+## Authorized editor backlog
+
+| Ticket | State | Focused evidence |
+|---|---|---|
+| HYDE-001 Polygon resizing | Verified | `src/shapePath.test.ts`, `tests/editor-backlog-p0.spec.ts`: stage/numeric geometry, history, archive. |
+| HYDE-002 Copy/Paste and Undo | Verified | `tests/editor-backlog-p0.spec.ts`: selected-object clipboard, history and native text editing. |
+| HYDE-003 Background control | Verified | `tests/editor-backlog-p0.spec.ts`: compact settings layout and interactive picker. |
+| HYDE-004 Ctrl+Y | Verified | `tests/editor-backlog-p0.spec.ts`: selected-object redo and native input behavior. |
+| HYDE-005 Layer access | Verified | `tests/editor-backlog-layers.spec.ts`: stage/Layers context actions and disabled bounds. |
+| HYDE-006 Multi-selection bounds | Verified | `src/selectionBounds.test.ts`, `tests/editor-backlog-layers.spec.ts`: individual primary/secondary outlines, including groups. Editor-only overlays are outside story rendering. |
+| HYDE-007 Bulk editing | Verified | `src/bulkEditing.test.ts`, `tests/editor-backlog-bulk.spec.ts`: mixed values, atomic undo and compatible edits. |
+| HYDE-008 Multi-selection reorder | Verified | `src/layerOrder.test.ts`, `tests/editor-backlog-layers.spec.ts`: sibling order, hierarchy and locked barriers. |
+| HYDE-009 Exact path points | Verified | `tests/editor-backlog-path-point.spec.ts`: numeric local coordinates, grid snap, history and archive. |
+| HYDE-010 Color selection | Verified | `tests/editor-backlog-color.spec.ts`, `tests/appearance-controls.spec.ts`: hex validation/sync and browser eyedropper fallback. |
+| HYDE-011 Boolean shapes | Verified | `src/shapeBoolean.test.ts`, `src/shapeBoolean.sdk.node.test.ts`, `tests/editor-backlog-boolean.spec.ts`: editable holes/islands, SDK, undo, archive and web package. |
+| HYDE-012 Object masks | Verified | `src/objectMask.test.ts`, `src/objectMask.sdk.node.test.ts`, `tests/editor-backlog-object-mask.spec.ts`: references/scene copies/cycles, SDK, exact editor/player/GIF/MP4 pixels, history and archive. |
+| HYDE-013 Shadow size/position | Verified | `tests/editor-backlog-shadow.spec.ts`: pixel effect, directional offsets, undo and archive. |
+
+The shared renderer drives editor, player, GIF and video frames. The composed export fixture `tests/fidelity-export.spec.ts` also passes after these changes. Hardware encoders and physical-device rendering remain outside this local Chrome check.
+
 | PLAN requirement | State | Implementation and acceptance evidence / remaining check |
 |---|---|---|
 | Workspace shell, resizable panels, menus, splash, recents and help | Verified | `src/App.tsx`, `src/SceneContents.tsx`; `tests/interface.spec.ts`, `tests/stage-interactions.spec.ts`, `tests/editor.spec.ts`. |
