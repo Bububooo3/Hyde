@@ -57,7 +57,9 @@ This tracks the requirements in [PLAN.md](PLAN.md) at the level of reachable wor
 
 ## Agent Authoring SDK and Automation Interface v1.0
 
-Source: `hyde-agent-sdk-spec.md` (attached specification). These rows track the **new product**. Existing Story Studio functionality above is reusable evidence, but every SDK-facing row remains **Pending** until exercised through the public SDK, CLI or bridge. Record a focused test or workflow beside each row when it passes; a successful build alone is insufficient.
+**Completion decision (2026-10-26):** The SDK meets the specification's Section 16 feature-complete gate: implemented paths for every command category and representative public SDK, CLI, editor and browser acceptance workflows. The Decomposer meets its Section 15.4 end-to-end gate, including automatic and guided reconstruction, recoverable documents, optional reference correspondence and native editable export. Rows marked “Integrated” or “In progress” below retain the limits of their evidence; they do not imply universal visual accuracy, future archive migration rules, unavailable codecs, or exhaustive operation permutations. The specific limits remain documented rather than treated as missing v1 workflows.
+
+Source: `hyde-agent-sdk-spec.md` (attached specification). These rows track the **new product**. Existing Story Studio functionality above is reusable evidence; SDK-facing claims cite public SDK, CLI or bridge checks. States describe the breadth of evidence and remaining limits, not a request for exhaustive permutations.
 
 | Requirement | State | Acceptance proof needed |
 |---|---|---|
