@@ -28,6 +28,9 @@ interface Props {
   onExportAssembly: () => void;
   onEditPivot: () => void;
   onMoveLayer: (direction: number) => void;
+  canMoveLayer: (direction: number) => boolean;
+  onMaskObject: () => void;
+  canMaskObject: boolean;
   onRemove: () => void;
   deleteLabel?: string;
   onNotice: (message: string) => void;
@@ -37,7 +40,7 @@ function IconButton({ icon: Icon, label, onClick, disabled = false }: { icon: Lu
   return <button type="button" className="icon-button" aria-label={label} title={label} disabled={disabled} onClick={onClick}><Icon size={16}/></button>;
 }
 
-export function SceneContents({ project, time, selected, onSelect, onChangeProject, onAdd, onImportMedia, onGroup, onDuplicate, onCopy, onPaste, canPaste, onExportAssembly, onEditPivot, onMoveLayer, onRemove, deleteLabel = 'Delete selection', onNotice }: Props) {
+export function SceneContents({ project, time, selected, onSelect, onChangeProject, onAdd, onImportMedia, onGroup, onDuplicate, onCopy, onPaste, canPaste, onExportAssembly, onEditPivot, onMoveLayer, canMoveLayer, onMaskObject, canMaskObject, onRemove, deleteLabel = 'Delete selection', onNotice }: Props) {
   const [query, setQuery] = useState('');
   const [kind, setKind] = useState('all');
   const [closed, setClosed] = useState<Set<string>>(() => new Set());
@@ -167,7 +170,7 @@ export function SceneContents({ project, time, selected, onSelect, onChangeProje
       {!project.elements.length && !(project.folders?.length) && <div className="empty-state"><Layers size={28}/><p>No elements yet.</p><small>Use Add object to make a shape, text, or assembly.</small></div>}
       {(project.elements.length > 0 || (project.folders?.length ?? 0) > 0) && <div className="scene-root-drop" onDragOver={event => dropOver(event, null)} onDrop={event => drop(event, null)} onContextMenu={event => openMenu(event, 'blank')}>Drop here to move to the top level</div>}
     </div>
-    <div className="panel-bottom scene-panel-bottom"><div className="add-object-wrap"><IconButton icon={Plus} label="Add object" onClick={() => setAddOpen(value => !value)}/>{addOpen && <div className="object-menu" role="menu"><span className="scene-menu-heading">Shapes</span>{addOption('Rectangle', Square, () => onAdd('rectangle'))}{addOption('Ellipse', Circle, () => onAdd('ellipse'))}{addOption('Polygon', Triangle, () => onAdd('polygon'))}<span className="scene-menu-heading">Other</span>{addOption('Text', Type, () => onAdd('text'))}{addOption('Assembly', Layers, () => onAdd('group'))}{addOption('Folder', FolderPlus, () => createFolder())}{addOption('Import media', Upload, onImportMedia)}</div>}</div><IconButton icon={Layers} label="Create assembly from selection" disabled={!selected.length} onClick={onGroup}/><IconButton icon={ArrowUp} label="Bring forward" disabled={!selected.length} onClick={() => onMoveLayer(1)}/><IconButton icon={ArrowDown} label="Send backward" disabled={!selected.length} onClick={() => onMoveLayer(-1)}/><div className="flex-spacer"/><IconButton icon={Trash2} label={deleteLabel} disabled={!selected.length} onClick={onRemove}/></div>
+    <div className="panel-bottom scene-panel-bottom"><div className="add-object-wrap"><IconButton icon={Plus} label="Add object" onClick={() => setAddOpen(value => !value)}/>{addOpen && <div className="object-menu" role="menu"><span className="scene-menu-heading">Shapes</span>{addOption('Rectangle', Square, () => onAdd('rectangle'))}{addOption('Ellipse', Circle, () => onAdd('ellipse'))}{addOption('Polygon', Triangle, () => onAdd('polygon'))}<span className="scene-menu-heading">Other</span>{addOption('Text', Type, () => onAdd('text'))}{addOption('Assembly', Layers, () => onAdd('group'))}{addOption('Folder', FolderPlus, () => createFolder())}{addOption('Import media', Upload, onImportMedia)}</div>}</div><IconButton icon={Layers} label="Create assembly from selection" disabled={!selected.length} onClick={onGroup}/><IconButton icon={ArrowUp} label="Bring forward" disabled={!canMoveLayer(1)} onClick={() => onMoveLayer(1)}/><IconButton icon={ArrowDown} label="Send backward" disabled={!canMoveLayer(-1)} onClick={() => onMoveLayer(-1)}/><div className="flex-spacer"/><IconButton icon={Trash2} label={deleteLabel} disabled={!selected.length} onClick={onRemove}/></div>
     {menu && <div className="context-menu scene-context-menu" style={{ left: Math.min(menu.x, window.innerWidth - 230), top: Math.min(menu.y, window.innerHeight - 310) }} onPointerDown={event => event.stopPropagation()}>
       {menu.type === 'element' && activeElement && <>
         <button onClick={() => beginRename('element', activeElement.id, activeElement.name)}><Type size={14}/>Rename</button>
@@ -178,7 +181,8 @@ export function SceneContents({ project, time, selected, onSelect, onChangeProje
         <button disabled={!canPaste} onClick={() => { onPaste(); setMenu(null); }}><Copy size={14}/>Paste at playhead</button>
         <button onClick={() => { onGroup(); setMenu(null); }}><Layers size={14}/>Create assembly</button>
         <button onClick={() => { onExportAssembly(); setMenu(null); }}><Download size={14}/>Export assembly</button>
-        <button onClick={() => { onEditPivot(); setMenu(null); }}><Target size={14}/>Edit pivot</button>
+        <button onClick={() => { onEditPivot(); setMenu(null); }}><Target size={14}/>Edit pivot</button><hr/><button disabled={!canMoveLayer(1)} onClick={() => { onMoveLayer(1); setMenu(null); }}><ArrowUp size={14}/>Bring Forward</button><button disabled={!canMoveLayer(-1)} onClick={() => { onMoveLayer(-1); setMenu(null); }}><ArrowDown size={14}/>Send Backward</button>
+        <button disabled={!canMaskObject} onClick={() => { onMaskObject(); setMenu(null); }}><Layers size={14}/>Mask Object</button>
         <hr/><button className="danger" onClick={() => { onRemove(); setMenu(null); }}><Trash2 size={14}/>Delete object</button>
       </>}
       {menu.type === 'folder' && activeFolder && <>

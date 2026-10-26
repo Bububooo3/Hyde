@@ -3,6 +3,7 @@ import type { DBSchema, IDBPDatabase } from 'idb';
 import { uid } from './model';
 import type { Assembly, Asset, Project, StoryElement } from './model';
 import { remapAnimationAssetIds, remapAssemblyClipReferences } from './assemblyClips';
+import { remapObjectMask } from './objectMask';
 import { rekeyMotionBehaviors } from './motion';
 import { browserAssetDigest, pruneBrowserAssets, readBrowserAsset, removeBrowserAsset, validBrowserAssetRef, writeBrowserAsset } from './browserRecoveryAssets';
 import type { BrowserAssetRef } from './browserRecoveryAssets';
@@ -43,6 +44,7 @@ export function importAssembly(project: Project, assembly: Assembly): Project {
     if (next.assetId) next.assetId = assetIds.get(next.assetId)!;
     remapAnimationAssetIds(next,assetIds);
     if (next.flowAroundId) next.flowAroundId = elementIds.get(next.flowAroundId)!;
+    remapObjectMask(next,elementIds,true);
     for (const track of next.tracks) for (const key of track.keyframes) key.id = uid();
     rekeyMotionBehaviors(next.motionBehaviors);
     remapAssemblyClipReferences(next, elementIds);

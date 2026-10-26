@@ -35,10 +35,10 @@ test('fill picker and displayed value follow the visible animated fill', async (
   const ruler = await page.locator('.ruler').boundingBox();
   expect(ruler).toBeTruthy();
   await page.mouse.click(ruler!.x + ruler!.width * 4 / project.duration, ruler!.y + ruler!.height / 2);
-  await expect(page.getByLabel('Fill color')).toHaveValue('#0000ff');
-  await page.getByLabel('Fill color').fill('#27b56a');
-  await expect(page.getByLabel('Fill color')).toHaveValue('#27b56a');
-  await expect(page.locator('.color-field').filter({ hasText: 'Fill' }).locator('code')).toHaveText('#27B56A');
+  await expect(page.getByLabel('Fill color', { exact: true })).toHaveValue('#0000ff');
+  await page.getByLabel('Fill color', { exact: true }).fill('#27b56a');
+  await expect(page.getByLabel('Fill color', { exact: true })).toHaveValue('#27b56a');
+  await expect(page.getByLabel('Fill color hex')).toHaveValue('#27b56a');
   await page.getByRole('button', { name: 'Undo (Ctrl Z)' }).click();
-  await expect(page.getByLabel('Fill color')).toHaveValue('#0000ff');
+  await expect(page.getByLabel('Fill color', { exact: true })).toHaveValue('#0000ff');
 });

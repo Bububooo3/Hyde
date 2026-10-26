@@ -52,7 +52,7 @@ export function Stage({project,time,onError,onWarning,onFramePending,onFrameRead
   return <div ref={host} className={`render-host ${editorOverscan?'editor-overscan':''}`} style={editorOverscan?{'--editor-canvas-width':`${(project.width+editorOverscan*2)/project.width*100}%`,'--editor-canvas-height':`${(project.height+editorOverscan*2)/project.height*100}%`,'--editor-canvas-left':`${-editorOverscan/project.width*100}%`,'--editor-canvas-top':`${-editorOverscan/project.height*100}%`} as React.CSSProperties:undefined} />;
 }
 
-export function SelectionOverlay({element,project,camera,pivotMode,rotationPoint,onStart,zoom=1}: {element:StoryElement|null;project:Project;camera:CameraState;pivotMode:boolean;rotationPoint?:{x:number;y:number};zoom?:number;onStart:(event:React.PointerEvent,mode:'move'|'resize'|'rotate'|'pivot')=>void}) {
+export function SelectionOverlay({element,project,camera,pivotMode,rotationPoint,onStart,zoom=1,primary=true,interactive=true}: {element:StoryElement|null;project:Project;camera:CameraState;pivotMode:boolean;rotationPoint?:{x:number;y:number};zoom?:number;primary?:boolean;interactive?:boolean;onStart:(event:React.PointerEvent,mode:'move'|'resize'|'rotate'|'pivot')=>void}) {
   const overlay=useRef<SVGSVGElement>(null);
   const [pixelsPerUnit,setPixelsPerUnit]=useState(1);
   const visible=!!element&&element.kind!=='audio'&&element.kind!=='group';
@@ -66,16 +66,16 @@ export function SelectionOverlay({element,project,camera,pivotMode,rotationPoint
   const corners=[point(0,0),point(e.width,0),point(e.width,e.height),point(0,e.height)];
   const top=point(e.width/2,0),rotate={x:top.x+s*24*unit*Math.sign(e.scaleY||1),y:top.y-c*24*unit*Math.sign(e.scaleY||1)},resize=corners[2];
   const rotationLocked=!!e.attachment&&e.attachment.type!=='hinge';
-  return <svg ref={overlay} className="selection-overlay" aria-hidden="true" viewBox={`0 0 ${project.width} ${project.height}`}><g transform={scene?sceneFrameSvgTransform(project,scene):undefined}><g transform={`translate(${project.width/2} ${project.height/2}) rotate(${-camera.rotation}) scale(${camera.zoom}) translate(${-camera.x} ${-camera.y})`}>
+  return <svg ref={overlay} className={`selection-overlay ${primary?'primary':'secondary'}`} data-selection-id={e.id} aria-hidden="true" viewBox={`0 0 ${project.width} ${project.height}`}><g transform={scene?sceneFrameSvgTransform(project,scene):undefined}><g transform={`translate(${project.width/2} ${project.height/2}) rotate(${-camera.rotation}) scale(${camera.zoom}) translate(${-camera.x} ${-camera.y})`}>
     {rotationPoint&&<g className="world-rotation-point" aria-label="World rotation point" pointerEvents="none"><circle cx={rotationPoint.x} cy={rotationPoint.y} r={7*unit}/><path d={`M ${rotationPoint.x-13*unit} ${rotationPoint.y} H ${rotationPoint.x+13*unit} M ${rotationPoint.x} ${rotationPoint.y-13*unit} V ${rotationPoint.y+13*unit}`}/></g>}
-    <polygon points={corners.map(p=>`${p.x},${p.y}`).join(' ')} fill="none" stroke="#ffc857" strokeWidth={1.5} vectorEffect="non-scaling-stroke"/>
-    {!e.locked&&!pivotMode&&<>
+    <polygon points={corners.map(p=>`${p.x},${p.y}`).join(' ')} fill="none" stroke={primary?'#ffc857':'#8bd4ee'} strokeWidth={primary?1.5:1.25} strokeDasharray={primary?undefined:'5 4'} vectorEffect="non-scaling-stroke"/>
+    {primary&&interactive&&!e.locked&&!pivotMode&&<>
       <path d={`M ${top.x} ${top.y} L ${rotate.x} ${rotate.y}`} stroke="#ffc857" vectorEffect="non-scaling-stroke"/>
       <circle className="handle rotate" cx={rotate.x} cy={rotate.y} r={5*unit} style={{pointerEvents:'none',fill:rotationLocked?'#5c6670':undefined}}/>
       <circle className={`handle-hit rotate ${rotationLocked?'locked':''}`} aria-label={rotationLocked?'Rotation locked by attachment':'Rotate selection'} cx={rotate.x} cy={rotate.y} r={12*unit} onPointerDown={ev=>onStart(ev,'rotate')}><title>{rotationLocked?'Rotation locked by attachment':'Drag to rotate · Alt bypasses snapping'}</title></circle>
       {!e.parentId&&!e.attachment&&<><rect className="handle resize" x={resize.x-4*unit} y={resize.y-4*unit} width={8*unit} height={8*unit} style={{pointerEvents:'none'}}/><circle className="handle-hit resize" aria-label="Resize selection" cx={resize.x} cy={resize.y} r={12*unit} onPointerDown={ev=>onStart(ev,'resize')}/></>}
     </>}
-    <circle className={`pivot ${pivotMode&&!e.attachment?'editable':''}`} cx={e.x} cy={e.y} r={5*unit} style={{pointerEvents:'none',fill:e.attachment?'#5c6670':undefined}}/>
-    {pivotMode&&!e.locked&&<circle className={`handle-hit pivot-hit ${e.attachment?'locked':''}`} aria-label={e.attachment?'Pivot locked by attachment':'Move pivot'} cx={e.x} cy={e.y} r={12*unit} onPointerDown={ev=>onStart(ev,'pivot')}><title>{e.attachment?'Pivot locked by attachment':'Drag to move pivot'}</title></circle>}
+    {primary&&interactive&&<circle className={`pivot ${pivotMode&&!e.attachment?'editable':''}`} cx={e.x} cy={e.y} r={5*unit} style={{pointerEvents:'none',fill:e.attachment?'#5c6670':undefined}}/>}
+    {primary&&interactive&&pivotMode&&!e.locked&&<circle className={`handle-hit pivot-hit ${e.attachment?'locked':''}`} aria-label={e.attachment?'Pivot locked by attachment':'Move pivot'} cx={e.x} cy={e.y} r={12*unit} onPointerDown={ev=>onStart(ev,'pivot')}><title>{e.attachment?'Pivot locked by attachment':'Drag to move pivot'}</title></circle>}
   </g></g></svg>;
 }

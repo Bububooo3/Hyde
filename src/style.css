@@ -64,3 +64,15 @@
 .project-background-field>span{width:auto;min-width:0;white-space:nowrap}
 .project-background-field>input[type=color]{width:44px;min-width:44px;padding:1px}
 .project-background-field>code{min-width:0;overflow-wrap:anywhere}
+.color-control{display:grid;grid-template-columns:48px 30px minmax(0,1fr) 24px;gap:5px;align-items:center;min-width:0}
+.color-control>span{width:auto;min-width:0}
+.color-control>input[type=color]{width:30px;min-width:30px;padding:1px}
+.color-control>.color-hex{width:100%;min-width:0;font:10px 'JetBrains Mono',monospace;padding:5px 3px}
+.color-control>button{padding:3px;display:grid;place-items:center}
+.color-control>button:disabled{opacity:.4}
+.bulk-color-controls{display:flex;flex-direction:column;gap:5px}
+.shadow-presets{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:3px;margin:6px 0 10px}
+.shadow-presets button{min-width:0;padding:5px 2px;border:1px solid #46515d;color:#aeb9c4;font-size:8px}
+.boolean-actions{display:grid;grid-template-columns:1fr 1fr;gap:5px}
+.boolean-actions button{padding:7px 5px;border:1px solid #4a5662;background:#303b46;color:#d8e3ed;font-size:10px}
+.boolean-actions button:disabled{opacity:.4}

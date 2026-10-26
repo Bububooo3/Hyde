@@ -3,6 +3,7 @@ import { evaluateCameraForScene } from './engine';
 import {sceneVisualFrames} from './sceneFrame';
 import {remapAssemblyClipReferences} from './assemblyClips';
 import {rekeyMotionBehaviors,scaleMotionTime} from './motion';
+import {remapObjectMask} from './objectMask';
 
 const cache = new WeakMap<Project, Project>();
 const epsilon = 1e-7;
@@ -69,6 +70,7 @@ function placedElements(source: Sequence, placement: Sequence, originals: StoryE
     if (element.parentId) element.parentId = ids.get(element.parentId) ?? element.parentId;
     if (element.attachment) element.attachment.parentId = ids.get(element.attachment.parentId) ?? element.attachment.parentId;
     if (element.flowAroundId) element.flowAroundId=ids.get(element.flowAroundId)??element.flowAroundId;
+    remapObjectMask(element,ids,true);
     if (element.assemblyClips?.length) {
       const clipIds=new Map(element.assemblyClips.map(clip=>[clip.id,`${placement.id}::${clip.id}`]));
       for (const clip of element.assemblyClips) {
@@ -228,6 +230,7 @@ export function makeSceneIndependent(project:Project,sceneId:string):Project {
     if(element.parentId)element.parentId=ids.get(element.parentId)??element.parentId;
     if(element.attachment)element.attachment.parentId=ids.get(element.attachment.parentId)??element.attachment.parentId;
     if(element.flowAroundId)element.flowAroundId=ids.get(element.flowAroundId)??element.flowAroundId;
+    remapObjectMask(element,ids,true);
     for(const track of element.tracks)for(const key of track.keyframes)key.id=uid();
     rekeyMotionBehaviors(element.motionBehaviors);
   }

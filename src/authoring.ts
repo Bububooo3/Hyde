@@ -5,7 +5,9 @@ import type { AnimProperty, Assembly, Asset, Attachment, ElementKind, Keyframe, 
 import { descendantIds, makeAssembly, parentId, reparentElement, worldPoses } from './editing';
 import { duplicateScene, deleteScene, moveScene, retimeScene } from './sceneOperations';
 import { makeSceneIndependent, placeLinkedScene } from './scenePlacement';
-import { movePathAnchor, removePathPoint, setPathHandle, splitPathSegment, withEditablePath } from './shapePath';
+import { movePathAnchor, removePathPoint, resizeElementGeometry, setPathHandle, splitPathSegment, withEditablePath } from './shapePath';
+import { booleanShapes, type ShapeBooleanOperation } from './shapeBoolean';
+import { pruneObjectMasks, setObjectMask } from './objectMask';
 import { applyMediaAuthoringCommand, MEDIA_AUTHORING_COMMAND_KEYS, MEDIA_AUTHORING_OPERATIONS, MediaAuthoringError } from './authoringMedia';
 import type { MediaAuthoringCommand } from './authoringMedia';
 import { applyTimelineCommand, timelineCommandKeys, timelineOperations } from './authoringTimeline';
@@ -46,12 +48,14 @@ export type CoreHydeCommand =
   | { op: 'element.setTransform'; args: { id: Ref; transform: Transform; space?: 'local'; timeSeconds?: never }; clientCommandId?: string }
   | { op: 'element.setTransform'; args: { id: Ref; transform: WorldTransform; space: 'world'; timeSeconds?: number }; clientCommandId?: string }
   | { op: 'element.updateAppearance'; args: { id: Ref; appearance: Appearance }; clientCommandId?: string }
+  | { op: 'element.setObjectMask'; args: { id: Ref; mode: 'include' | 'exclude'; objectIds: Ref[] }; clientCommandId?: string }
   | { op: 'shape.setPath'; args: { id: Ref; path: ShapePath }; clientCommandId?: string }
   | { op: 'shape.convertToPath'; args: { id: Ref }; clientCommandId?: string }
   | { op: 'shape.insertPoint'; args: { id: Ref; index: number; fraction?: number; contourIndex?: number }; clientCommandId?: string }
   | { op: 'shape.movePoint'; args: { id: Ref; index: number; x: number; y: number; contourIndex?: number }; clientCommandId?: string }
   | { op: 'shape.setHandle'; args: { id: Ref; index: number; side: 'in' | 'out'; position?: { x: number; y: number }; contourIndex?: number }; clientCommandId?: string }
   | { op: 'shape.removePoint'; args: { id: Ref; index: number; contourIndex?: number }; clientCommandId?: string }
+  | { op: 'shape.boolean'; args: { ids: Ref[]; operation: ShapeBooleanOperation; timeSeconds?: number }; clientCommandId?: string }
   | { op: 'assembly.attach'; args: { id: Ref; parentId: Ref; type: Attachment['type']; min?: number; max?: number; preserveWorldPose?: boolean; timeSeconds?: number }; clientCommandId?: string }
   | { op: 'assembly.detach'; args: { id: Ref; preserveWorldPose?: boolean; timeSeconds?: number }; clientCommandId?: string }
   | { op: 'track.ensure'; args: { elementId: Ref; property: AnimProperty }; clientCommandId?: string }
@@ -74,8 +78,8 @@ export type ExecuteResult =
 
 const coreOperations = [
   'project.create', 'project.updateMetadata', 'scene.create', 'scene.rename', 'scene.duplicate', 'scene.delete', 'scene.retime', 'scene.move', 'scene.link', 'scene.unlink',
-  'element.create', 'element.remove', 'element.setTransform', 'element.updateAppearance',
-  'shape.setPath', 'shape.convertToPath', 'shape.insertPoint', 'shape.movePoint', 'shape.setHandle', 'shape.removePoint',
+  'element.create', 'element.remove', 'element.setTransform', 'element.updateAppearance', 'element.setObjectMask',
+  'shape.setPath', 'shape.convertToPath', 'shape.insertPoint', 'shape.movePoint', 'shape.setHandle', 'shape.removePoint', 'shape.boolean',
   'assembly.attach', 'assembly.detach', 'track.ensure', 'keyframe.upsert', 'caption.create', 'asset.add',
 ] as const;
 export const HYDE_OPERATIONS = [...new Set<string>([...coreOperations, ...timelineOperations, ...MEDIA_AUTHORING_OPERATIONS, ...CATALOG_OPERATIONS])];
@@ -95,12 +99,14 @@ const coreCommandKeys: Record<(typeof coreOperations)[number], string[]> = {
   'element.remove': ['id', 'descendants'],
   'element.setTransform': ['id', 'transform', 'space', 'timeSeconds'],
   'element.updateAppearance': ['id', 'appearance'],
+  'element.setObjectMask': ['id', 'mode', 'objectIds'],
   'shape.setPath': ['id', 'path'],
   'shape.convertToPath': ['id'],
   'shape.insertPoint': ['id', 'index', 'fraction', 'contourIndex'],
   'shape.movePoint': ['id', 'index', 'x', 'y', 'contourIndex'],
   'shape.setHandle': ['id', 'index', 'side', 'position', 'contourIndex'],
   'shape.removePoint': ['id', 'index', 'contourIndex'],
+  'shape.boolean': ['ids', 'operation', 'timeSeconds'],
   'assembly.attach': ['id', 'parentId', 'type', 'min', 'max', 'preserveWorldPose', 'timeSeconds'],
   'assembly.detach': ['id', 'preserveWorldPose', 'timeSeconds'],
   'track.ensure': ['elementId', 'property'],
@@ -556,7 +562,7 @@ export class HydeAuthoringSession {
         const id = resolve(args.id, aliases); requiredElement(project, id);
         const descendants = descendantIds(project, [id]);
         if (!args.descendants && descendants.size > 1) throw new Error('Element has descendants; request descendants=true to remove the complete hierarchy.');
-        project.elements = project.elements.filter(item => !descendants.has(item.id)); break;
+        project.elements = project.elements.filter(item => !descendants.has(item.id)); pruneObjectMasks(project,descendants); break;
       }
       case 'element.setTransform': {
         const targetId = resolve(args.id, aliases);
@@ -567,11 +573,15 @@ export class HydeAuthoringSession {
         if (args.space === 'world') setWorldTransform(project, targetId, args.transform, args.timeSeconds ?? requiredElement(project, targetId).start);
         else {
           if (args.timeSeconds !== undefined) throw new Error('timeSeconds is only meaningful for a world transform.');
-          Object.assign(requiredElement(project, targetId), args.transform);
+          const element=requiredElement(project,targetId);
+          if(args.transform.width!==undefined||args.transform.height!==undefined)
+            resizeElementGeometry(element,args.transform.width??element.width,args.transform.height??element.height);
+          Object.assign(element,args.transform);
         }
         break;
       }
       case 'element.updateAppearance': Object.assign(requiredElement(project, resolve(args.id, aliases)), args.appearance); break;
+      case 'element.setObjectMask': project=setObjectMask(project,resolve(args.id,aliases),args.mode,args.objectIds.map((id:string)=>resolve(id,aliases))); break;
       case 'shape.setPath': requiredElement(project, resolve(args.id, aliases)).shapePath = structuredClone(args.path); break;
       case 'shape.convertToPath': {
         const element = requiredElement(project, resolve(args.id, aliases)); Object.assign(element, withEditablePath(element)); break;
@@ -588,6 +598,7 @@ export class HydeAuthoringSession {
       case 'shape.removePoint': {
         const element = requiredElement(project, resolve(args.id, aliases)); element.shapePath = removePathPoint(withEditablePath(element).shapePath!, args.index, args.contourIndex); break;
       }
+      case 'shape.boolean': project = booleanShapes(project,args.ids.map((id:string)=>resolve(id,aliases)),args.operation,args.timeSeconds??0).project; break;
       case 'assembly.attach': {
         const id = resolve(args.id, aliases), parentId = resolve(args.parentId, aliases);
         if (args.preserveWorldPose) project = reparentElement(project, id, parentId, args.timeSeconds ?? 0);

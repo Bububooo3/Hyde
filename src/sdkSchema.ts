@@ -35,7 +35,7 @@ const webPlayer = object({
   loop: boolean, controlsVisible: boolean, showSeek: boolean, showVolume: boolean,
   showFullscreen: boolean, showCaptions: boolean, showLoop: boolean,
 }, ['posterTime', 'loop', 'controlsVisible', 'showSeek', 'showVolume', 'showFullscreen', 'showCaptions', 'showLoop']);
-const shadow = object({ color: text, blur: nonnegative, x: number, y: number, enabled: boolean },
+const shadow = object({ color: text, blur: nonnegative, x: number, y: number, size: number, enabled: boolean },
   ['color', 'blur', 'x', 'y', 'enabled']);
 const transformFields = {
   x: number, y: number, width: nonnegative, height: nonnegative, rotation: number,
@@ -137,10 +137,10 @@ const requiredArgs: Record<string, string[]> = {
   'scene.duplicate': ['id'], 'scene.delete': ['id'], 'scene.retime': ['id', 'duration'],
   'scene.move': ['id'], 'scene.link': ['sourceId'], 'scene.unlink': ['id'],
   'element.create': ['kind'], 'element.remove': ['id'], 'element.setTransform': ['id', 'transform'],
-  'element.updateAppearance': ['id', 'appearance'],
+  'element.updateAppearance': ['id', 'appearance'], 'element.setObjectMask': ['id', 'mode', 'objectIds'],
   'shape.setPath': ['id', 'path'], 'shape.convertToPath': ['id'], 'shape.insertPoint': ['id', 'index'],
   'shape.movePoint': ['id', 'index', 'x', 'y'], 'shape.setHandle': ['id', 'index', 'side'],
-  'shape.removePoint': ['id', 'index'], 'assembly.attach': ['id', 'parentId', 'type'],
+  'shape.removePoint': ['id', 'index'], 'shape.boolean': ['ids', 'operation'], 'assembly.attach': ['id', 'parentId', 'type'],
   'assembly.detach': ['id'], 'track.ensure': ['elementId', 'property'],
   'keyframe.upsert': ['elementId', 'property', 'timeSeconds', 'value'],
   'caption.create': ['text', 'start', 'end'], 'asset.add': ['handle', 'name'],
@@ -233,6 +233,8 @@ const operationFields: Record<string, Record<string, Schema>> = {
   'asset.replace': { duration: { type: 'number', exclusiveMinimum: 0, maximum: 86_400 } },
   'asset.removeUnused': { ids: { ...array(ref, 1, 1000), uniqueItems: true } },
   'shape.setPrimitive': { kind: enumeration('rectangle', 'ellipse', 'polygon'), points: array(point, 3, 4096) },
+  'element.setObjectMask': { mode: enumeration('include', 'exclude'), objectIds: { ...array(ref, 0, 32), uniqueItems: true } },
+  'shape.boolean': { ids: { ...array(ref, 1, 64), uniqueItems: true }, operation: enumeration('union', 'separate', 'negate', 'intersect'), timeSeconds: nonnegative },
   'media.setFill': { assetId: nullable(ref) },
   'media.setPlacement': { transform: nullable(mediaTransform) },
   'media.setPin': { corners: nullable(array(point, 4, 4)) },

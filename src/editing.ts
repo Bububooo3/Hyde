@@ -2,6 +2,7 @@ import { evaluateProject } from './engine';
 import { createElement,sceneIdAt, uid, type Assembly, type Project, type StoryElement } from './model';
 import { importAssembly } from './storage';
 import { animationAssetIds, remapAssemblyClipReferences } from './assemblyClips';
+import { remapObjectMask } from './objectMask';
 
 /** The same effective parent rule used by the evaluator. */
 export function parentId(element: StoryElement): string | undefined {
@@ -112,7 +113,9 @@ export function makeAssembly(project: Project, ids: Iterable<string>, time?: num
   }
   elements.push(...frames.values());
   const allIds = new Set(elements.map(element => element.id));
+  const containedIds = new Map([...allIds].map(id => [id, id]));
   for (const element of elements) {
+    remapObjectMask(element,containedIds,true);
     if (element.assemblyClips) {
       element.assemblyClips = element.assemblyClips.filter(clip => clip.tracks.every(track => allIds.has(track.elementId)));
       const kept = new Set(element.assemblyClips.map(clip => clip.id));
@@ -184,6 +187,7 @@ export function duplicateElements(project: Project, ids: Iterable<string>): { pr
     if (copy.parentId && mapping.has(copy.parentId)) copy.parentId = mapping.get(copy.parentId)!;
     if (copy.attachment && mapping.has(copy.attachment.parentId)) copy.attachment.parentId = mapping.get(copy.attachment.parentId)!;
     if (copy.flowAroundId && mapping.has(copy.flowAroundId)) copy.flowAroundId = mapping.get(copy.flowAroundId)!;
+    remapObjectMask(copy,mapping);
     for (const track of copy.tracks) for (const key of track.keyframes) key.id = uid();
     remapAssemblyClipReferences(copy, mapping);
   }

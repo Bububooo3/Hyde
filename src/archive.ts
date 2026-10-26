@@ -212,6 +212,7 @@ export function validateDocument(model: unknown, assembly: boolean): asserts mod
     check(record(element.shadow), 'Invalid shadow.');
     string(element.shadow.color, 'Shadow color');
     number(element.shadow.blur, 'Shadow blur', 0); number(element.shadow.x, 'Shadow X'); number(element.shadow.y, 'Shadow Y');
+    if (element.shadow.size !== undefined) number(element.shadow.size, 'Shadow size');
     check(typeof element.shadow.enabled === 'boolean', 'Invalid shadow state.');
     if (element.assetId !== undefined) {
       string(element.assetId, 'Element asset ID');
@@ -404,6 +405,19 @@ export function validateDocument(model: unknown, assembly: boolean): asserts mod
       check(!!target && ['rectangle', 'ellipse', 'polygon', 'image', 'video'].includes(target.kind), 'Text flow refers to a missing shape.');
       check(element.sceneId === target.sceneId, 'Text and its flow shape must belong to the same scene.');
     }
+    if (element.objectMask !== undefined) {
+      const mask = element.objectMask;
+      check(record(mask) && (mask.mode === 'include' || mask.mode === 'exclude') && Array.isArray(mask.objectIds) && mask.objectIds.length > 0 && mask.objectIds.length <= 32, 'Invalid object mask relationship.');
+      check(element.kind !== 'audio' && element.kind !== 'group', 'Only visual objects can have object masks.');
+      const seen = new Set<string>();
+      for (const id of mask.objectIds) {
+        string(id, 'Mask object ID');
+        check(!seen.has(id) && id !== element.id, 'Duplicate or self-referencing object mask.'); seen.add(id);
+        const source = byId.get(id);
+        check(!!source && ['rectangle','ellipse','polygon','image','video'].includes(source.kind), 'Object mask refers to a missing visual shape.');
+        check(source.sceneId === element.sceneId, 'Mask objects must share the target scene.');
+      }
+    }
     if (element.textShapeMode !== undefined) {
       check(element.kind === 'text' && ['around','inside','clip'].includes(String(element.textShapeMode)), 'Invalid text and shape mode.');
     }
@@ -467,6 +481,15 @@ export function validateDocument(model: unknown, assembly: boolean): asserts mod
     visiting.delete(id); visited.add(id);
   }
   for (const id of elementIds) visit(id, 0);
+  const maskVisiting = new Set<string>(), maskVisited = new Set<string>();
+  function visitMask(id: string) {
+    check(!maskVisiting.has(id), 'Circular object mask references are not supported.');
+    if (maskVisited.has(id)) return;
+    maskVisiting.add(id);
+    for (const source of byId.get(id)?.objectMask?.objectIds ?? []) visitMask(source);
+    maskVisiting.delete(id); maskVisited.add(id);
+  }
+  for (const id of elementIds) visitMask(id);
   if (!assembly) {
     string(model.id, 'Project ID'); string(model.background, 'Background'); string(model.updatedAt, 'Update time');
     for (const prop of ['width', 'height', 'fps', 'duration']) positive(model[prop], prop);

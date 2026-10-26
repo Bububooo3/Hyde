@@ -1,10 +1,13 @@
 import { Application, BlurFilter, Color, Container, Graphics, Mesh, MeshGeometry, Sprite, Text, Texture, VideoSource } from 'pixi.js';
+import * as clipping from 'polygon-clipping';
 import { layoutWithLines, prepareWithSegments } from '@chenglou/pretext';
 import type { PreparedTextWithSegments } from '@chenglou/pretext';
 import type { Asset, PlacementFrame, Project, ShapeContour, StoryElement } from './model';
 import { cameraToStage, evaluateCamera, evaluateCameraForScene, evaluateProject, sourceTime, videoVisualExpired } from './engine';
 import {mapSceneFramePoint,sceneFrameTransform,sceneVisualFrames} from './sceneFrame';
 import {shapePathCommands} from './shapePath';
+import {worldShapePolygon} from './shapeBoolean';
+import {worldPoses} from './editing';
 import {layoutTextUnits, type TextUnit} from './textUnits';
 import {textMotionAt} from './textMotion';
 import {reflowUnitAt,textReflowEnd} from './textReflow';
@@ -27,6 +30,7 @@ interface CachedResource {
 }
 interface ElementNode {
   root: Container;
+  objectMask: Graphics;
   shadow: Graphics;
   shape: Graphics;
   outline: Graphics;
@@ -271,6 +275,7 @@ export class StageRenderer {
 
   private createNode(parent:Container): ElementNode {
     const root = new Container({ eventMode: 'none' });
+    const objectMask = new Graphics();
     const shadow = new Graphics();
     const shape = new Graphics();
     const sprite = new Sprite(Texture.EMPTY);
@@ -299,8 +304,28 @@ export class StageRenderer {
     sprite.mask = mask;
     glyphMask.visible = false;
     warning.visible = false;
-    parent.addChild(root);
-    return { root, shadow, shape, sprite, pinMesh, pinGeometryKey:'', mask, visibleText, mediaText, textClip, mediaTextClip, clipKey:'', text, flowText, flowGlyphs, flowLines:[], flowKey:'', motion, motionGlyphs, motionPieces: [], motionKey: '', glyphMask, glyphKey: '', outline, warning, geometryKey: '', textKey: '', preparedKey: '', layoutWidth: 0 };
+    parent.addChild(root,objectMask);
+    objectMask.visible=false;
+    return { root, objectMask, shadow, shape, sprite, pinMesh, pinGeometryKey:'', mask, visibleText, mediaText, textClip, mediaTextClip, clipKey:'', text, flowText, flowGlyphs, flowLines:[], flowKey: '', motion, motionGlyphs, motionPieces: [], motionKey: '', glyphMask, glyphKey: '', outline, warning, geometryKey: '', textKey: '', preparedKey: '', layoutWidth: 0 };
+  }
+
+  private updateObjectMask(node:ElementNode,project:Project,element:StoryElement,poses:Map<string,StoryElement>):void{
+    const relation=element.objectMask;
+    if(!relation?.objectIds.length){node.root.mask=null;node.objectMask.visible=false;return;}
+    const shapes=relation.objectIds.flatMap(id=>{const pose=poses.get(id);return pose?[worldShapePolygon(pose)]:[];});
+    if(!shapes.length){node.root.mask=null;node.objectMask.visible=false;return;}
+    const union=clipping.union(shapes[0],...shapes.slice(1));
+    const mask=node.objectMask;
+    mask.clear();
+    const ring=(points:clipping.Ring)=>{if(!points.length)return;mask.moveTo(points[0][0],points[0][1]);for(const [x,y] of points.slice(1))mask.lineTo(x,y);mask.closePath();};
+    if(relation.mode==='exclude')mask.rect(-project.width,-project.height,project.width*3,project.height*3).fill(0xffffff);
+    for(const polygon of union){
+      ring(polygon[0]);
+      if(relation.mode==='include')mask.fill(0xffffff);else mask.cut();
+      for(const hole of polygon.slice(1)){ring(hole);if(relation.mode==='include')mask.cut();else mask.fill(0xffffff);}
+    }
+    mask.visible=true;
+    node.root.setMask({mask,channel:'red'});
   }
 
   /** The visible glyphs and text-filled media need independent masks. Both use
@@ -351,7 +376,10 @@ export class StageRenderer {
     }
     if (node.shadow.visible) {
       filledPath(node.shadow, element, paint(element.shadow.color));
-      node.shadow.position.set(element.shadow.x, element.shadow.y);
+      const size = Number.isFinite(element.shadow.size) ? element.shadow.size! : 0;
+      node.shadow.pivot.set(element.width / 2, element.height / 2);
+      node.shadow.scale.set(Math.max(.01, 1 + 2 * size / Math.max(1, element.width)), Math.max(.01, 1 + 2 * size / Math.max(1, element.height)));
+      node.shadow.position.set(element.width / 2 + element.shadow.x, element.height / 2 + element.shadow.y);
       const blur = Math.max(0, element.shadow.blur);
       if (blur > 0) {
         node.blur ??= new BlurFilter({ strength: blur / 2, quality: 3 });
@@ -666,20 +694,21 @@ export class StageRenderer {
       if(!asset)this.frameWarnings.push(`Media for ${element.name} is missing; a placeholder is shown.`);
       else if((asset.kind==='image'||asset.kind==='video')&&resources[index]?.failed)this.frameWarnings.push(`Media ${asset.name} could not be loaded; a placeholder is shown.`);
     });
-    for (const node of this.nodes.values()) node.root.visible = false;
+    for (const node of this.nodes.values()) { node.root.visible = false; node.objectMask.visible = false; }
     active.forEach((element, index) => {
       let node = this.nodes.get(element.id);
       const parent=element.sceneId?sceneParents.get(element.sceneId)??this.sceneLayer(element.sceneId).camera:this.globalLayer;
       if (!node) { node = this.createNode(parent); this.nodes.set(element.id, node); }
       const root = node.root;
       if(root.parent!==parent)parent.addChild(root);
+      if(node.objectMask.parent!==parent)parent.addChild(node.objectMask);
       root.visible = true;
       parent.setChildIndex(root,parent.children.length-1);
       const resource=resources[index];
       const elementAsset=element.assetId?assets.get(element.assetId):undefined;
       const flowTarget=element.kind==='text'&&element.flowAroundId?activeById.get(element.flowAroundId):undefined;
       const obstacle=flowTarget?.sceneId===element.sceneId?flowTarget:undefined;
-      const staticHint=effectiveRenderOptimization(element,elementById,elementAsset)==='static';
+      const staticHint=!element.objectMask&&effectiveRenderOptimization(element,elementById,elementAsset)==='static';
       const visualKey=staticHint?staticVisualSignature(element,obstacle):'';
       const failed=Boolean(resource?.failed);
       if(staticHint&&node.staticProject===project&&node.staticVisualKey===visualKey&&
@@ -735,6 +764,10 @@ export class StageRenderer {
       node.staticTexture=resource?.texture;
       node.staticResourceFailed=failed;
     });
+    if(active.some(element=>element.objectMask?.objectIds.length)){
+      const poses=worldPoses(project,time);
+      for(const element of active){const node=this.nodes.get(element.id);if(node)this.updateObjectMask(node,project,element,poses);}
+    }else for(const element of active){const node=this.nodes.get(element.id);if(node?.root.mask){node.root.mask=null;node.objectMask.visible=false;}}
     if(this.editorMargin){
       this.edgeMarks.clear();
       for(const element of active){
@@ -756,6 +789,7 @@ export class StageRenderer {
     for (const [id, node] of this.nodes) {
       if (ids.has(id)) continue;
       node.root.destroy({ children: true });
+      node.objectMask.destroy();
       node.flowGlyphs.destroy({children:true});
       node.motionGlyphs.destroy({children:true});
       node.glyphTexture?.destroy(true);
@@ -795,6 +829,7 @@ export class StageRenderer {
   private clear(): void {
     for (const node of this.nodes.values()) {
       node.root.destroy({ children: true });
+      node.objectMask.destroy();
       node.flowGlyphs.destroy({children:true});
       node.motionGlyphs.destroy({children:true});
       node.glyphTexture?.destroy(true);

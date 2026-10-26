@@ -110,7 +110,7 @@ export interface StoryElement {
   sceneId?: string;
   rotation: number; scaleX: number; scaleY: number; pivotX: number; pivotY: number;
   fill: string; stroke: string; strokeWidth: number; opacity: number;
-  shadow: { color: string; blur: number; x: number; y: number; enabled: boolean };
+  shadow: { color: string; blur: number; x: number; y: number; size?: number; enabled: boolean };
   text?: string; fontFamily?: string; fontSize?: number; textLayout?: 'live' | 'static'; staticLayoutWidth?: number;
   /** Shape whose evaluated silhouette excludes text during layout. */
   flowAroundId?: string;
@@ -146,6 +146,8 @@ export interface StoryElement {
   /** Legacy straight polygon vertices in local pixels. Editable paths supersede them. */
   points?: {x: number; y: number}[];
   shapePath?: ShapePath;
+  /** Timeline-independent references to independently editable mask objects. */
+  objectMask?: { mode: 'include' | 'exclude'; objectIds: string[] };
   section?: string; optimize?: 'auto' | 'motion' | 'static';
   /** Editor-only organization. This never changes stage transforms or drawing order. */
   folderId?: string;
@@ -212,7 +214,7 @@ export function setDefaultLinkSpeedPitch(linked: boolean): void {
   catch { /* Private browsing or disabled storage leaves the session usable. */ }
 }
 export function createElement(kind: ElementKind, overrides: Partial<StoryElement> = {}): StoryElement {
-  return { id: uid(), name: kind === 'text' ? 'Text' : kind[0].toUpperCase() + kind.slice(1), kind, x: 480, y: 270, width: 180, height: kind === 'text' ? 80 : 140, rotation: 0, scaleX: 1, scaleY: 1, pivotX: .5, pivotY: .5, fill: '#ffc857', stroke: '#1f2933', strokeWidth: 0, opacity: 1, shadow: {color:'#000000',blur:10,x:0,y:5,enabled:false}, start: 0, duration: 8, tracks: [], text: kind === 'text' ? 'Text' : undefined, fontFamily: 'JetBrains Mono', fontSize: 40, textLayout: 'live', mediaFit: 'fill', mediaOpacity: 1, speed: 1, volume: 1, pitchSemitones: kind === 'audio' || kind === 'video' ? 0 : undefined, linkSpeedPitch: kind === 'audio' || kind === 'video' ? getDefaultLinkSpeedPitch() : undefined, optimize: 'auto', ...overrides };
+  return { id: uid(), name: kind === 'text' ? 'Text' : kind[0].toUpperCase() + kind.slice(1), kind, x: 480, y: 270, width: 180, height: kind === 'text' ? 80 : 140, rotation: 0, scaleX: 1, scaleY: 1, pivotX: .5, pivotY: .5, fill: '#ffc857', stroke: '#1f2933', strokeWidth: 0, opacity: 1, shadow: {color:'#000000',blur:10,x:0,y:5,size:0,enabled:false}, start: 0, duration: 8, tracks: [], text: kind === 'text' ? 'Text' : undefined, fontFamily: 'JetBrains Mono', fontSize: 40, textLayout: 'live', mediaFit: 'fill', mediaOpacity: 1, speed: 1, volume: 1, pitchSemitones: kind === 'audio' || kind === 'video' ? 0 : undefined, linkSpeedPitch: kind === 'audio' || kind === 'video' ? getDefaultLinkSpeedPitch() : undefined, optimize: 'auto', ...overrides };
 }
 export function createProject(name = 'Untitled story'): Project {
   return {format:'hyde',version:1,id:uid(),name,width:1920,height:1080,fps:30,duration:8,background:'#d9dde3',elements:[],assets:[],sequences:[{id:uid(),name:'Scene 01',start:0,duration:8,color:'#ffc857'}],captions:[],folders:[],updatedAt:new Date().toISOString()};

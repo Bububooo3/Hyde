@@ -1,0 +1,30 @@
+import { expect, test } from '@playwright/test';
+
+test('shadow size and X/Y placement change pixels and survive undo and reopen', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'New project' }).click();
+  await page.getByRole('button', { name: 'Done', exact: true }).click();
+  await page.getByRole('button', { name: 'Add rectangle' }).first().click();
+  await page.getByRole('checkbox', { name: 'Drop shadow' }).check();
+  await page.getByRole('spinbutton', { name: 'Blur' }).fill('0');
+  const canvas = page.locator('.stage-frame canvas');
+  const pixels = () => canvas.evaluate((element: HTMLCanvasElement) => element.toDataURL());
+  await expect.poll(async () => { const first = await pixels(); await page.waitForTimeout(80); return first === await pixels(); }).toBe(true);
+  const initial = await pixels();
+  const size = page.getByRole('spinbutton', { name: 'Shadow size' });
+  await size.fill('35');
+  await expect.poll(pixels).not.toBe(initial);
+  const grown = await pixels();
+  await page.getByRole('button', { name: 'Diagonal' }).click();
+  await expect(page.getByRole('spinbutton', { name: 'Offset X' })).toHaveValue('20');
+  await expect(page.getByRole('spinbutton', { name: 'Offset Y' })).toHaveValue('20');
+  await expect.poll(pixels).not.toBe(grown);
+  await page.keyboard.press('Control+z');
+  await expect(page.getByRole('spinbutton', { name: 'Offset X' })).toHaveValue('0');
+  const download = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'File', exact: true }).click();
+  await page.getByRole('button', { name: 'Download project copy' }).click();
+  await page.locator('input[type=file][accept=".hyde,.hy"]').setInputFiles((await (await download).path())!);
+  await page.locator('.scene-element-row').first().click();
+  await expect(size).toHaveValue('35');
+});

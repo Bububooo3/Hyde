@@ -1,6 +1,7 @@
 import { assignSceneOwnership,captionWindow,elementWindow, uid, type Caption, type Project, type Sequence, type StoryElement } from './model';
 import { remapAssemblyClipReferences } from './assemblyClips';
 import { rekeyMotionBehaviors, scaleMotionTime } from './motion';
+import { pruneObjectMasks, remapObjectMask } from './objectMask';
 
 const EPSILON = 1e-7;
 const end = (scene: Sequence) => scene.start + scene.duration;
@@ -107,6 +108,7 @@ export function duplicateScene(project: Project, sceneId: string): { project: Pr
     if (element.parentId) element.parentId = copyIds.get(element.parentId)!;
     if (element.attachment) element.attachment.parentId = copyIds.get(element.attachment.parentId)!;
     if (element.flowAroundId) element.flowAroundId = copyIds.get(element.flowAroundId)!;
+    remapObjectMask(element,copyIds,true);
     for (const track of element.tracks) for (const keyframe of track.keyframes) keyframe.id = uid();
     rekeyMotionBehaviors(element.motionBehaviors);
     remapAssemblyClipReferences(element, copyIds);
@@ -138,6 +140,7 @@ export function deleteScene(project: Project, sceneId: string): Project {
   const captionIds = new Set(ownedCaptions.map(caption => caption.id));
   const next = structuredClone(source);
   next.elements = next.elements.filter(element => !ownedIds.has(element.id));
+  pruneObjectMasks(next,ownedIds);
   next.captions = next.captions.filter(caption => !captionIds.has(caption.id));
   next.sequences = next.sequences.filter(item => item.id !== sceneId);
   shiftFollowing(next, end(scene), -scene.duration);
