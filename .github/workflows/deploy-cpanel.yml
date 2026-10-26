@@ -31,6 +31,17 @@ jobs:
       - name: Build editor and portable player
         run: npm run build
 
+      - name: Build Image Decomposer web app
+        run: npm run decomposer:web:build
+
+      - name: Package Image Decomposer under Hyde
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/decomposer
+          cp -a apps/decomposer/dist/web/. dist/decomposer/
+          mv dist/decomposer/decomposer.html dist/decomposer/index.html
+
       - name: Check static build files
         shell: bash
         run: |
@@ -39,6 +50,8 @@ jobs:
           test -s dist/player.html
           test -s dist/portable/player.js
           test -s dist/portable/player.css
+          test -s dist/decomposer/index.html
+          test -n "$(find dist/decomposer/assets -maxdepth 1 -type f -name '*worker*.js' -print -quit)"
 
       # This branch contains ONLY generated dist files, not source code.
       # Illinois cPanel pulls this branch outbound over SSH via a cron job.

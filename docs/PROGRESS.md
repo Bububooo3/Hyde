@@ -1,5 +1,9 @@
 # Hyde capability matrix
 
+## Image Decomposer site integration
+
+**Local checkpoint (2026-10-26):** Story Studio's Tools menu opens the existing standalone Image Decomposer in a new tab; the decomposer links back to Story Studio. The main Vite development server serves both without a second server or prebuild. The deployment workflow builds the decomposer web target, copies it into `dist/decomposer/`, and publishes that directory with the existing `hyde-site` branch and cPanel sync. The independent decomposer workspace build still passes. A browser test serves the packaged site from `/ai/hyde/`, confirms the worker and assets load from `/ai/hyde/decomposer/`, imports and reconstructs an illustration, exports `.hyproj` and `.hyde`, and imports both into the main editor. Development and packaged-site navigation checks pass 2/2; existing static editor and portable player tests pass 6/6. No remote deployment or push occurred.
+
 ## Editor backlog development
 
 **Status (2026-10-26):** All 13 authorized tickets in [EDITOR_BACKLOG.md](EDITOR_BACKLOG.md) are implemented locally in priority order. HYDE-001–004 were committed as `8dcf4f8`. Stage and numeric polygon resizing share normalized path geometry; selection-independent clipboard/history shortcuts, Ctrl+Y and the compact Background control pass focused Chrome workflows.

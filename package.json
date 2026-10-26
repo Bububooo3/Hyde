@@ -27,6 +27,7 @@
     "cli:build": "vite build --config vite.cli.config.ts && vite build --config vite.cli-browser.config.ts && vite build --config vite.portable.config.ts",
     "sdk:build": "vite build --config vite.sdk.config.ts && tsc --project tsconfig.sdk.json",
     "decomposer:build": "npm run cli:build && vite build --config vite.decomposer.config.ts && vite build --config vite.decomposer-cli.config.ts",
+    "decomposer:web:build": "vite build --config vite.decomposer.config.ts",
     "test:sdk": "vitest run src/authoring.node.test.ts src/sdk.acceptance.node.test.ts src/sdk.node.test.ts src/sdkSchema.node.test.ts src/cli.node.test.ts",
     "test:decomposer": "vitest run src/decomposer src/decomposerCli.node.test.ts"
   },

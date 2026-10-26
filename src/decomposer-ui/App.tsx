@@ -862,6 +862,7 @@ export default function App() {
     <header className="topbar">
       <div className="brand"><span className="brand-mark">H</span><div><strong>Hyde Image Decomposer</strong><small>Local, deterministic, editable art</small></div></div>
       <div className="toolbar">
+        <a className="button" href={import.meta.env.DEV?'./':'../'}>← Story Studio</a>
         <label className="button accent">Import images<input aria-label="Import images" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden onChange={importImages}/></label>
         <label className="button">Open .hydecomp<input aria-label="Open .hydecomp" type="file" accept=".hydecomp,application/zip" hidden onChange={openDocument}/></label>
         <button disabled={!documentModel || busy} onClick={saveDocument}>Save source</button>
