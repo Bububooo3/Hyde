@@ -6,6 +6,23 @@ import { decodeProjectBytes, encodeProjectBytes } from './archive';
 import { createPrimaryShowcase } from './showcase';
 
 describe('public SDK acceptance story', () => {
+  it('authors native procedural motion through the public SDK without flattening it', async () => {
+    const sdk = new HydeSDK(), session = await sdk.createProject({ name: 'Animated card', duration: 2 });
+    const made = await session.execute({ protocolVersion: 1, expectedRevision: 0, commands: [
+      { op: 'element.create', args: { id: 'card', kind: 'rectangle', properties: { name: 'Card', x: 100, y: 100, width: 50, height: 40, duration: 2 } } },
+      { op: 'motion.add', args: { elementId: 'card', behavior: { type: 'oscillation', settings: { property: 'rotation', amplitude: 12, frequency: 1 } }, alias: '$sway' } },
+    ] });
+    expect(made.ok, JSON.stringify(made)).toBe(true);
+    if (!made.ok) return;
+    const reopened = await sdk.openProject(await session.exportProject());
+    expect(reopened.snapshot().elements.find(item => item.id === 'card')?.motionBehaviors?.[0]?.id).toBe(made.idMap.$sway);
+    const atStart = (await reopened.evaluate(0)).elements.find(item => item.id === 'card')!;
+    const atQuarter = (await reopened.evaluate(.25)).elements.find(item => item.id === 'card')!;
+    expect(atQuarter.rotation).not.toBeCloseTo(atStart.rotation);
+    expect(await reopened.diagnostics()).toEqual([]);
+    await reopened.close(); await session.close();
+  });
+
   it('round-trips arrangement, folders, cloning and scene ripple through native Hyde', async () => {
     const sdk = new HydeSDK(), session = await sdk.createProject({ name: 'Arranged parts', duration: 10 });
     const firstSceneId = session.snapshot().sequences[0].id;
