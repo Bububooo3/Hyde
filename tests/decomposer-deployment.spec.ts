@@ -65,6 +65,9 @@ test('packaged apps work from /ai/hyde/ with Decomposer worker and native import
     decomposer.on('pageerror',error=>errors.push(error.message));
     try{
       await expect(decomposer).toHaveURL(origin+prefix+'decomposer/');
+      await decomposer.getByRole('button',{name:'Help',exact:true}).click();
+      await expect(decomposer.getByRole('dialog',{name:'Help'})).toContainText('Saving and exporting');
+      await decomposer.getByRole('button',{name:'Close Help'}).click();
       await decomposer.getByLabel('Import images').setInputFiles({name:'two-parts.png',mimeType:'image/png',buffer:illustration()});
       await expect(decomposer.getByRole('status')).toContainText('Automatic first pass found 2 editable regions.',{timeout:30_000});
       await expect(decomposer.locator('.canvas-card canvas')).toHaveCount(2);
