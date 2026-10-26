@@ -10,6 +10,8 @@
 
 **Verification:** Root editor and portable-player build passes. Focused backlog and adjacent appearance Chrome pass: 12/12. Object-mask export fidelity pass: 1/1 with preview, isolated player, GIF and MP4. Focused model/SDK/editing/scene tests pass: 62/62 across 12 files. Existing composed preview/player/GIF/MP4 fidelity fixture remains green. No remote action occurred. See [ACCEPTANCE.md](ACCEPTANCE.md) for requirement-level evidence.
 
+**Follow-up (2026-10-26):** Owner reported that selecting an object covered the stage in yellow. The new selection SVG had inherited the generic `.primary` button background. Selection-specific class names remove that collision. Chrome now checks transparent backgrounds for single and multiple selection, and all five focused layer/stage interaction workflows pass.
+
 ## Agent SDK and Image Decomposer handoff
 
 **Status (2026-10-26):** Both products meet the specifications' bounded v1 completion thresholds. Work is in the existing `C:\Users\rscot\Downloads\Story-Editor-Project` repository, on local `main`; no push, package publication, remote change or deployment occurred. The later authorized Story Studio backlog is tracked above.

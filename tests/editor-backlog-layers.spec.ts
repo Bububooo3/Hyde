@@ -10,9 +10,14 @@ test('layer menus reorder multiple selected siblings and show individual stage b
   }
   const rows = page.locator('.scene-element-row');
   await rows.filter({ hasText: 'A' }).click();
+  await expect(page.locator('.selection-overlay.selection-primary')).toHaveCount(1);
+  expect(await page.locator('.selection-overlay.selection-primary').evaluate(node=>getComputedStyle(node).backgroundColor)).toBe('rgba(0, 0, 0, 0)');
   await rows.filter({ hasText: 'C' }).click({ modifiers: ['Control'] });
-  await expect(page.locator('.selection-overlay.primary')).toHaveCount(1);
-  await expect(page.locator('.selection-overlay.secondary')).toHaveCount(1);
+  await expect(page.locator('.selection-overlay.selection-primary')).toHaveCount(1);
+  await expect(page.locator('.selection-overlay.selection-secondary')).toHaveCount(1);
+  for(const overlay of await page.locator('.selection-overlay').all()){
+    expect(await overlay.evaluate(node=>getComputedStyle(node).backgroundColor)).toBe('rgba(0, 0, 0, 0)');
+  }
   const names = () => rows.locator('.layer-name').allTextContents();
   await rows.filter({ hasText: 'C' }).click({ button: 'right' });
   await page.locator('.scene-context-menu').getByRole('button', { name: 'Bring Forward' }).click();
